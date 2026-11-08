@@ -236,6 +236,72 @@ export function selectDevTarget(
   return null;
 }
 
+/**
+ * Re-select the page target from a FRESH target list.
+ *
+ * WebView2 can replace a page target while its document navigates: the new page
+ * gets a different target id and therefore a different debugger socket, and the
+ * socket captured before navigation then belongs to a page that no longer renders
+ * the app (or closes entirely). Holding that first socket across a navigation is
+ * how an observation ends up reading `about:blank` until its deadline.
+ *
+ * `replaced` is true only when a target was found and its debugger socket differs
+ * from the one previously held. A missing target is `null`, never the old one.
+ */
+export function revalidateDevTarget(
+  targets: readonly CdpTarget[],
+  expectedOrigin: string | null,
+  previous: CdpTarget | null,
+): { target: CdpTarget | null; replaced: boolean } {
+  const target = selectDevTarget(targets, expectedOrigin);
+  if (target === null) return { target: null, replaced: false };
+  const replaced =
+    previous !== null && previous.webSocketDebuggerUrl !== target.webSocketDebuggerUrl;
+  return { target, replaced };
+}
+
+/** One page read: where the document is and whether it has finished loading. */
+export interface DevPageSnapshot {
+  readonly origin: string | null;
+  readonly href: string | null;
+  readonly title: string | null;
+  readonly readyState: string | null;
+}
+
+/** The page snapshot a `Runtime.evaluate` value carries, or null when it is not one. */
+export function parseDevPageSnapshot(value: unknown): DevPageSnapshot | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    origin: typeof record.origin === "string" ? record.origin : null,
+    href: typeof record.href === "string" ? record.href : null,
+    title: typeof record.title === "string" ? record.title : null,
+    readyState: typeof record.readyState === "string" ? record.readyState : null,
+  };
+}
+
+/** The prefix every blank WebView2 document reports before it navigates. */
+const ABOUT_BLANK_PATTERN = /^about:blank(?:[#?].*)?$/i;
+
+/**
+ * Whether a page read is evidence the app has loaded on the expected origin.
+ *
+ * `document.readyState === "complete"` is required, not advisory: a document in
+ * `loading`/`interactive` still reports the origin of the navigation that is
+ * under way, so accepting it would let a page that is about to be replaced — or
+ * whose app shell has not run yet — stand as the observation.
+ */
+export function isNavigationComplete(
+  snapshot: DevPageSnapshot,
+  expectedOrigin: string | null,
+): boolean {
+  if (snapshot.readyState !== "complete") return false;
+  if (snapshot.origin === null || snapshot.origin === "null") return false;
+  if (snapshot.href === null || ABOUT_BLANK_PATTERN.test(snapshot.href.trim())) return false;
+  if (expectedOrigin !== null && snapshot.origin !== expectedOrigin) return false;
+  return true;
+}
+
 /** The `Runtime.evaluate` result, or the reason there is none. */
 export function parseEvaluateResponse(message: unknown): { value: unknown; error: string | null } {
   if (message === null || typeof message !== "object") {
@@ -453,6 +519,8 @@ export interface DevOriginInput {
     readonly origin: string | null;
     readonly href: string | null;
     readonly title: string | null;
+    /** `document.readyState` at the moment of the read; must be `complete`. */
+    readonly readyState: string | null;
     readonly error: string | null;
   };
   readonly probe: {
@@ -572,6 +640,10 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
   else if (configuredOrigin !== null && input.evaluation.origin !== configuredOrigin) {
     evaluateFailures.push(
       `the page's origin is ${input.evaluation.origin}, but the configured devUrl is ${input.configuredDevUrl}`,
+    );
+  } else if (input.evaluation.readyState !== "complete") {
+    evaluateFailures.push(
+      `the page reported document.readyState "${input.evaluation.readyState ?? "(none)"}"; the origin is evidence only once the document is complete`,
     );
   }
 
@@ -735,13 +807,16 @@ async function main(): Promise<number> {
     webSocketUrl: string | null;
     title: string | null;
     seen: string[];
-  } = { url: null, webSocketUrl: null, title: null, seen: [] };
+    /** How many times a fresh target list named a DIFFERENT debugger socket. */
+    replacements: number;
+  } = { url: null, webSocketUrl: null, title: null, seen: [], replacements: 0 };
   const evaluation: {
     origin: string | null;
     href: string | null;
     title: string | null;
+    readyState: string | null;
     error: string | null;
-  } = { origin: null, href: null, title: null, error: null };
+  } = { origin: null, href: null, title: null, readyState: null, error: null };
   const probe: { status: number | null; body: string | null; error: string | null } = {
     status: null,
     body: null,
@@ -755,6 +830,8 @@ async function main(): Promise<number> {
   let overlayWritten = false;
   let cdpAttempts = 0;
   let lastPollError: string | null = null;
+  /** The page target currently held; refreshed from every fresh target list. */
+  let currentTarget: CdpTarget | null = null;
   let devStop: ProcessStopResult = {
     attempted: false,
     method: null,
@@ -836,6 +913,7 @@ async function main(): Promise<number> {
           target.seen = targets.map((entry) => `${entry.type} ${entry.url}`).slice(0, 20);
           const selected = selectDevTarget(targets, configuredOrigin);
           if (selected !== null) {
+            currentTarget = selected;
             target.url = selected.url;
             target.webSocketUrl = selected.webSocketDebuggerUrl;
             target.title = selected.title;
@@ -853,53 +931,107 @@ async function main(): Promise<number> {
       }
 
       if (target.webSocketUrl !== null) {
-        // Poll for the page navigation to complete and commit on the configured origin.
-        // A target on http://localhost:3000/ initially reports about:blank during initial document creation.
+        // Poll for the page navigation to complete and commit on the configured
+        // origin. Two things are load-bearing here:
+        //
+        //  - the target list is re-read on EVERY round. WebView2 can replace the
+        //    page target while the document navigates: a new target id means a new
+        //    debugger socket, and a socket captured before navigation may belong
+        //    to a page that no longer renders the app (or has closed). Reusing the
+        //    first socket is what leaves the observation reading `about:blank`
+        //    until its deadline.
+        //  - `document.readyState === "complete"` is required, not merely the
+        //    expected origin. A `loading`/`interactive` document already reports
+        //    the origin of the navigation under way, so accepting it would let a
+        //    page that is about to be replaced stand as the observation.
         const navDeadline = Date.now() + 30_000;
         let lastOriginError: string | null = null;
         for (;;) {
-          const originResult = await evaluateOverCdp(
-            target.webSocketUrl,
-            "({ origin: window.location.origin, href: window.location.href, title: document.title, readyState: document.readyState })",
-          );
-          lastOriginError = originResult.error;
-          evaluation.error = originResult.error;
-          if (originResult.value !== null && typeof originResult.value === "object") {
-            const record = originResult.value as Record<string, unknown>;
-            const observedOrigin = typeof record.origin === "string" ? record.origin : null;
-            const observedHref = typeof record.href === "string" ? record.href : null;
-            evaluation.origin = observedOrigin;
-            evaluation.href = observedHref;
-            evaluation.title = typeof record.title === "string" ? record.title : null;
+          const listing = await httpJson(`http://127.0.0.1:${cdp.port}/json/list`, {
+            timeoutMs: 5_000,
+          });
+          const listed = parseCdpTargets(listing.text);
+          if (listed === null) {
+            lastOriginError =
+              listing.error ?? "the DevTools endpoint returned no target list during navigation";
+            evaluation.error = lastOriginError;
+          } else {
+            target.seen = listed.map((entry) => `${entry.type} ${entry.url}`).slice(0, 20);
+            const selection = revalidateDevTarget(listed, configuredOrigin, currentTarget);
+            const selected = selection.target;
+            if (selected === null) {
+              lastOriginError = `no page target on ${configuredOrigin ?? "(configured origin)"} during navigation`;
+              evaluation.error = lastOriginError;
+            } else {
+              if (selection.replaced) target.replacements += 1;
+              currentTarget = selected;
+              target.url = selected.url;
+              target.webSocketUrl = selected.webSocketDebuggerUrl;
+              target.title = selected.title;
 
-            if (
-              observedOrigin !== null &&
-              observedOrigin !== "null" &&
-              observedHref !== "about:blank" &&
-              (configuredOrigin === null || observedOrigin === configuredOrigin)
-            ) {
-              break;
+              const originResult = await evaluateOverCdp(
+                selected.webSocketDebuggerUrl ?? "",
+                "({ origin: window.location.origin, href: window.location.href, title: document.title, readyState: document.readyState })",
+              );
+              lastOriginError = originResult.error;
+              evaluation.error = originResult.error;
+              const snapshot = parseDevPageSnapshot(originResult.value);
+              if (snapshot !== null) {
+                evaluation.origin = snapshot.origin;
+                evaluation.href = snapshot.href;
+                evaluation.title = snapshot.title;
+                evaluation.readyState = snapshot.readyState;
+                if (isNavigationComplete(snapshot, configuredOrigin)) break;
+              }
             }
           }
           if (Date.now() > navDeadline) {
             evaluation.error =
               evaluation.error ??
-              `page did not navigate away from about:blank within 30000 ms (last error: ${lastOriginError ?? "none"})`;
+              `the page did not reach document.readyState "complete" on ${configuredOrigin ?? "(configured origin)"} within 30000 ms (last error: ${lastOriginError ?? "none"})`;
             break;
           }
           await sleep(POLL_MS);
         }
 
-        const probeResult = await evaluateOverCdp(
-          target.webSocketUrl,
-          "(async () => { const r = await fetch('/api/server/instance');" +
-            " return { status: r.status, body: await r.text() }; })()",
-        );
-        probe.error = probeResult.error;
-        if (probeResult.value !== null && typeof probeResult.value === "object") {
-          const record = probeResult.value as Record<string, unknown>;
-          probe.status = typeof record.status === "number" ? record.status : null;
-          probe.body = typeof record.body === "string" ? record.body : null;
+        // The probe runs through a target that is re-selected AFTER navigation:
+        // the socket that served the navigation is not assumed to still exist.
+        const probeListing = await httpJson(`http://127.0.0.1:${cdp.port}/json/list`, {
+          timeoutMs: 5_000,
+        });
+        const probeListed = parseCdpTargets(probeListing.text);
+        const probeSelection =
+          probeListed === null
+            ? { target: null, replaced: false }
+            : revalidateDevTarget(probeListed, configuredOrigin, currentTarget);
+        if (probeListed !== null) {
+          target.seen = probeListed.map((entry) => `${entry.type} ${entry.url}`).slice(0, 20);
+        }
+        const probeTarget = probeSelection.target;
+        if (probeTarget === null || probeTarget.webSocketDebuggerUrl === null) {
+          probe.error =
+            probeListed === null
+              ? `the DevTools endpoint returned no target list before the in-page API probe: ${probeListing.error ?? "unknown error"}`
+              : `no page target on ${configuredOrigin ?? "(configured origin)"} before the in-page API probe; targets seen: ${
+                  target.seen.length === 0 ? "(none)" : target.seen.join(", ")
+                }`;
+        } else {
+          if (probeSelection.replaced) target.replacements += 1;
+          currentTarget = probeTarget;
+          target.url = probeTarget.url;
+          target.webSocketUrl = probeTarget.webSocketDebuggerUrl;
+          target.title = probeTarget.title;
+          const probeResult = await evaluateOverCdp(
+            probeTarget.webSocketDebuggerUrl,
+            "(async () => { const r = await fetch('/api/server/instance');" +
+              " return { status: r.status, body: await r.text() }; })()",
+          );
+          probe.error = probeResult.error;
+          if (probeResult.value !== null && typeof probeResult.value === "object") {
+            const record = probeResult.value as Record<string, unknown>;
+            probe.status = typeof record.status === "number" ? record.status : null;
+            probe.body = typeof record.body === "string" ? record.body : null;
+          }
         }
       }
     }
@@ -1032,8 +1164,11 @@ async function main(): Promise<number> {
       origin: evaluation.origin,
       href: evaluation.href,
       title: evaluation.title,
+      readyState: evaluation.readyState,
       targetUrl: target.url,
       targetsSeen: target.seen,
+      /** Fresh target lists that named a different debugger socket (navigation). */
+      targetReplacements: target.replacements,
     },
     launch: {
       tauriCli: TAURI_CLI,

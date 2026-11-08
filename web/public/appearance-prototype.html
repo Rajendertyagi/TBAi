@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TBAi - Explicit Typography Section Architecture (V4)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400;500;600;700;800;900&family=Geist+Mono:wght@100;200;300;400;500;600;700;800;900&family=Inter:wght@100;200;300;400;500;600;700;800;900&family=Roboto:wght@100;300;400;500;700;900&family=JetBrains+Mono:wght@100;200;300;400;500;600;700;800&family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: 'hsl(var(--background))',
+            foreground: 'hsl(var(--foreground))',
+            card: 'hsl(var(--card))',
+            'card-foreground': 'hsl(var(--card-foreground))',
+            popover: 'hsl(var(--popover))',
+            'popover-foreground': 'hsl(var(--popover-foreground))',
+            primary: 'hsl(var(--primary))',
+            'primary-foreground': 'hsl(var(--primary-foreground))',
+            secondary: 'hsl(var(--secondary))',
+            'secondary-foreground': 'hsl(var(--secondary-foreground))',
+            muted: 'hsl(var(--muted))',
+            'muted-foreground': 'hsl(var(--muted-foreground))',
+            accent: 'hsl(var(--accent))',
+            'accent-foreground': 'hsl(var(--accent-foreground))',
+            border: 'hsl(var(--border))',
+            input: 'hsl(var(--input))',
+            ring: 'hsl(var(--ring))',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    :root {
+      /* Root scaling driver (100% = default 16px) */
+      --app-font-scale: 100%;
+      font-size: var(--app-font-scale);
+
+      /* Section 1: Interface */
+      --font-ui-family: 'Inter', system-ui, sans-serif;
+      --font-ui-size: 16px;
+      --font-ui-weight: 400;
+
+      /* Section 2: Code Block */
+      --font-code-family: 'JetBrains Mono', monospace;
+      --font-code-size: 13px;
+      --font-code-weight: 400;
+
+      /* Section 3: Terminal */
+      --font-terminal-family: 'JetBrains Mono', monospace;
+      --font-terminal-size: 12px;
+      --font-terminal-weight: 400;
+
+      /* Reading Spacing */
+      --reading-line-height: 1.5;
+
+      /* Design Tokens */
+      --background: 224 71% 4%;
+      --foreground: 213 31% 91%;
+      --card: 224 71% 6%;
+      --card-foreground: 213 31% 91%;
+      --primary: 210 100% 50%;
+      --primary-foreground: 222 47% 11%;
+      --secondary: 222 47% 13%;
+      --secondary-foreground: 210 40% 98%;
+      --muted: 223 47% 11%;
+      --muted-foreground: 215.4 16.3% 56.9%;
+      --accent: 216 34% 17%;
+      --border: 216 34% 17%;
+      --input: 216 34% 17%;
+      --ring: 216 34% 24%;
+    }
+
+    body {
+      font-family: var(--font-ui-family);
+      font-weight: var(--font-ui-weight);
+      background-color: hsl(var(--background));
+      color: hsl(var(--foreground));
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .scope-interface {
+      font-family: var(--font-ui-family);
+      font-weight: var(--font-ui-weight);
+    }
+
+    .scope-code {
+      font-family: var(--font-code-family);
+      font-size: var(--font-code-size);
+      font-weight: var(--font-code-weight);
+    }
+
+    .scope-terminal {
+      font-family: var(--font-terminal-family);
+      font-size: var(--font-terminal-size);
+      font-weight: var(--font-terminal-weight);
+    }
+
+    .reading-prose {
+      line-height: var(--reading-line-height);
+    }
+
+    /* Subtle Toast for Zoom hotkey */
+    #zoom-toast {
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-background text-foreground antialiased selection:bg-primary/20">
+
+  <!-- Floating Zoom Toast Notification -->
+  <div id="zoom-toast" class="fixed bottom-6 right-6 z-50 pointer-events-none opacity-0 translate-y-2 bg-card border border-primary/40 text-foreground px-3.5 py-2 rounded-lg shadow-xl flex items-center gap-2.5 text-xs font-mono">
+    <span class="size-2 rounded-full bg-primary animate-pulse"></span>
+    <span id="zoom-toast-text">Zoom: 100% (Ctrl +/-/0)</span>
+  </div>
+
+  <!-- Header -->
+  <header class="border-b border-border/80 bg-card/60 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="size-6 rounded-md bg-primary/20 text-primary flex items-center justify-center font-bold text-xs">T</div>
+        <h1 class="font-semibold text-sm tracking-tight">TBAi Appearance Architecture</h1>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">Clamping Indicators & Hotkey Zoom Active</span>
+      </div>
+      <div class="text-xs text-muted-foreground flex items-center gap-3">
+        <div class="flex items-center gap-1.5 bg-secondary/60 px-2 py-0.5 rounded border border-border text-3xs font-mono">
+          <kbd class="px-1 py-0.5 rounded bg-background border border-border text-foreground font-semibold">Ctrl +</kbd>
+          <kbd class="px-1 py-0.5 rounded bg-background border border-border text-foreground font-semibold">Ctrl -</kbd>
+          <kbd class="px-1 py-0.5 rounded bg-background border border-border text-foreground font-semibold">Ctrl 0</kbd>
+          <span class="text-muted-foreground ml-1">Zoom Hotkeys</span>
+        </div>
+        <span id="active-scale-badge" class="font-mono text-primary font-medium bg-primary/10 px-2 py-0.5 rounded border border-primary/20">Scale: 100%</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+    
+    <!-- LEFT COLUMN: Explicit Per-Section Settings (6 Cols) -->
+    <section class="lg:col-span-6 space-y-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold tracking-tight">Typography Preferences</h2>
+          <p class="text-xs text-muted-foreground mt-0.5">
+            Explicit font selection with full weights (100–900), clamp indicator, inline preview, and per-section reset.
+          </p>
+        </div>
+        <button onclick="resetAllDefaults()" class="h-8 px-3 rounded-lg border border-border bg-card hover:bg-secondary text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors font-medium">
+          <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Reset All Defaults
+        </button>
+      </div>
+
+      <!-- SECTION 1: Interface Typography -->
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3.5 shadow-sm">
+        <div class="flex items-center justify-between border-b border-border/60 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="size-2 rounded-full bg-blue-400"></span>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-foreground">Interface Typography</h3>
+          </div>
+          <button onclick="resetInterfaceDefaults()" class="text-3xs text-muted-foreground hover:text-foreground flex items-center gap-1 hover:underline">
+            <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset to default
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <!-- Font Family -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Family</label>
+            <select id="ui-font-family" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateUiFont()">
+              <option value="'Inter', system-ui, sans-serif" selected>Inter (Default)</option>
+              <option value="'Geist', system-ui, sans-serif">Geist</option>
+              <option value="'Roboto', system-ui, sans-serif">Roboto</option>
+              <option value="system-ui, sans-serif">System UI</option>
+            </select>
+          </div>
+
+          <!-- Font Weight (100–900 full spectrum) -->
+          <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <label class="text-xs text-muted-foreground font-medium">Font Weight</label>
+              <!-- Clamping Indicator Badge -->
+              <span id="ui-clamp-indicator" class="hidden text-3xs font-mono text-amber-400 bg-amber-500/10 px-1 rounded border border-amber-500/20">Clamped to 400</span>
+            </div>
+            <select id="ui-font-weight" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateUiWeight()">
+              <option value="100">100 - Thin</option>
+              <option value="200">200 - Extra Light</option>
+              <option value="300">300 - Light</option>
+              <option value="400" selected>400 - Regular (Default)</option>
+              <option value="500">500 - Medium</option>
+              <option value="600">600 - Semi Bold</option>
+              <option value="700">700 - Bold</option>
+              <option value="800">800 - Extra Bold</option>
+              <option value="900">900 - Black</option>
+            </select>
+          </div>
+
+          <!-- Clean Font Size (Pixels only) -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Size</label>
+            <select id="ui-font-size" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateUiSize()">
+              <option value="14px">14px</option>
+              <option value="15px">15px</option>
+              <option value="16px" selected>16px (Default)</option>
+              <option value="17px">17px</option>
+              <option value="18px">18px</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Dedicated Section Live Preview Strip -->
+        <div class="rounded-lg border border-border/70 bg-background/60 p-2.5 mt-2">
+          <div class="text-3xs uppercase tracking-wider text-muted-foreground font-mono mb-1 flex items-center justify-between">
+            <span>Interface Live Preview</span>
+            <span id="ui-preview-meta" class="text-primary font-mono">Inter • 400 • 16px</span>
+          </div>
+          <div id="ui-preview-box" class="scope-interface text-sm text-foreground">
+            The quick brown fox jumps over the lazy dog. Conversational interface with natural font rhythm.
+          </div>
+        </div>
+      </div>
+
+      <!-- SECTION 2: Code Block Typography -->
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3.5 shadow-sm">
+        <div class="flex items-center justify-between border-b border-border/60 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="size-2 rounded-full bg-emerald-400"></span>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-foreground">Code Block Typography</h3>
+          </div>
+          <button onclick="resetCodeDefaults()" class="text-3xs text-muted-foreground hover:text-foreground flex items-center gap-1 hover:underline">
+            <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset to default
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <!-- Code Font Family -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Family</label>
+            <select id="code-font-family" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateCodeFont()">
+              <option value="'JetBrains Mono', monospace" selected>JetBrains Mono (Default)</option>
+              <option value="'Geist Mono', monospace">Geist Mono</option>
+              <option value="'Fira Code', monospace">Fira Code</option>
+              <option value="monospace">System Monospace</option>
+            </select>
+          </div>
+
+          <!-- Code Font Weight (100–900 full spectrum) -->
+          <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <label class="text-xs text-muted-foreground font-medium">Font Weight</label>
+              <!-- Clamping Indicator Badge -->
+              <span id="code-clamp-indicator" class="hidden text-3xs font-mono text-amber-400 bg-amber-500/10 px-1 rounded border border-amber-500/20">Clamped to 400</span>
+            </div>
+            <select id="code-font-weight" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateCodeWeight()">
+              <option value="100">100 - Thin</option>
+              <option value="200">200 - Extra Light</option>
+              <option value="300">300 - Light</option>
+              <option value="400" selected>400 - Regular (Default)</option>
+              <option value="500">500 - Medium</option>
+              <option value="600">600 - Semi Bold</option>
+              <option value="700">700 - Bold</option>
+              <option value="800">800 - Extra Bold</option>
+              <option value="900">900 - Black</option>
+            </select>
+          </div>
+
+          <!-- Code Size (Pixels only) -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Size</label>
+            <select id="code-font-size" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateCodeSize()">
+              <option value="11px">11px</option>
+              <option value="12px">12px</option>
+              <option value="13px" selected>13px (Default)</option>
+              <option value="14px">14px</option>
+              <option value="15px">15px</option>
+              <option value="16px">16px</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-0.5">
+          <span class="text-xs text-muted-foreground">Word wrap long code lines</span>
+          <input type="checkbox" id="code-wrap-toggle" class="rounded border-border accent-primary cursor-pointer h-4 w-4" onchange="toggleCodeWrap(this.checked)">
+        </div>
+
+        <!-- Dedicated Code Block Live Preview Strip -->
+        <div class="rounded-lg border border-border/70 bg-background/60 p-2.5 mt-2 overflow-hidden">
+          <div class="text-3xs uppercase tracking-wider text-muted-foreground font-mono mb-1 flex items-center justify-between">
+            <span>Code Block Live Preview</span>
+            <span id="code-preview-meta" class="text-emerald-400 font-mono">JetBrains Mono • 400 • 13px</span>
+          </div>
+          <pre id="code-preview-box" class="scope-code text-foreground leading-relaxed overflow-x-auto"><code><span class="text-blue-400">const</span> config = { theme: <span class="text-emerald-400">"dark"</span>, fontSize: <span class="text-amber-300">13</span> };</code></pre>
+        </div>
+      </div>
+
+      <!-- SECTION 3: Terminal Typography -->
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3.5 shadow-sm">
+        <div class="flex items-center justify-between border-b border-border/60 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="size-2 rounded-full bg-amber-400"></span>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-foreground">Terminal Typography</h3>
+          </div>
+          <button onclick="resetTerminalDefaults()" class="text-3xs text-muted-foreground hover:text-foreground flex items-center gap-1 hover:underline">
+            <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset to default
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <!-- Terminal Font Family -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Family</label>
+            <select id="terminal-font-family" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateTerminalFont()">
+              <option value="'JetBrains Mono', monospace" selected>JetBrains Mono (Default)</option>
+              <option value="'Geist Mono', monospace">Geist Mono</option>
+              <option value="'Fira Code', monospace">Fira Code</option>
+              <option value="monospace">System Monospace</option>
+            </select>
+          </div>
+
+          <!-- Terminal Font Weight (100–900 full spectrum) -->
+          <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <label class="text-xs text-muted-foreground font-medium">Font Weight</label>
+              <!-- Clamping Indicator Badge -->
+              <span id="term-clamp-indicator" class="hidden text-3xs font-mono text-amber-400 bg-amber-500/10 px-1 rounded border border-amber-500/20">Clamped to 400</span>
+            </div>
+            <select id="terminal-font-weight" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateTerminalWeight()">
+              <option value="100">100 - Thin</option>
+              <option value="200">200 - Extra Light</option>
+              <option value="300">300 - Light</option>
+              <option value="400" selected>400 - Regular (Default)</option>
+              <option value="500">500 - Medium</option>
+              <option value="600">600 - Semi Bold</option>
+              <option value="700">700 - Bold</option>
+              <option value="800">800 - Extra Bold</option>
+              <option value="900">900 - Black</option>
+            </select>
+          </div>
+
+          <!-- Terminal Size (Pixels only) -->
+          <div class="space-y-1">
+            <label class="text-xs text-muted-foreground font-medium">Font Size</label>
+            <select id="terminal-font-size" class="w-full text-xs rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary" onchange="updateTerminalSize()">
+              <option value="11px">11px</option>
+              <option value="12px" selected>12px (Default)</option>
+              <option value="13px">13px</option>
+              <option value="14px">14px</option>
+              <option value="15px">15px</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-0.5">
+          <span class="text-xs text-muted-foreground">Terminal output line wrapping</span>
+          <input type="checkbox" id="terminal-wrap-toggle" class="rounded border-border accent-primary cursor-pointer h-4 w-4" checked onchange="toggleTerminalWrap(this.checked)">
+        </div>
+
+        <!-- Dedicated Terminal Live Preview Strip -->
+        <div class="rounded-lg border border-border/70 bg-black/80 p-2.5 mt-2 overflow-hidden">
+          <div class="text-3xs uppercase tracking-wider text-muted-foreground font-mono mb-1 flex items-center justify-between">
+            <span>Terminal Live Preview</span>
+            <span id="terminal-preview-meta" class="text-amber-300 font-mono">JetBrains Mono • 400 • 12px</span>
+          </div>
+          <pre id="terminal-preview-box" class="scope-terminal text-emerald-400 leading-normal whitespace-pre-wrap select-all overflow-x-auto">$ bun test --watch tests/unit/theme</pre>
+        </div>
+      </div>
+
+      <!-- SECTION 4: Application Scale & Reading Spacing -->
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3.5 shadow-sm">
+        <div class="flex items-center justify-between border-b border-border/60 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="size-2 rounded-full bg-purple-400"></span>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-foreground">Application Scale & Spacing</h3>
+          </div>
+          <button onclick="resetScaleDefaults()" class="text-3xs text-muted-foreground hover:text-foreground flex items-center gap-1 hover:underline">
+            <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset to default
+          </button>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs text-muted-foreground font-medium flex items-center gap-2">
+              Application Scale
+              <span class="text-3xs text-muted-foreground">(or use Ctrl + / - / 0)</span>
+            </label>
+            <span id="scale-slider-label" class="text-3xs font-mono text-primary font-medium">100% (Default)</span>
+          </div>
+          <input 
+            id="scale-slider" 
+            type="range" 
+            min="75" 
+            max="135" 
+            step="5" 
+            value="100" 
+            class="w-full h-2 rounded-lg bg-input accent-primary cursor-pointer"
+            oninput="handleScaleInput(this.value)"
+          >
+          <div class="flex justify-between gap-1 pt-1">
+            <button onclick="setScaleFactor(85)" class="text-3xs px-2 py-0.5 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">85%</button>
+            <button onclick="setScaleFactor(90)" class="text-3xs px-2 py-0.5 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">90%</button>
+            <button onclick="setScaleFactor(100)" class="text-3xs px-2 py-0.5 rounded bg-primary/20 text-primary border border-primary/30 font-mono font-medium">100% (Default)</button>
+            <button onclick="setScaleFactor(110)" class="text-3xs px-2 py-0.5 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">110%</button>
+            <button onclick="setScaleFactor(125)" class="text-3xs px-2 py-0.5 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">125%</button>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-2 border-t border-border/50">
+          <span class="text-xs text-muted-foreground font-medium">Reading Line Spacing</span>
+          <div class="flex gap-1">
+            <button onclick="setLineHeight(1.35, this)" class="text-3xs px-2.5 py-1 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">1.35 (Tight)</button>
+            <button onclick="setLineHeight(1.5, this)" class="text-3xs px-2.5 py-1 rounded bg-primary/20 text-primary border border-primary/30 font-mono font-medium">1.50 (Default)</button>
+            <button onclick="setLineHeight(1.7, this)" class="text-3xs px-2.5 py-1 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono">1.70 (Relaxed)</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- RIGHT COLUMN: Full Combined Chat Session Preview (6 Cols) -->
+    <section class="lg:col-span-6 space-y-4">
+      <div>
+        <h2 class="text-lg font-semibold tracking-tight">Full Chat Session Preview</h2>
+        <p class="text-xs text-muted-foreground mt-0.5">
+          Real-time integrated view of how all 3 sections work in harmony inside the actual chat application.
+        </p>
+      </div>
+
+      <!-- Mock App Shell Window -->
+      <div class="rounded-xl border border-border bg-card shadow-lg overflow-hidden flex flex-col">
+        <!-- Mock Window Bar -->
+        <div class="h-9 bg-secondary/50 border-b border-border/80 px-4 flex items-center justify-between select-none">
+          <div class="flex items-center gap-2">
+            <div class="size-2.5 rounded-full bg-red-500/80"></div>
+            <div class="size-2.5 rounded-full bg-yellow-500/80"></div>
+            <div class="size-2.5 rounded-full bg-green-500/80"></div>
+            <span class="ml-2 text-xs text-muted-foreground font-mono">TBAi Chat Session #42</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-3xs bg-primary/10 text-primary border border-primary/20 px-2 py-0.5 rounded font-mono">Gemini 2.5 Pro</span>
+          </div>
+        </div>
+
+        <!-- Mock Conversation Area -->
+        <div class="p-5 space-y-5 flex-1">
+          
+          <!-- User Message (Uses Interface scope) -->
+          <div class="flex gap-3 justify-end">
+            <div class="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-md shadow-sm scope-interface">
+              <p class="text-sm">Can you test explicit typography per section and execute tests?</p>
+            </div>
+          </div>
+
+          <!-- Assistant Message -->
+          <div class="flex gap-3 items-start">
+            <div class="size-7 rounded-lg bg-secondary border border-border flex items-center justify-center shrink-0 font-bold text-xs text-primary scope-interface">
+              AI
+            </div>
+            <div class="space-y-3 flex-1 min-w-0">
+              
+              <!-- 1. Interface Scope (Prose) -->
+              <div class="reading-prose scope-interface text-foreground">
+                <p>
+                  Tests passed! Notice how interface text, terminal log lines, and syntax-highlighted code blocks each respect their distinct font families, weights, and sizes:
+                </p>
+              </div>
+
+              <!-- 2. Tool Call Badge (20px standard geometry) -->
+              <div class="rounded-lg border border-border bg-background/50 p-2.5 flex items-center justify-between scope-interface">
+                <div class="flex items-center gap-2.5">
+                  <span class="inline-flex items-center justify-center h-5 px-2 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                    ✓ run_command
+                  </span>
+                  <span class="text-xs font-mono text-muted-foreground truncate">bun test tests/unit/theme</span>
+                </div>
+                <span class="text-3xs text-muted-foreground font-mono">14ms</span>
+              </div>
+
+              <!-- 3. Terminal Output Block (Explicit Terminal Scope) -->
+              <div class="rounded-lg border border-border/80 bg-black/70 overflow-hidden">
+                <div class="px-3 py-1 bg-secondary/30 border-b border-border/50 flex items-center justify-between text-muted-foreground">
+                  <span class="text-3xs font-mono flex items-center gap-1.5">
+                    <span class="size-1.5 rounded-full bg-amber-400"></span>
+                    Terminal Output (terminal-font-family)
+                  </span>
+                  <span id="terminal-badge-info" class="text-3xs font-mono text-amber-300">12px • JetBrains Mono</span>
+                </div>
+                <pre id="terminal-output-preview" class="p-3 text-emerald-400/90 leading-normal scope-terminal whitespace-pre-wrap select-all overflow-x-auto">$ bun test tests/unit/theme
+bun test v1.4.4 (768ac0de)
+✓ theme-color > validates color tokens [1.2ms]
+✓ theme-storage > stores active config [0.8ms]
+✓ typography > scales root without subpixel jitter [2.1ms]
+ 3 pass
+ 0 fail
+Ran 3 tests across 1 file. [14.00ms]</pre>
+              </div>
+
+              <!-- 4. Code Block Component (Explicit Code Scope) -->
+              <div class="rounded-lg border border-border bg-background/90 overflow-hidden">
+                <div class="px-3 py-1 bg-secondary/30 border-b border-border/50 flex items-center justify-between text-muted-foreground">
+                  <span class="text-3xs font-mono flex items-center gap-1.5">
+                    <span class="size-1.5 rounded-full bg-emerald-400"></span>
+                    Code Block (code-font-family)
+                  </span>
+                  <span id="code-badge-info" class="text-3xs font-mono text-emerald-300">13px • JetBrains Mono</span>
+                </div>
+                <pre id="code-snippet-preview" class="p-3 text-foreground/90 leading-relaxed scope-code overflow-x-auto"><code><span class="text-blue-400">export function</span> <span class="text-amber-300">applyTypography</span>(cfg: <span class="text-emerald-400">TypographyConfig</span>) {
+  <span class="text-muted-foreground">// Natural proportions across interface, code, and terminal</span>
+  root.style.setProperty(<span class="text-emerald-300">"--font-ui-family"</span>, cfg.interfaceFontFamily);
+  root.style.setProperty(<span class="text-emerald-300">"--font-code-family"</span>, cfg.codeFontFamily);
+  root.style.setProperty(<span class="text-emerald-300">"--font-terminal-family"</span>, cfg.terminalFontFamily);
+}</code></pre>
+              </div>
+
+              <!-- Meta Footer -->
+              <div class="flex items-center gap-3 text-3xs text-muted-foreground pt-1 scope-interface">
+                <span>Tokens: 1,420</span>
+                <span>•</span>
+                <span>Latency: 110ms</span>
+                <span>•</span>
+                <span>Model: gemini-2.5-pro</span>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- Feature Card -->
+      <div class="rounded-xl border border-border/80 bg-secondary/20 p-4 text-xs space-y-2">
+        <div class="font-semibold text-foreground flex items-center gap-1.5">
+          <span class="size-2 rounded-full bg-emerald-400"></span>
+          User Features Active in this V4 Prototype:
+        </div>
+        <ul class="list-disc list-inside space-y-1 text-muted-foreground pl-1">
+          <li><strong>Idea 1: Weight Clamping Indicators:</strong> If a font doesn't support a selected weight (e.g. Fira Code only supports 300–700; System UI doesn't support 100/900), a subtle <span class="text-amber-400 bg-amber-500/10 px-1 rounded font-mono">Clamped to 400</span> badge appears right beside the label so the user knows exactly what is happening.</li>
+          <li><strong>Idea 4: Hotkey Zoom (Ctrl + / - / 0):</strong> Press <kbd class="px-1 py-0.5 rounded bg-background border border-border text-foreground">Ctrl +</kbd> or <kbd class="px-1 py-0.5 rounded bg-background border border-border text-foreground">Ctrl -</kbd> anywhere on this page to zoom in/out with instant toast confirmation.</li>
+          <li><strong>Clean Pixel-Only Sizing:</strong> Clear labels (`16px`, `13px`, `12px`) without distracting rem math.</li>
+          <li><strong>Per-Section Previews & Resets:</strong> Independent live preview strips & reset links for all sections.</li>
+        </ul>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script>
+    const root = document.documentElement;
+
+    // Font weight capabilities database for idea 1 (Clamping indicator)
+    const FONT_CAPABILITIES = {
+      "'Inter', system-ui, sans-serif": { min: 100, max: 900 },
+      "'Geist', system-ui, sans-serif": { min: 100, max: 900 },
+      "'Roboto', system-ui, sans-serif": { min: 100, max: 900 },
+      "system-ui, sans-serif": { min: 300, max: 800 },
+      "'JetBrains Mono', monospace": { min: 100, max: 800 },
+      "'Geist Mono', monospace": { min: 100, max: 900 },
+      "'Fira Code', monospace": { min: 300, max: 700 },
+      "monospace": { min: 400, max: 700 },
+    };
+
+    function clampWeight(family, requestedWeight) {
+      const cap = FONT_CAPABILITIES[family] || { min: 300, max: 800 };
+      return Math.min(Math.max(requestedWeight, cap.min), cap.max);
+    }
+
+    // Interface
+    function updateUiFont() {
+      const select = document.getElementById('ui-font-family');
+      root.style.setProperty('--font-ui-family', select.value);
+      syncUiPreview();
+    }
+    function updateUiWeight() {
+      const select = document.getElementById('ui-font-weight');
+      syncUiPreview();
+    }
+    function updateUiSize() {
+      const select = document.getElementById('ui-font-size');
+      root.style.setProperty('--font-ui-size', select.value);
+      syncUiPreview();
+    }
+    function syncUiPreview() {
+      const fontVal = document.getElementById('ui-font-family').value;
+      const fontLabel = document.getElementById('ui-font-family').options[document.getElementById('ui-font-family').selectedIndex].text.split(' (')[0];
+      const requestedWeight = Number(document.getElementById('ui-font-weight').value);
+      const effectiveWeight = clampWeight(fontVal, requestedWeight);
+      const size = document.getElementById('ui-font-size').value;
+
+      const indicator = document.getElementById('ui-clamp-indicator');
+      if (effectiveWeight !== requestedWeight) {
+        indicator.textContent = `Clamped to ${effectiveWeight}`;
+        indicator.classList.remove('hidden');
+      } else {
+        indicator.classList.add('hidden');
+      }
+
+      root.style.setProperty('--font-ui-weight', effectiveWeight);
+      document.getElementById('ui-preview-meta').textContent = `${fontLabel} • W${effectiveWeight} • ${size}`;
+      const box = document.getElementById('ui-preview-box');
+      box.style.fontFamily = fontVal;
+      box.style.fontWeight = effectiveWeight;
+      box.style.fontSize = size;
+    }
+    function resetInterfaceDefaults() {
+      document.getElementById('ui-font-family').value = "'Inter', system-ui, sans-serif";
+      document.getElementById('ui-font-weight').value = "400";
+      document.getElementById('ui-font-size').value = "16px";
+      updateUiFont(); updateUiWeight(); updateUiSize();
+    }
+
+    // Code
+    function updateCodeFont() {
+      const select = document.getElementById('code-font-family');
+      root.style.setProperty('--font-code-family', select.value);
+      syncCodePreview();
+    }
+    function updateCodeWeight() {
+      syncCodePreview();
+    }
+    function updateCodeSize() {
+      const select = document.getElementById('code-font-size');
+      root.style.setProperty('--font-code-size', select.value);
+      syncCodePreview();
+    }
+    function toggleCodeWrap(checked) {
+      const pre1 = document.getElementById('code-snippet-preview');
+      const pre2 = document.getElementById('code-preview-box');
+      [pre1, pre2].forEach(p => {
+        if (checked) p.classList.add('whitespace-pre-wrap');
+        else p.classList.remove('whitespace-pre-wrap');
+      });
+    }
+    function syncCodePreview() {
+      const fontVal = document.getElementById('code-font-family').value;
+      const fontLabel = document.getElementById('code-font-family').options[document.getElementById('code-font-family').selectedIndex].text.split(' (')[0];
+      const requestedWeight = Number(document.getElementById('code-font-weight').value);
+      const effectiveWeight = clampWeight(fontVal, requestedWeight);
+      const size = document.getElementById('code-font-size').value;
+
+      const indicator = document.getElementById('code-clamp-indicator');
+      if (effectiveWeight !== requestedWeight) {
+        indicator.textContent = `Clamped to ${effectiveWeight}`;
+        indicator.classList.remove('hidden');
+      } else {
+        indicator.classList.add('hidden');
+      }
+
+      root.style.setProperty('--font-code-weight', effectiveWeight);
+      document.getElementById('code-preview-meta').textContent = `${fontLabel} • W${effectiveWeight} • ${size}`;
+      document.getElementById('code-badge-info').textContent = `${size} • ${fontLabel}`;
+      const box = document.getElementById('code-preview-box');
+      box.style.fontFamily = fontVal;
+      box.style.fontWeight = effectiveWeight;
+      box.style.fontSize = size;
+    }
+    function resetCodeDefaults() {
+      document.getElementById('code-font-family').value = "'JetBrains Mono', monospace";
+      document.getElementById('code-font-weight').value = "400";
+      document.getElementById('code-font-size').value = "13px";
+      document.getElementById('code-wrap-toggle').checked = false;
+      toggleCodeWrap(false);
+      updateCodeFont(); updateCodeWeight(); updateCodeSize();
+    }
+
+    // Terminal
+    function updateTerminalFont() {
+      const select = document.getElementById('terminal-font-family');
+      root.style.setProperty('--font-terminal-family', select.value);
+      syncTerminalPreview();
+    }
+    function updateTerminalWeight() {
+      syncTerminalPreview();
+    }
+    function updateTerminalSize() {
+      const select = document.getElementById('terminal-font-size');
+      root.style.setProperty('--font-terminal-size', select.value);
+      syncTerminalPreview();
+    }
+    function toggleTerminalWrap(checked) {
+      const pre1 = document.getElementById('terminal-output-preview');
+      const pre2 = document.getElementById('terminal-preview-box');
+      [pre1, pre2].forEach(p => {
+        if (checked) p.classList.add('whitespace-pre-wrap');
+        else p.classList.remove('whitespace-pre-wrap');
+      });
+    }
+    function syncTerminalPreview() {
+      const fontVal = document.getElementById('terminal-font-family').value;
+      const fontLabel = document.getElementById('terminal-font-family').options[document.getElementById('terminal-font-family').selectedIndex].text.split(' (')[0];
+      const requestedWeight = Number(document.getElementById('terminal-font-weight').value);
+      const effectiveWeight = clampWeight(fontVal, requestedWeight);
+      const size = document.getElementById('terminal-font-size').value;
+
+      const indicator = document.getElementById('term-clamp-indicator');
+      if (effectiveWeight !== requestedWeight) {
+        indicator.textContent = `Clamped to ${effectiveWeight}`;
+        indicator.classList.remove('hidden');
+      } else {
+        indicator.classList.add('hidden');
+      }
+
+      root.style.setProperty('--font-terminal-weight', effectiveWeight);
+      document.getElementById('terminal-preview-meta').textContent = `${fontLabel} • W${effectiveWeight} • ${size}`;
+      document.getElementById('terminal-badge-info').textContent = `${size} • ${fontLabel}`;
+      const box = document.getElementById('terminal-preview-box');
+      box.style.fontFamily = fontVal;
+      box.style.fontWeight = effectiveWeight;
+      box.style.fontSize = size;
+    }
+    function resetTerminalDefaults() {
+      document.getElementById('terminal-font-family').value = "'JetBrains Mono', monospace";
+      document.getElementById('terminal-font-weight').value = "400";
+      document.getElementById('terminal-font-size').value = "12px";
+      document.getElementById('terminal-wrap-toggle').checked = true;
+      toggleTerminalWrap(true);
+      updateTerminalFont(); updateTerminalWeight(); updateTerminalSize();
+    }
+
+    // Scale & Spacing
+    function setScaleFactor(val) {
+      val = Math.min(Math.max(Number(val), 75), 135);
+      document.getElementById('scale-slider').value = val;
+      handleScaleInput(val);
+    }
+    function handleScaleInput(val) {
+      root.style.setProperty('--app-font-scale', val + '%');
+      document.getElementById('scale-slider-label').textContent = val == 100 ? '100% (Default)' : val + '%';
+      document.getElementById('active-scale-badge').textContent = 'Scale: ' + val + '%';
+      showZoomToast(`Zoom: ${val}%`);
+    }
+    function setLineHeight(val, btn) {
+      root.style.setProperty('--reading-line-height', val);
+      document.querySelectorAll('[onclick^="setLineHeight"]').forEach(b => {
+        b.className = "text-3xs px-2.5 py-1 rounded bg-secondary/80 hover:bg-secondary text-secondary-foreground font-mono";
+      });
+      btn.className = "text-3xs px-2.5 py-1 rounded bg-primary/20 text-primary border border-primary/30 font-mono font-medium";
+    }
+    function resetScaleDefaults() {
+      setScaleFactor(100);
+      setLineHeight(1.5, document.querySelectorAll('[onclick^="setLineHeight"]')[1]);
+    }
+
+    function resetAllDefaults() {
+      resetInterfaceDefaults();
+      resetCodeDefaults();
+      resetTerminalDefaults();
+      resetScaleDefaults();
+    }
+
+    // Zoom Toast Controller
+    let toastTimeout;
+    function showZoomToast(text) {
+      const toast = document.getElementById('zoom-toast');
+      document.getElementById('zoom-toast-text').textContent = text + ' (Ctrl +/-/0)';
+      toast.classList.remove('opacity-0', 'translate-y-2');
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+      }, 1500);
+    }
+
+    // Idea 4: Desktop Zoom Hotkeys Listener (Ctrl +, Ctrl -, Ctrl 0)
+    window.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        const currentVal = Number(document.getElementById('scale-slider').value);
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          setScaleFactor(currentVal + 5);
+        } else if (e.key === '-' || e.key === '_') {
+          e.preventDefault();
+          setScaleFactor(currentVal - 5);
+        } else if (e.key === '0') {
+          e.preventDefault();
+          setScaleFactor(100);
+        }
+      }
+    });
+
+    // Initialize preview boxes on start
+    syncUiPreview();
+    syncCodePreview();
+    syncTerminalPreview();
+  </script>
+</body>
+</html>

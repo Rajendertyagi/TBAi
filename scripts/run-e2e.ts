@@ -51,7 +51,7 @@
  *   TBAI_E2E_JSON_DIR=tests/.artifacts/e2e/run bun run test:e2e
  */
 import { spawn, type Subprocess } from "bun";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,7 @@ const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 const PLAYWRIGHT_CLI = path.join(WEB_ROOT, "node_modules", "@playwright", "test", "cli.js");
 const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
 const READY_URL = `http://localhost:${E2E_PORT}/readyz`;
+const INSTANCE_URL = `http://localhost:${E2E_PORT}/api/server/instance`;
 
 /** Set to an absolute directory to collect per-spec JSON reports for this leg. */
 const JSON_DIR_ENV = "TBAI_E2E_JSON_DIR";
@@ -263,32 +264,135 @@ export function readReportFile(
   }
 }
 
-async function waitForServer(timeoutMs: number): Promise<boolean> {
+/**
+ * One probe of the port: true when something answered, whatever the status.
+ *
+ * A stale server that answers `/readyz` with 500 is still occupying the port, so
+ * "answered at all" is the only signal that matters here. Connection refused is
+ * the only signal that the port is free.
+ */
+async function defaultPortProbe(port: number): Promise<boolean> {
+  try {
+    await fetch(`http://localhost:${port}/readyz`, { signal: AbortSignal.timeout(500) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait until nothing answers on the port, or give up.
+ *
+ * Fail-closed: `false` means the port is STILL occupied after `timeoutMs`, and
+ * the caller must not spawn a server it cannot bind. The previous version
+ * returned `void` and let the run proceed either way, so a stale server from an
+ * earlier crashed run kept answering `/readyz` and every spec ran against the
+ * wrong database while reporting green.
+ */
+export async function waitForPortFree(
+  port: number,
+  timeoutMs: number,
+  probe: (port: number) => Promise<boolean> = defaultPortProbe,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    try {
-      if ((await fetch(READY_URL)).ok) return true;
-    } catch {
-      /* not up yet */
-    }
+    if (!(await probe(port))) return true;
     if (Date.now() > deadline) return false;
     await new Promise((r) => setTimeout(r, 200));
   }
 }
 
-async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+/** Why the launched server did or did not become ready. */
+export interface ServerReadiness {
+  readonly ok: boolean;
+  readonly reason: "ready" | "child-exited" | "timeout" | "instance-mismatch";
+  readonly detail: string | null;
+}
+
+/**
+ * Wait for the server THIS runner launched, and nothing else.
+ *
+ * `/readyz` answering 200 is not evidence of ownership: a stale server from an
+ * earlier run answers it too, and the suite would then run against the wrong
+ * database while reporting green. So readiness requires BOTH:
+ *
+ *   - `/readyz` ok, and
+ *   - `/api/server/instance` returning the instance id this runner passed to the
+ *     launcher (`TBAI_INSTANCE_ID`), which the app serves from process memory.
+ *
+ * A confirmed mismatch fails fast rather than waiting out the deadline: the
+ * server on the port is definitively not ours. A child that exits before
+ * readiness is reported as `child-exited` immediately instead of after the full
+ * timeout.
+ */
+export async function waitForServer(options: {
+  readonly readyUrl: string;
+  readonly instanceUrl: string;
+  readonly expectedInstanceId: string;
+  readonly timeoutMs: number;
+  /** Resolves when the launched server process exits, with its exit code. */
+  readonly childExited: Promise<unknown>;
+  readonly fetchImpl?: typeof fetch;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => number;
+}): Promise<ServerReadiness> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const deadline = now() + options.timeoutMs;
+
+  let childExited = false;
+  let childExitCode: unknown = null;
+  void options.childExited.then((code) => {
+    childExited = true;
+    childExitCode = code;
+  });
+
+  let lastDetail: string | null = null;
   for (;;) {
-    try {
-      const res = await fetch(`http://localhost:${port}/readyz`, {
-        signal: AbortSignal.timeout(500),
-      });
-      if (!res.ok) return;
-    } catch {
-      return; // connection refused: port is free
+    if (childExited) {
+      return {
+        ok: false,
+        reason: "child-exited",
+        detail: `the server process exited (code ${String(childExitCode)}) before it became ready`,
+      };
     }
-    if (Date.now() > deadline) return;
-    await new Promise((r) => setTimeout(r, 200));
+    try {
+      const ready = await fetchImpl(options.readyUrl);
+      if (ready.ok) {
+        const instance = await fetchImpl(options.instanceUrl);
+        if (instance.ok) {
+          const body = (await instance.json()) as { instanceId?: unknown } | null;
+          if (body !== null && body.instanceId === options.expectedInstanceId) {
+            return { ok: true, reason: "ready", detail: null };
+          }
+          // Definitive: the server on the port is not the one this runner
+          // launched. Fail fast instead of waiting out the deadline.
+          return {
+            ok: false,
+            reason: "instance-mismatch",
+            detail:
+              `the server on the port reports instance ${String(body?.instanceId)}, ` +
+              `not the one this runner launched (${options.expectedInstanceId})`,
+          };
+        }
+        lastDetail = `the instance endpoint answered ${instance.status}`;
+      }
+    } catch {
+      /* not up yet */
+    }
+    if (now() > deadline) {
+      return {
+        ok: false,
+        reason: "timeout",
+        detail:
+          lastDetail !== null
+            ? `the server did not become ready within ${options.timeoutMs} ms (${lastDetail})`
+            : `the server did not become ready within ${options.timeoutMs} ms`,
+      };
+    }
+    await sleep(200);
   }
 }
 
@@ -386,15 +490,45 @@ async function main(): Promise<number> {
   const failedFiles: string[] = [];
 
   for (const [index, file] of files.entries()) {
-    await waitForPortFree(Number(E2E_PORT), 20_000);
+    const port = Number(E2E_PORT);
+    // Fail closed: a port that is still occupied means a stale server from an
+    // earlier run (or an unrelated process) is answering on it. Spawning anyway
+    // would run this spec against the wrong database and report green, so the
+    // whole leg stops here instead.
+    if (!(await waitForPortFree(port, 20_000))) {
+      console.error(
+        `[e2e] port ${port} is still occupied after 20s — refusing to run against a ` +
+          "server this runner does not own. Kill the stale process and re-run.",
+      );
+      return 1;
+    }
+    // The launcher forwards this to the app, which serves it from process memory
+    // at /api/server/instance. A match proves the server answering on the port is
+    // the one this runner launched — not a stale one from an earlier run.
+    const instanceId = randomUUID();
     // The launcher wipes its own data dir, so each file starts from empty.
     const server: Subprocess = spawn(
       [process.execPath, path.join(REPO_ROOT, "scripts", "start-e2e-server.ts")],
-      { cwd: REPO_ROOT, stdout: "ignore", stderr: "ignore" },
+      {
+        cwd: REPO_ROOT,
+        stdout: "ignore",
+        stderr: "ignore",
+        env: { ...process.env, TBAI_INSTANCE_ID: instanceId },
+      },
     );
 
-    if (!(await waitForServer(60_000))) {
-      console.log(`[e2e] ${file}: server never became ready — counted as failed`);
+    const readiness = await waitForServer({
+      readyUrl: READY_URL,
+      instanceUrl: INSTANCE_URL,
+      expectedInstanceId: instanceId,
+      timeoutMs: 60_000,
+      childExited: server.exited,
+    });
+    if (!readiness.ok) {
+      console.log(
+        `[e2e] ${file}: server never became ready (${readiness.reason}` +
+          `${readiness.detail ? `: ${readiness.detail}` : ""}) — counted as failed`,
+      );
       failed += 1;
       failedFiles.push(file);
       server.kill();
@@ -454,7 +588,16 @@ async function main(): Promise<number> {
     }
 
     server.kill();
-    await waitForPortFree(Number(E2E_PORT), 20_000);
+    // Fail closed here too: if the server this runner launched does not release
+    // the port, the next spec would either run against it or fail its own
+    // pre-check. Stop the leg with a clear reason instead of cascading.
+    if (!(await waitForPortFree(port, 20_000))) {
+      console.error(
+        `[e2e] port ${port} is still occupied after the run — the server did not stop. ` +
+          "Refusing to continue against a server this runner does not own.",
+      );
+      return 1;
+    }
 
     // A child that exits 0 but wrote no report produced no evidence. Both are
     // failures, and the report problem is named so it cannot be mistaken for a

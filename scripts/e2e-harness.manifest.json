@@ -22,7 +22,7 @@
     },
     {
       "path": "scripts/run-e2e.ts",
-      "sha256": "ebb4b58b409669635304b6aadc2c35c9058f40c104486366b9187a9b19ac9453"
+      "sha256": "2469ef30a34be26220d42636805c8a426cf1ecee1187186a0d03b07345658998"
     },
     {
       "path": "web/playwright.json-reporter.config.ts",

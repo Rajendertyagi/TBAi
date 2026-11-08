@@ -145,6 +145,7 @@ export const PACKAGED_STAGES = [
   "port-wait",
   "executeScript",
   "fetch",
+  "fonts",
   "zoom-hotkeys",
 ] as const;
 export type PackagedStage = (typeof PACKAGED_STAGES)[number];
@@ -160,6 +161,489 @@ export const ZOOM_SHORTCUTS = [
   { label: "Ctrl+-", key: "-", shift: false },
   { label: "Ctrl+0", key: "0", shift: false },
 ] as const;
+
+/**
+ * The faces the packaged app must actually render, as (family, weight) pairs.
+ *
+ * Inter and JetBrains Mono ship as variable families (one face spanning 100–900
+ * / 100–800), so two representative weights each are enough to prove the axis is
+ * live. Lato is static: every weight is a separate `@font-face`, and a missing
+ * stylesheet import is invisible unless each one is asked for by name.
+ */
+export const REQUIRED_FONT_FACES = [
+  { family: "Inter Variable", weight: "400" },
+  { family: "Inter Variable", weight: "700" },
+  { family: "JetBrains Mono Variable", weight: "400" },
+  { family: "JetBrains Mono Variable", weight: "700" },
+  { family: "Lato", weight: "100" },
+  { family: "Lato", weight: "300" },
+  { family: "Lato", weight: "400" },
+  { family: "Lato", weight: "700" },
+  { family: "Lato", weight: "900" },
+] as const;
+
+/**
+ * The two probe glyphs. `A` is Latin Basic; `Ž` is Latin Extended-A (U+017D),
+ * which only renders from the family itself when its `latin-ext` subset is
+ * present. A font that covers only `A` is a font whose European text silently
+ * falls back glyph by glyph.
+ */
+export const FONT_PROBE_TEXTS = ["A", "Ž"] as const;
+
+/** A family that is registered by nothing: the probe's own failure control. */
+export const MISSING_FONT_CONTROL = "TBAi Missing Face";
+
+/** One `FontFace` as the page reports it. */
+export interface FontProbeFace {
+  readonly family: string;
+  readonly weight: string;
+  readonly style: string;
+  readonly status: string;
+  readonly unicodeRange: string;
+}
+
+/** What the canvas rendered for one request, versus the generic fallback. */
+export interface FontGlyphEvidence {
+  /** The custom-family render put ink on the canvas. */
+  readonly ink: boolean;
+  /**
+   * The custom-family pixels differ from `sans-serif` at the same weight and
+   * size. This is SHAPE evidence, not a width comparison: a missing face renders
+   * exactly the fallback pixels, so `distinct` is false even when widths coincidentally
+   * differ from another glyph.
+   */
+  readonly distinctFromFallback: boolean;
+}
+
+/** One family/weight/text request and everything the page observed for it. */
+export interface FontProbeReading {
+  readonly family: string;
+  readonly weight: string;
+  readonly text: string;
+  readonly loadedFaces: readonly FontProbeFace[];
+  readonly computedFamily: string | null;
+  readonly computedWeight: string | null;
+  readonly glyph: FontGlyphEvidence | null;
+  readonly error: string | null;
+}
+
+/** The whole in-page probe result. */
+export interface FontProbePayload {
+  readonly readings: readonly FontProbeReading[];
+  readonly missingControl: {
+    readonly family: string;
+    readonly loadedFaces: readonly FontProbeFace[];
+  };
+}
+
+/** Lower-case a family name with quotes and surrounding whitespace removed. */
+export function normalizeFontFamily(family: string | null): string | null {
+  if (family === null) return null;
+  const value = family
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim()
+    .toLowerCase();
+  return value.length > 0 ? value : null;
+}
+
+/** The FIRST family in a computed `font-family` list, normalized. */
+export function firstFontFamily(computed: string | null): string | null {
+  if (computed === null) return null;
+  const first = computed.split(",")[0] ?? "";
+  return normalizeFontFamily(first);
+}
+
+/**
+ * Whether a `FontFace.weight` descriptor serves `weight`.
+ *
+ * The descriptor is either one value (`"400"`) or a variable-font range
+ * (`"100 900"`). A range's endpoints are inclusive. Anything unreadable is false:
+ * a descriptor the probe cannot interpret is not evidence of coverage.
+ */
+export function fontFaceWeightCovers(descriptor: string | null, weight: string): boolean {
+  if (descriptor === null) return false;
+  const requested = Number.parseInt(weight, 10);
+  if (!Number.isFinite(requested)) return false;
+  const parts = descriptor
+    .trim()
+    .split(/\s+/)
+    .map((part) => Number.parseInt(part, 10));
+  if (parts.some((part) => !Number.isFinite(part))) return false;
+  if (parts.length === 1) return parts[0] === requested;
+  if (parts.length !== 2) return false;
+  const low = Math.min(parts[0], parts[1]);
+  const high = Math.max(parts[0], parts[1]);
+  return requested >= low && requested <= high;
+}
+
+/**
+ * Whether a CSS `unicode-range` descriptor covers `codePoint`.
+ *
+ * An empty descriptor means "no restriction" (all code points), which is how the
+ * CSS Font Loading API reports a face declared without `unicode-range`. Ranges
+ * like `U+0100-02BA` are inclusive; wildcard ranges (`U+4??`) are supported.
+ */
+export function unicodeRangeCovers(descriptor: string | null, codePoint: number): boolean {
+  if (descriptor === null) return false;
+  const text = descriptor.trim();
+  if (text === "") return true;
+  for (const raw of text.split(",")) {
+    const part = raw.trim();
+    const match = /^U\+([0-9A-Fa-f?]{1,6})(?:-([0-9A-Fa-f]{1,6}))?$/.exec(part);
+    if (match === null) continue;
+    const startText = match[1];
+    if (startText.includes("?")) {
+      const low = Number.parseInt(startText.replace(/\?/g, "0"), 16);
+      const high = Number.parseInt(startText.replace(/\?/g, "F"), 16);
+      if (codePoint >= low && codePoint <= high) return true;
+      continue;
+    }
+    const low = Number.parseInt(startText, 16);
+    const high = match[2] === undefined ? low : Number.parseInt(match[2], 16);
+    if (codePoint >= low && codePoint <= high) return true;
+  }
+  return false;
+}
+
+/** A readable description of one required face, for a failure line. */
+function describeFontReading(reading: FontProbeReading): string {
+  return `${reading.family} ${reading.weight} "${reading.text}"`;
+}
+
+/**
+ * Every reason one probe reading is not evidence that the family rendered.
+ *
+ * Deliberately checks four independent signals. `document.fonts.check()` alone
+ * can answer true for a fallback; a face count alone cannot show the face is the
+ * right weight or that the glyph came from it; and a width comparison between
+ * characters says nothing about which font drew them.
+ */
+export function assessFontReading(reading: FontProbeReading): string[] {
+  const name = describeFontReading(reading);
+  if (reading.error !== null) return [`${name}: the probe failed: ${reading.error}`];
+
+  const requestedFamily = normalizeFontFamily(reading.family);
+  const wantedWeight = Number.parseInt(reading.weight, 10);
+  const codePoint = reading.text.codePointAt(0) ?? 0;
+  const failures: string[] = [];
+
+  const matchingFaces = reading.loadedFaces.filter(
+    (face) =>
+      normalizeFontFamily(face.family) === requestedFamily &&
+      face.style === "normal" &&
+      fontFaceWeightCovers(face.weight, reading.weight) &&
+      unicodeRangeCovers(face.unicodeRange, codePoint) &&
+      face.status === "loaded",
+  );
+  if (matchingFaces.length === 0) {
+    const seen =
+      reading.loadedFaces.length === 0
+        ? "no face"
+        : reading.loadedFaces
+            .map((face) => `${face.family} ${face.weight} ${face.style} ${face.status}`)
+            .join("; ");
+    failures.push(
+      `${name}: no loaded face matches family, normal style, weight ${reading.weight}, and U+${codePoint
+        .toString(16)
+        .toUpperCase()
+        .padStart(4, "0")} coverage (saw ${seen})`,
+    );
+  }
+
+  if (firstFontFamily(reading.computedFamily) !== requestedFamily) {
+    failures.push(
+      `${name}: computed font-family starts with ${JSON.stringify(
+        firstFontFamily(reading.computedFamily),
+      )}, not ${JSON.stringify(requestedFamily)}`,
+    );
+  }
+
+  if (
+    reading.computedWeight === null ||
+    !Number.isFinite(wantedWeight) ||
+    Number.parseInt(reading.computedWeight, 10) !== wantedWeight
+  ) {
+    failures.push(
+      `${name}: computed font-weight is ${JSON.stringify(
+        reading.computedWeight,
+      )}, not ${JSON.stringify(reading.weight)}`,
+    );
+  }
+
+  if (reading.glyph === null) {
+    failures.push(`${name}: the probe rendered no glyph evidence`);
+  } else {
+    if (!reading.glyph.ink) failures.push(`${name}: the rendered glyph had no ink`);
+    if (!reading.glyph.distinctFromFallback) {
+      failures.push(
+        `${name}: the rendered glyph is pixel-identical to the generic fallback, so the family did not draw it`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * Every reason the packaged font probe is not evidence, as stage failures.
+ *
+ * Requires a reading for every required (family, weight, text) combination — a
+ * missing reading is a hole, not a pass — and requires the deliberately missing
+ * family to remain unloaded, which is what makes the probe falsifiable in place.
+ */
+export function assessPackagedFonts(input: {
+  readonly payload: FontProbePayload | null;
+  readonly error: string | null;
+}): string[] {
+  if (input.error !== null) return [`the font probe failed: ${input.error}`];
+  if (input.payload === null) return ["the font probe returned no result"];
+
+  const failures: string[] = [];
+  const missingFamily = normalizeFontFamily(input.payload.missingControl.family);
+  if (normalizeFontFamily(MISSING_FONT_CONTROL) !== missingFamily) {
+    failures.push(
+      `the probe's failure control asked for ${JSON.stringify(
+        missingFamily,
+      )}, not ${JSON.stringify(normalizeFontFamily(MISSING_FONT_CONTROL))}`,
+    );
+  }
+  if (input.payload.missingControl.loadedFaces.length > 0) {
+    failures.push(
+      `the probe reported ${input.payload.missingControl.loadedFaces.length} face(s) for the missing family ${MISSING_FONT_CONTROL}; the probe cannot distinguish a missing face`,
+    );
+  }
+
+  for (const required of REQUIRED_FONT_FACES) {
+    for (const text of FONT_PROBE_TEXTS) {
+      const reading = input.payload.readings.find(
+        (entry) =>
+          normalizeFontFamily(entry.family) === normalizeFontFamily(required.family) &&
+          entry.weight === required.weight &&
+          entry.text === text,
+      );
+      if (reading === undefined) {
+        failures.push(
+          `no reading for ${required.family} ${required.weight} "${text}"; the probe did not test it`,
+        );
+        continue;
+      }
+      failures.push(...assessFontReading(reading));
+    }
+  }
+  return failures;
+}
+
+/**
+ * The in-page font probe, executed inside the packaged WebView.
+ *
+ * It runs through the same `execute/async` channel as the API probe, so it
+ * observes the document the user is actually looking at, with the packaged
+ * bundle's stylesheets applied. Four independent signals are recorded per
+ * (family, weight, text) request:
+ *
+ *  - the faces `document.fonts.load()` actually loaded, with their `family`,
+ *    `weight`, `style` and `unicode-range` descriptors;
+ *  - the computed `font-family`/`font-weight` of an element that asks for the
+ *    family by name;
+ *  - canvas pixels drawn with `"Family", sans-serif` versus `sans-serif` at the
+ *    same weight and size — identical pixels mean the family did not draw it;
+ *  - ink, so a probe that rendered nothing cannot pass.
+ *
+ * `document.fonts.check()` is deliberately NOT used: it answers whether SOME
+ * face can render the text, which a fallback satisfies just as well.
+ */
+export const FONT_PROBE_SCRIPT =
+  "const done = arguments[arguments.length - 1];" +
+  "(async () => {" +
+  `  const required = ${JSON.stringify(REQUIRED_FONT_FACES)};` +
+  `  const texts = ${JSON.stringify(FONT_PROBE_TEXTS)};` +
+  `  const control = ${JSON.stringify(MISSING_FONT_CONTROL)};` +
+  "  const SIZE = 40;" +
+  "  const WIDTH = 96;" +
+  "  const HEIGHT = 56;" +
+  "  const describe = (face) => ({" +
+  "    family: face.family," +
+  "    weight: face.weight," +
+  "    style: face.style," +
+  "    status: face.status," +
+  "    unicodeRange: face.unicodeRange," +
+  "  });" +
+  "  const loadFaces = async (family, weight, text) => {" +
+  "    const spec = weight + ' 16px \"' + family + '\"';" +
+  "    const faces = await document.fonts.load(spec, text);" +
+  "    return faces.map(describe);" +
+  "  };" +
+  "  const raster = (fontSpec, text) => {" +
+  "    const canvas = document.createElement('canvas');" +
+  "    canvas.width = WIDTH;" +
+  "    canvas.height = HEIGHT;" +
+  "    const ctx = canvas.getContext('2d');" +
+  "    if (!ctx) throw new Error('the page has no 2D canvas context');" +
+  "    ctx.font = fontSpec;" +
+  "    ctx.textBaseline = 'top';" +
+  "    ctx.fillText(text, 4, 4);" +
+  "    const data = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;" +
+  "    let ink = false;" +
+  "    for (let i = 3; i < data.length; i += 4) {" +
+  "      if (data[i] !== 0) { ink = true; break; }" +
+  "    }" +
+  "    return { ink, data };" +
+  "  };" +
+  "  const glyph = (family, weight, text) => {" +
+  "    const withFamily = raster('normal ' + weight + ' ' + SIZE + 'px \"' + family + '\", sans-serif', text);" +
+  "    const fallback = raster('normal ' + weight + ' ' + SIZE + 'px sans-serif', text);" +
+  "    let identical = withFamily.data.length === fallback.data.length;" +
+  "    if (identical) {" +
+  "      for (let i = 0; i < withFamily.data.length; i += 1) {" +
+  "        if (withFamily.data[i] !== fallback.data[i]) { identical = false; break; }" +
+  "      }" +
+  "    }" +
+  "    return { ink: withFamily.ink, distinctFromFallback: !identical };" +
+  "  };" +
+  "  await document.fonts.ready;" +
+  "  const host = document.createElement('div');" +
+  "  host.setAttribute('data-tbai-font-probe', '');" +
+  "  host.style.position = 'fixed';" +
+  "  host.style.left = '-10000px';" +
+  "  host.style.top = '0';" +
+  "  host.style.pointerEvents = 'none';" +
+  "  document.body.appendChild(host);" +
+  "  const readings = [];" +
+  "  try {" +
+  "    for (const face of required) {" +
+  "      for (const text of texts) {" +
+  "        const span = document.createElement('span');" +
+  "        span.style.fontFamily = '\"' + face.family + '\"';" +
+  "        span.style.fontWeight = face.weight;" +
+  "        span.style.fontSize = '16px';" +
+  "        span.textContent = text;" +
+  "        host.appendChild(span);" +
+  "        const computed = getComputedStyle(span);" +
+  "        const computedFamily = computed.fontFamily;" +
+  "        const computedWeight = computed.fontWeight;" +
+  "        span.remove();" +
+  "        let loadedFaces = [];" +
+  "        let error = null;" +
+  "        try {" +
+  "          loadedFaces = await loadFaces(face.family, face.weight, text);" +
+  "        } catch (e) {" +
+  "          error = String((e && e.message) || e);" +
+  "        }" +
+  "        let glyphEvidence = null;" +
+  "        try {" +
+  "          glyphEvidence = glyph(face.family, face.weight, text);" +
+  "        } catch (e) {" +
+  "          error = error || String((e && e.message) || e);" +
+  "        }" +
+  "        readings.push({" +
+  "          family: face.family," +
+  "          weight: face.weight," +
+  "          text: text," +
+  "          loadedFaces: loadedFaces," +
+  "          computedFamily: computedFamily," +
+  "          computedWeight: computedWeight," +
+  "          glyph: glyphEvidence," +
+  "          error: error," +
+  "        });" +
+  "      }" +
+  "    }" +
+  "  } finally {" +
+  "    host.remove();" +
+  "  }" +
+  "  const controlFaces = await loadFaces(control, '400', texts[0]);" +
+  "  done({ readings: readings, missingControl: { family: control, loadedFaces: controlFaces } });" +
+  "})().catch((error) => done({ probeError: String((error && error.stack) || error) }));";
+
+/** Reads the in-page font probe result, or says why it is not one. */
+export function readFontProbeValue(value: unknown): {
+  payload: FontProbePayload | null;
+  error: string | null;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { payload: null, error: "the font probe returned no result object" };
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.probeError === "string") {
+    return { payload: null, error: `the in-page font probe failed: ${record.probeError}` };
+  }
+  if (!Array.isArray(record.readings)) {
+    return { payload: null, error: "the font probe returned no readings" };
+  }
+  const readings: FontProbeReading[] = [];
+  for (const entry of record.readings) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const facesValue = Array.isArray(item.loadedFaces) ? item.loadedFaces : [];
+    const faces: FontProbeFace[] = [];
+    for (const face of facesValue) {
+      if (face === null || typeof face !== "object" || Array.isArray(face)) continue;
+      const f = face as Record<string, unknown>;
+      faces.push({
+        family: typeof f.family === "string" ? f.family : "",
+        weight: typeof f.weight === "string" ? f.weight : "",
+        style: typeof f.style === "string" ? f.style : "",
+        status: typeof f.status === "string" ? f.status : "",
+        unicodeRange: typeof f.unicodeRange === "string" ? f.unicodeRange : "",
+      });
+    }
+    const glyphValue = item.glyph;
+    const glyph =
+      glyphValue !== null && typeof glyphValue === "object" && !Array.isArray(glyphValue)
+        ? {
+            ink: (glyphValue as Record<string, unknown>).ink === true,
+            distinctFromFallback:
+              (glyphValue as Record<string, unknown>).distinctFromFallback === true,
+          }
+        : null;
+    readings.push({
+      family: typeof item.family === "string" ? item.family : "",
+      weight: typeof item.weight === "string" ? item.weight : "",
+      text: typeof item.text === "string" ? item.text : "",
+      loadedFaces: faces,
+      computedFamily: typeof item.computedFamily === "string" ? item.computedFamily : null,
+      computedWeight: typeof item.computedWeight === "string" ? item.computedWeight : null,
+      glyph,
+      error: typeof item.error === "string" ? item.error : null,
+    });
+  }
+
+  const controlValue = record.missingControl;
+  const controlRecord =
+    controlValue !== null && typeof controlValue === "object" && !Array.isArray(controlValue)
+      ? (controlValue as Record<string, unknown>)
+      : null;
+  const controlFacesValue =
+    controlRecord !== null && Array.isArray(controlRecord.loadedFaces)
+      ? controlRecord.loadedFaces
+      : [];
+  const controlFaces: FontProbeFace[] = [];
+  for (const face of controlFacesValue) {
+    if (face === null || typeof face !== "object" || Array.isArray(face)) continue;
+    const f = face as Record<string, unknown>;
+    controlFaces.push({
+      family: typeof f.family === "string" ? f.family : "",
+      weight: typeof f.weight === "string" ? f.weight : "",
+      style: typeof f.style === "string" ? f.style : "",
+      status: typeof f.status === "string" ? f.status : "",
+      unicodeRange: typeof f.unicodeRange === "string" ? f.unicodeRange : "",
+    });
+  }
+
+  return {
+    payload: {
+      readings,
+      missingControl: {
+        family:
+          controlRecord !== null && typeof controlRecord.family === "string"
+            ? controlRecord.family
+            : "",
+        loadedFaces: controlFaces,
+      },
+    },
+    error: null,
+  };
+}
 
 /** `{ origin, href, title }` as read from the page, with nulls for anything missing. */
 export interface PageRead {
@@ -225,6 +709,14 @@ export interface PackagedOriginInput {
   readonly probe: {
     readonly status: number | null;
     readonly body: string | null;
+    readonly error: string | null;
+  };
+  /**
+   * The in-WebView font probe: every shipped family/weight rendered with `A` and
+   * `Ž`, plus a deliberately missing family as the probe's own failure control.
+   */
+  readonly fonts: {
+    readonly payload: FontProbePayload | null;
     readonly error: string | null;
   };
   /**
@@ -467,11 +959,14 @@ export function assessPackagedOrigin(input: PackagedOriginInput): PackagedAssess
   // No baseline, no steps, no error: the page never loaded, so the fetch stage
   // fails first and sequentialStages returns it.
 
+  const fontFailures = assessPackagedFonts(input.fonts);
+
   const stages: StageResult<PackagedStage>[] = [
     { stage: "session-create", failures: sessionFailures },
     { stage: "port-wait", failures: portFailures },
     { stage: "executeScript", failures: scriptFailures },
     { stage: "fetch", failures: probeFailures },
+    { stage: "fonts", failures: fontFailures },
     { stage: "zoom-hotkeys", failures: zoomFailures },
   ];
   return sequentialStages(stages);
@@ -1029,6 +1524,10 @@ async function main(): Promise<number> {
     body: null,
     error: null,
   };
+  const fonts: { payload: FontProbePayload | null; error: string | null } = {
+    payload: null,
+    error: null,
+  };
   const zoomHotkeys: {
     baseline: ZoomRead | null;
     steps: ZoomStep[];
@@ -1174,6 +1673,31 @@ async function main(): Promise<number> {
                 probe.error = read.error ?? probe.error;
               }
 
+              // Font probe: the packaged bundle's own stylesheets decide whether
+              // Inter / JetBrains Mono / Lato render. Shipped files are not
+              // evidence — a stylesheet import that never applied leaves the text
+              // on a fallback that looks acceptable in a screenshot.
+              const fontCall = await httpJson(
+                `${driverBaseUrl}/session/${sessionId}/execute/async`,
+                {
+                  method: "POST",
+                  body: { script: FONT_PROBE_SCRIPT, args: [] },
+                  timeoutMs: CDP_STEP_TIMEOUT_MS,
+                },
+              );
+              if (fontCall.status === null) {
+                fonts.error = `could not run the in-page font probe: ${fontCall.error ?? "unknown error"}`;
+              } else {
+                const executed = parseExecuteResponse(fontCall.text);
+                if (executed.error !== null) {
+                  fonts.error = executed.error;
+                } else {
+                  const read = readFontProbeValue(executed.value);
+                  fonts.payload = read.payload;
+                  fonts.error = read.error;
+                }
+              }
+
               // Zoom-hotkey probe: with `zoomHotkeysEnabled: false` the
               // WebView ignores every zoom chord, so window.devicePixelRatio
               // must be identical either side of EACH one. Each chord gets its
@@ -1297,6 +1821,7 @@ async function main(): Promise<number> {
       navigation,
     },
     probe,
+    fonts,
     directProbe,
     appInstanceId,
     zoomHotkeys,
@@ -1348,6 +1873,8 @@ async function main(): Promise<number> {
     /** How the origin was obtained: the wait for the document, and what it saw. */
     navigation,
     probe,
+    /** The in-WebView font probe: every shipped family/weight, both probe glyphs. */
+    fonts,
     /** How the direct read of the launched app's own identity went. */
     directProbe,
     appInstanceId,

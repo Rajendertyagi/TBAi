@@ -387,10 +387,13 @@ test.describe("structured tool payload follows the Code channel", () => {
     const conversationId = await createConversation(request);
     try {
       await page.goto(`/#/chat/${conversationId}`);
+      // Fira Code + weight 500, deliberately NOT the fixed metadata stack, so
+      // the exit line and the header pill can be told apart by computed style.
       await applyTypography(page, {
         interfaceFontSize: 16,
         terminalFontSize: 14,
-        terminalFontFamily: "jetbrains-mono",
+        terminalFontFamily: "fira-code",
+        terminalFontWeight: 500,
       });
 
       await request.post(`${STUB}/__e2e/text`, { data: { text: FINAL_ANSWER } });
@@ -414,24 +417,50 @@ test.describe("structured tool payload follows the Code channel", () => {
         return {
           size: Number.parseFloat(style.fontSize),
           family: style.fontFamily,
+          weight: Number.parseFloat(style.fontWeight),
+          visibility: style.visibility,
+          display: style.display,
+          opacity: Number.parseFloat(style.opacity),
+          rects: element.getClientRects().length,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
         };
       });
       expect(lineStyles.size).toBeCloseTo(14, 2);
-      expect(lineStyles.family).toContain("JetBrains Mono");
+      expect(lineStyles.family).toContain("Fira Code");
+      expect(lineStyles.weight).toBe(500);
+      // Visible and not clipped: one laid-out box, no overflow in either axis.
+      expect(lineStyles.rects).toBe(1);
+      expect(lineStyles.scrollHeight).toBeLessThanOrEqual(lineStyles.clientHeight);
+      expect(lineStyles.scrollWidth).toBeLessThanOrEqual(lineStyles.clientWidth);
+      expect(lineStyles.visibility).not.toBe("hidden");
+      expect(lineStyles.display).not.toBe("none");
+      expect(lineStyles.opacity).toBeGreaterThan(0);
 
+      // The header status pill is compact metadata on the FIXED monospace
+      // stack (`--font-mono`), which no setting writes. Selecting it by its
+      // exact text keeps the selector unambiguous.
       const terminalBlock = page.locator('[data-slot="terminal-block"]').first();
       await expect(terminalBlock).toBeVisible();
-      const statusPill = terminalBlock
-        .locator("span.font-mono, [data-slot='terminal-block'] span")
-        .last();
+      const statusPill = terminalBlock.getByText("failed", { exact: true });
+      await expect(statusPill).toBeVisible();
       const pillStyles = await statusPill.evaluate((element) => {
         const style = getComputedStyle(element);
         return {
           size: Number.parseFloat(style.fontSize),
           family: style.fontFamily,
+          visibility: style.visibility,
+          display: style.display,
         };
       });
-      expect(pillStyles.size).toBeLessThanOrEqual(14);
+      expect(pillStyles.family).toContain("JetBrains Mono");
+      expect(pillStyles.family).not.toContain("Fira Code");
+      // Compact metadata: text-2xs at the 16px interface size is 11px.
+      expect(pillStyles.size).toBeCloseTo(11, 2);
+      expect(pillStyles.visibility).not.toBe("hidden");
+      expect(pillStyles.display).not.toBe("none");
     } finally {
       await request.post(`${STUB}/__e2e/tool/disarm`).catch(() => undefined);
       await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);

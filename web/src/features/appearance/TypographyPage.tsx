@@ -446,7 +446,7 @@ export function TypographyPage() {
         >
           <SettingRow
             label="Terminal font family"
-            description="Dedicated monospace font applied to command execution output and terminal logs."
+            description="Dedicated monospace font applied to command execution output and terminal logs, including exit and timeout lines."
           >
             <Select
               value={typography.terminalFontFamily}
@@ -532,6 +532,9 @@ export function TypographyPage() {
             <div className="text-[10.5px] uppercase font-mono tracking-wider text-muted-foreground">
               Production TerminalBlock Preview
             </div>
+            <p className="text-3xs text-muted-foreground">
+              Status pills and badges stay on the fixed monospace metadata channel.
+            </p>
             <TerminalBlock
               command="bun test tests/unit/appearance/typography.test.ts"
               lines={[

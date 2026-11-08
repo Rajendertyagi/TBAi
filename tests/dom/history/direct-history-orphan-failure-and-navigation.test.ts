@@ -22,6 +22,7 @@ import {
 import { createThreadHistoryAdapter } from "@web/adapters/threadHistoryAdapter.ts";
 import {
   clearAllWindowControllers,
+  dropWindowController,
   ensureWindowController,
   isHistoryLoadFailed,
   windowControllerFor,
@@ -176,8 +177,11 @@ describe("Defect S - navigation cannot overwrite a replacement's live messages",
     expect(chatCurrent.installed.map((m) => m.id)).toEqual(["live-0"]);
 
     // Orphaned - dropped with no replacement - must still be usable, matching the
-    // accepted orphan policy rather than being over-blocked.
-    clearAllWindowControllers();
+    // accepted orphan policy rather than being over-blocked. Coordinated recovery
+    // no longer orphans a COMMITTED window (it keeps the slot for the mounted
+    // consumer and marks it stale), so the single-conversation drop is what
+    // produces a genuinely orphaned controller here.
+    dropWindowController(remoteId);
     const chatOrphan = recordingInstaller();
     expect(applyWindowToChat(remoteId, chatOrphan.install, current)).toBe(true);
     expect(chatOrphan.installed.map((m) => m.id)).toEqual(["live-0"]);

@@ -36,22 +36,36 @@ import {
 } from "../../../scripts/lib/webview-observation";
 import {
   EXPECTED_PACKAGED_ORIGIN,
+  type FontProbeFace,
+  type FontProbePayload,
+  type FontProbeReading,
+  FONT_PROBE_SCRIPT,
+  FONT_PROBE_TEXTS,
+  MISSING_FONT_CONTROL,
   type PackagedNavigation,
   type PackagedOriginInput,
   type PageReadResult,
+  REQUIRED_FONT_FACES,
   type ZoomRead,
   type ZoomStep,
   ZOOM_SHORTCUTS,
+  assessFontReading,
+  assessPackagedFonts,
   assessPackagedOrigin,
   awaitsNavigation,
   checkDriverBinary,
+  firstFontFamily,
+  fontFaceWeightCovers,
+  normalizeFontFamily,
   parseExecuteResponse,
   parseIntegrityLevel,
   parseSessionResponse,
   parseWindowHandles,
+  readFontProbeValue,
   readOriginValue,
   readProbeValue,
   readZoomValue,
+  unicodeRangeCovers,
   unloadedDocumentFailure,
   waitForNavigation,
 } from "../../../scripts/verify-packaged-webview-origin";
@@ -62,10 +76,13 @@ import {
   buildDebugPortOverlay,
   headText,
   instanceIdFromProbe,
+  isNavigationComplete,
   parseCdpTargets,
+  parseDevPageSnapshot,
   parseEvaluateResponse,
   portOfOrigin,
   readDevConfiguration,
+  revalidateDevTarget,
   selectDevTarget,
   selectLaunchMarkers,
 } from "../../../scripts/observe-dev-webview-origin";
@@ -115,6 +132,61 @@ function zoomSteps(): ZoomStep[] {
   }));
 }
 
+/** The `unicode-range` a subsetted Latin face ships, split the way the bundles do. */
+const LATIN_RANGE = "U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+2212,U+2215";
+const LATIN_EXT_RANGE = "U+0100-02BA,U+02BD-02C5,U+A720-A7FF";
+
+/** The weight each variable family's single `@font-face` declares. */
+const VARIABLE_WEIGHTS: Record<string, string> = {
+  "Inter Variable": "100 900",
+  "JetBrains Mono Variable": "100 800",
+};
+
+function fontFace(
+  family: string,
+  weight: string,
+  unicodeRange: string,
+  overrides: Partial<FontProbeFace> = {},
+): FontProbeFace {
+  return { family, weight, style: "normal", status: "loaded", unicodeRange, ...overrides };
+}
+
+/** One reading that would pass: the face loaded, styled, and drew distinct pixels. */
+function fontReading(
+  family: string,
+  weight: string,
+  text: string,
+  overrides: Partial<FontProbeReading> = {},
+): FontProbeReading {
+  const unicodeRange = text === "Ž" ? LATIN_EXT_RANGE : LATIN_RANGE;
+  return {
+    family,
+    weight,
+    text,
+    loadedFaces: [fontFace(family, VARIABLE_WEIGHTS[family] ?? weight, unicodeRange)],
+    computedFamily: `"${family}"`,
+    computedWeight: weight,
+    glyph: { ink: true, distinctFromFallback: true },
+    error: null,
+    ...overrides,
+  };
+}
+
+/** A complete payload: every required family/weight rendered with both glyphs. */
+function fontPayload(overrides: Partial<FontProbePayload> = {}): FontProbePayload {
+  const readings: FontProbeReading[] = [];
+  for (const required of REQUIRED_FONT_FACES) {
+    for (const text of FONT_PROBE_TEXTS) {
+      readings.push(fontReading(required.family, required.weight, text));
+    }
+  }
+  return {
+    readings,
+    missingControl: { family: MISSING_FONT_CONTROL, loadedFaces: [] },
+    ...overrides,
+  };
+}
+
 function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOriginInput {
   return {
     appPath: "C:\\portable\\TBAi.exe",
@@ -129,6 +201,7 @@ function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOr
       navigation: navigatedOnce(),
     },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
+    fonts: { payload: fontPayload(), error: null },
     directProbe: { status: 200, error: null },
     appInstanceId: "instance-a",
     zoomHotkeys: { baseline: zoomRead(), steps: zoomSteps(), error: null },
@@ -152,6 +225,7 @@ function devInput(overrides: Partial<DevOriginInput> = {}): DevOriginInput {
       origin: "http://localhost:3000",
       href: "http://localhost:3000/chat",
       title: "TBAi",
+      readyState: "complete",
       error: null,
     },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
@@ -649,6 +723,203 @@ describe("G1 packaged origin: the failure matrix", () => {
   });
 });
 
+describe("G1 packaged fonts: the faces the packaged bundle must render", () => {
+  it("accepts a payload where every required face loaded and drew both glyphs", () => {
+    expect(assessPackagedFonts({ payload: fontPayload(), error: null })).toEqual([]);
+    expect(assessPackagedOrigin(packagedInput()).ok).toBe(true);
+  });
+
+  it("rejects a family whose face never loaded", () => {
+    const payload = fontPayload();
+    const reads = payload.readings.map((entry) =>
+      entry.family === "Inter Variable" && entry.weight === "700"
+        ? { ...entry, loadedFaces: [], glyph: { ink: false, distinctFromFallback: false } }
+        : entry,
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain("Inter Variable 700");
+    expect(failures.join(" ")).toContain("no loaded face matches");
+    expect(failures.join(" ")).toContain("had no ink");
+  });
+
+  it("rejects a face whose weight descriptor does not serve the request", () => {
+    // A stylesheet that imports only the 400 face of a static family still
+    // declares the family, so only the descriptor catches it.
+    const payload = fontPayload();
+    const reads = payload.readings.map((entry) =>
+      entry.family === "Lato" && entry.weight === "900"
+        ? { ...entry, loadedFaces: [fontFace("Lato", "400", LATIN_RANGE)] }
+        : entry,
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain("Lato 900");
+    expect(failures.join(" ")).toContain("no loaded face matches");
+  });
+
+  it("rejects a face that does not cover the requested glyph", () => {
+    // `Ž` is Latin Extended-A: a face carrying only the Latin Basic subset
+    // covers `A` and silently falls back for `Ž`.
+    const payload = fontPayload();
+    const reads = payload.readings.map((entry) =>
+      entry.text === "Ž"
+        ? { ...entry, loadedFaces: [fontFace(entry.family, entry.weight, LATIN_RANGE)] }
+        : entry,
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain("U+017D");
+    expect(failures.join(" ")).toContain("no loaded face matches");
+  });
+
+  it("rejects a glyph that is pixel-identical to the generic fallback", () => {
+    const payload = fontPayload();
+    const reads = payload.readings.map((entry) =>
+      entry.family === "JetBrains Mono Variable" && entry.text === "A"
+        ? { ...entry, glyph: { ink: true, distinctFromFallback: false } }
+        : entry,
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain("pixel-identical to the generic fallback");
+  });
+
+  it("rejects a computed family that is not the requested one", () => {
+    const payload = fontPayload();
+    const reads = payload.readings.map((entry) =>
+      entry.family === "Inter Variable" && entry.text === "A"
+        ? { ...entry, computedFamily: "system-ui" }
+        : entry,
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain("computed font-family starts with");
+  });
+
+  it("treats a missing reading as a hole, not a pass", () => {
+    const payload = fontPayload();
+    const reads = payload.readings.filter(
+      (entry) => !(entry.family === "Lato" && entry.weight === "300"),
+    );
+    const failures = assessPackagedFonts({ payload: { ...payload, readings: reads }, error: null });
+    expect(failures.join(" ")).toContain('no reading for Lato 300 "A"');
+  });
+
+  it("keeps the probe falsifiable: the missing control must stay unloaded", () => {
+    const listed = assessPackagedFonts({
+      payload: {
+        ...fontPayload(),
+        missingControl: {
+          family: MISSING_FONT_CONTROL,
+          loadedFaces: [fontFace(MISSING_FONT_CONTROL, "400", LATIN_RANGE)],
+        },
+      },
+      error: null,
+    });
+    expect(listed.join(" ")).toContain("cannot distinguish a missing face");
+
+    const renamed = assessPackagedFonts({
+      payload: { ...fontPayload(), missingControl: { family: "Inter Variable", loadedFaces: [] } },
+      error: null,
+    });
+    expect(renamed.join(" ")).toContain("failure control asked for");
+  });
+
+  it("reports a probe that did not run at all", () => {
+    expect(assessPackagedFonts({ payload: null, error: "timeout" })[0]).toContain("timeout");
+    expect(assessPackagedFonts({ payload: null, error: null })[0]).toContain("no result");
+  });
+
+  it("stops the run at fonts instead of reporting later stages as evidence", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        fonts: { payload: { ...fontPayload(), readings: [] }, error: null },
+        zoomHotkeys: { baseline: null, steps: [], error: "not attempted" },
+      }),
+    );
+    expect(assessed.stage).toBe("fonts");
+    expect(assessed.ok).toBe(false);
+    expect(assessed.failures.join(" ")).toContain('no reading for Inter Variable 400 "A"');
+  });
+
+  it("reads the in-page payload and its own failure", () => {
+    const payload = fontPayload();
+    const read = readFontProbeValue(payload);
+    expect(read.error).toBeNull();
+    expect(read.payload?.readings).toHaveLength(
+      REQUIRED_FONT_FACES.length * FONT_PROBE_TEXTS.length,
+    );
+    expect(read.payload?.missingControl.family).toBe(MISSING_FONT_CONTROL);
+
+    const failed = readFontProbeValue({ probeError: "document.fonts is undefined" });
+    expect(failed.payload).toBeNull();
+    expect(failed.error).toContain("document.fonts is undefined");
+
+    expect(readFontProbeValue(null).error).toContain("no result object");
+    expect(readFontProbeValue({}).error).toContain("no readings");
+  });
+
+  it("matches weights by descriptor range, not by string equality", () => {
+    expect(fontFaceWeightCovers("400", "400")).toBe(true);
+    expect(fontFaceWeightCovers("400", "700")).toBe(false);
+    expect(fontFaceWeightCovers("100 900", "700")).toBe(true);
+    expect(fontFaceWeightCovers("100 800", "900")).toBe(false);
+    expect(fontFaceWeightCovers(" 100  900 ", "100")).toBe(true);
+    expect(fontFaceWeightCovers(null, "400")).toBe(false);
+    expect(fontFaceWeightCovers("normal", "400")).toBe(false);
+    expect(fontFaceWeightCovers("100 200 300", "200")).toBe(false);
+  });
+
+  it("matches unicode ranges including wildcards and the unrestricted case", () => {
+    expect(unicodeRangeCovers(LATIN_RANGE, 0x41)).toBe(true);
+    expect(unicodeRangeCovers(LATIN_RANGE, 0x17d)).toBe(false);
+    expect(unicodeRangeCovers(LATIN_EXT_RANGE, 0x17d)).toBe(true);
+    expect(unicodeRangeCovers("U+4??", 0x4ab)).toBe(true);
+    expect(unicodeRangeCovers("U+4??", 0x5ab)).toBe(false);
+    expect(unicodeRangeCovers("U+0100-02BA, U+017D", 0x17d)).toBe(true);
+    // An absent descriptor places no restriction; an unreadable one is not a pass.
+    expect(unicodeRangeCovers("", 0x17d)).toBe(true);
+    expect(unicodeRangeCovers(null, 0x17d)).toBe(false);
+    expect(unicodeRangeCovers("garbage", 0x17d)).toBe(false);
+  });
+
+  it("normalizes a computed family list down to the first family", () => {
+    expect(normalizeFontFamily(' "Inter Variable" ')).toBe("inter variable");
+    expect(normalizeFontFamily("system-ui")).toBe("system-ui");
+    expect(normalizeFontFamily("   ")).toBeNull();
+    expect(firstFontFamily('"Lato", system-ui, sans-serif')).toBe("lato");
+    expect(firstFontFamily(null)).toBeNull();
+  });
+
+  it("fails one reading per independent signal instead of trusting a check()", () => {
+    const failures = assessFontReading(
+      fontReading("Inter Variable", "400", "A", {
+        loadedFaces: [fontFace("Inter Variable", "100 900", LATIN_RANGE, { status: "error" })],
+        computedFamily: "system-ui",
+        computedWeight: "300",
+        glyph: null,
+      }),
+    );
+    expect(failures.length).toBe(4);
+    expect(failures.join(" ")).toContain("no loaded face matches");
+    expect(failures.join(" ")).toContain("computed font-family");
+    expect(failures.join(" ")).toContain("computed font-weight");
+    expect(failures.join(" ")).toContain("rendered no glyph evidence");
+  });
+
+  it("serializes the current required set into the in-page probe", () => {
+    for (const required of REQUIRED_FONT_FACES) {
+      expect(FONT_PROBE_SCRIPT).toContain(required.family);
+    }
+    for (const text of FONT_PROBE_TEXTS) {
+      expect(FONT_PROBE_SCRIPT).toContain(text);
+    }
+    expect(FONT_PROBE_SCRIPT).toContain(MISSING_FONT_CONTROL);
+    // The mechanisms that make the probe evidence, and the one it must not use.
+    expect(FONT_PROBE_SCRIPT).toContain("document.fonts.load(");
+    expect(FONT_PROBE_SCRIPT).toContain("document.fonts.ready");
+    expect(FONT_PROBE_SCRIPT).toContain("getComputedStyle(");
+    expect(FONT_PROBE_SCRIPT).toContain("getImageData(");
+    expect(FONT_PROBE_SCRIPT).not.toContain("document.fonts.check(");
+  });
+});
+
 describe("G1 packaged origin: the wait for the document", () => {
   const blank = { origin: "null", href: "about:blank", title: "" };
   const loaded = { origin: EXPECTED_PACKAGED_ORIGIN, href: "http://app.localhost/", title: "TBAi" };
@@ -871,6 +1142,103 @@ describe("G2 development origin: configuration and CDP payloads", () => {
     ).toBeNull();
   });
 
+  it("[G2-target] revalidates a replaced page target and never reuses a stale socket", () => {
+    const configured = "http://localhost:3000";
+    const first = {
+      type: "page",
+      url: configured + "/",
+      title: "TBAi",
+      webSocketDebuggerUrl: "ws://127.0.0.1:55000/devtools/page/first",
+    };
+    const replacement = {
+      type: "page",
+      url: configured + "/chat/1",
+      title: "TBAi",
+      webSocketDebuggerUrl: "ws://127.0.0.1:55000/devtools/page/second",
+    };
+
+    // The same target seen again is not a replacement.
+    expect(revalidateDevTarget([first], configured, first)).toEqual({
+      target: first,
+      replaced: false,
+    });
+
+    // A navigation that produced a new target id is adopted, and reported.
+    const replaced = revalidateDevTarget([replacement], configured, first);
+    expect(replaced.replaced).toBe(true);
+    expect(replaced.target?.webSocketDebuggerUrl).toBe("ws://127.0.0.1:55000/devtools/page/second");
+
+    // A list without a usable target is null, never the previously held one.
+    expect(revalidateDevTarget([first], "http://localhost:9999", first)).toEqual({
+      target: null,
+      replaced: false,
+    });
+    expect(revalidateDevTarget([], configured, first)).toEqual({ target: null, replaced: false });
+  });
+
+  it("[G2-ready] accepts a page read only when the document is complete on the configured origin", () => {
+    const configured = "http://localhost:3000";
+    const complete = parseDevPageSnapshot({
+      origin: configured,
+      href: configured + "/chat",
+      title: "TBAi",
+      readyState: "complete",
+    });
+    expect(complete).not.toBeNull();
+    expect(isNavigationComplete(complete!, configured)).toBe(true);
+
+    // A document still loading already reports the navigation's origin, so it is
+    // explicitly NOT enough.
+    for (const readyState of ["loading", "interactive", null, "unloaded"]) {
+      const snapshot = parseDevPageSnapshot({
+        origin: configured,
+        href: configured + "/",
+        title: "TBAi",
+        readyState,
+      });
+      expect(isNavigationComplete(snapshot!, configured), String(readyState)).toBe(false);
+    }
+
+    // The blank placeholder, an unknown origin and a foreign origin all fail.
+    expect(
+      isNavigationComplete(
+        parseDevPageSnapshot({
+          origin: "null",
+          href: "about:blank",
+          title: "",
+          readyState: "complete",
+        })!,
+        configured,
+      ),
+    ).toBe(false);
+    expect(
+      isNavigationComplete(
+        parseDevPageSnapshot({
+          origin: null,
+          href: null,
+          title: null,
+          readyState: "complete",
+        })!,
+        configured,
+      ),
+    ).toBe(false);
+    expect(
+      isNavigationComplete(
+        parseDevPageSnapshot({
+          origin: "http://localhost:5173",
+          href: "http://localhost:5173/",
+          title: "TBAi",
+          readyState: "complete",
+        })!,
+        configured,
+      ),
+    ).toBe(false);
+
+    // A non-object evaluate value is not a page read at all.
+    expect(parseDevPageSnapshot("nope")).toBeNull();
+    expect(parseDevPageSnapshot(null)).toBeNull();
+  });
+
   it("reads a Runtime.evaluate result, an exception and a protocol error", () => {
     const ok = parseEvaluateResponse({
       id: 1,
@@ -965,6 +1333,7 @@ describe("G2 development origin: the failure matrix", () => {
           origin: "http://localhost:5173",
           href: "http://localhost:5173/",
           title: "TBAi",
+          readyState: "complete",
           error: null,
         },
       }),
@@ -972,6 +1341,36 @@ describe("G2 development origin: the failure matrix", () => {
     expect(assessed.stage).toBe("evaluate");
     expect(assessed.failures.join(" ")).toContain("configured devUrl is http://localhost:3000");
     expect(assessed.failures.join(" ")).toContain("http://localhost:5173");
+  });
+
+  it("stops at evaluate when the document has not reached readyState complete", () => {
+    const loading = assessDevOrigin(
+      devInput({
+        evaluation: {
+          origin: "http://localhost:3000",
+          href: "http://localhost:3000/",
+          title: "TBAi",
+          readyState: "loading",
+          error: null,
+        },
+      }),
+    );
+    expect(loading.stage).toBe("evaluate");
+    expect(loading.failures.join(" ")).toContain('document.readyState "loading"');
+
+    const unknown = assessDevOrigin(
+      devInput({
+        evaluation: {
+          origin: "http://localhost:3000",
+          href: "http://localhost:3000/",
+          title: "TBAi",
+          readyState: null,
+          error: null,
+        },
+      }),
+    );
+    expect(unknown.stage).toBe("evaluate");
+    expect(unknown.failures.join(" ")).toContain("(none)");
   });
 
   it("stops at probe-api when the page could not read the API", () => {
