@@ -1,5 +1,16 @@
 # TBAi — Application-Wide Typography & Font Consistency Audit
 
+> [!NOTE]
+> **Historical baseline only:** This read-only audit describes the application at
+> `ci/tauri-e2e-verify` / `dd82ed8` on 2026-11-05. Its findings and architecture
+> statements are not the current implementation specification. V7 subsequently
+> established the live interface contract (12–24px inclusive, 15px default, root
+> `rem` scaling, independent Interface/Code/Terminal/Reading ownership). For
+> current behavior, use `docs/decisions.md`, the V7 implementation in
+> `web/src/features/appearance/typography.ts`, `web/index.html`, and current tests.
+> This document is retained as historical evidence; do not apply its old findings
+> as current defects without re-verification.
+
 **Date:** 2026-11-05
 **Status:** Read-only investigation and evidence gathering. No code modified.
 **Baseline:** branch `ci/tauri-e2e-verify`, HEAD `dd82ed8` ("feat(appearance): independent typography per surface with factor-based app scale").

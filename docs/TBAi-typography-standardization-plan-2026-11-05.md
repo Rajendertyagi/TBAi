@@ -1,13 +1,15 @@
 # TBAi — Application-Wide Typography Standardization Plan
 
 > [!NOTE]
-> **SUPERSEDED DRAFT:** This in-tree working document has been superseded by the
-> authoritative Revision 5 specification, approved 2026-11-06. Revision 5 is an
-> external specification and is **not committed to this repository** — there is no
-> in-repo Revision 5 file to read. The implementation and verification records are
-> codified in `docs/decisions.md` ("Typography Standardization (Revision 5,
-> 2026-11-06)") and in the repository's tests. Do not edit this draft as an active
-> specification, and do not treat any path named here as an in-repo plan.
+> **SUPERSEDED DRAFT:** This in-tree working document was superseded by the
+> Revision 5 specification, approved 2026-11-06, and later V7 reconciliation.
+> Revision 5 is an external specification and is **not committed to this
+> repository** — there is no in-repo Revision 5 file to read. The implementation
+> and verification record is in `docs/decisions.md` ("Typography Standardization
+> (Revision 5, 2026-11-06)") and the current source/tests. That decision record
+> documents the later V7 contract where it supersedes Revision 5 details. Do not
+> edit this draft as an active specification, and do not treat any path named
+> here as an in-repo plan.
 
 **Status:** Superseded by Revision 5
 **Source baseline audited:** `ci/tauri-e2e-verify` at `dd82ed8beb0080dfd5588c499afd2ac1009d9627`  

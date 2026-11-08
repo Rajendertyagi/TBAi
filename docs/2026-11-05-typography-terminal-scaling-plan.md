@@ -1,5 +1,15 @@
 # TBAi — Typography, Terminal & Application Scaling: Implementation Record (P0, implemented)
 
+> [!NOTE]
+> **Historical implementation record:** This document records the P0/Revision 2
+> design and implementation against the 2026-11-05 baselines. Its factor-based
+> application-scale and typography details predate the V7 refactor and are not
+> the current contract. V7 uses an interface size of 12–24px (15px default) with
+> root `rem` scaling and independent Interface, Code, Terminal, and Reading
+> settings. See `docs/decisions.md` and the current implementation/tests. The
+> original findings and steps below are preserved for history, not as active
+> implementation instructions.
+
 **Date:** 2026-11-05
 **Status:** Implemented in `dd82ed8` (`feat(appearance): independent typography per surface with factor-based app scale`), on branch `ci/tauri-e2e-verify`. This document is the approved Revision 2 plan and the record of what was built; §14 lists the post-review corrections. The packaged WebView2 zoom observation runs in the `tauri` CI job, not locally (no MSVC linker on the development box).
 **Revision 2 (2026-11-05, maintainer review):** corrected CSS font ownership (`--font-mono` stays the fixed generic stack; code/terminal get their own variables), inventoried and classified all 52 arbitrary pixel font-size declarations, `appScale` is now an exact factor (0.75–1.5) with lossless legacy migration, packaged zoom-hotkey test reuses the existing WebDriver infrastructure (no new script), and the Tailwind v4 `@theme` mechanism was verified empirically (plain `@theme`, not `@theme inline`; line-height tokens are unitless and need no override). See §13.

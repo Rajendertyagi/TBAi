@@ -8889,11 +8889,16 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
 
 ### Typography Standardization (Revision 5, 2026-11-06)
 
-**Authority.** Revision 5 is the authoritative specification for this work, approved
-2026-11-06. It is an external document and is **not committed to this repository**;
-there is no in-repo Revision 5 file. This section records the outcomes that were
-implemented and verified here — it is not a copy of the specification, and the
-specification's full disposition list is not reproduced.
+**History and current authority.** Revision 5 was the governing specification when
+approved on 2026-11-06. It is an external document and is **not committed to this
+repository**; there is no in-repo Revision 5 file. This section preserves its
+recorded outcomes and decisions. The live typography contract was subsequently
+reconciled by V7 (`feat/typography-v7`, `72c63f9`) and the consolidation fix
+(`a073961`). For current behavior, the V7 implementation and tests are authoritative:
+`web/src/features/appearance/typography.ts`, `web/index.html`,
+`web/src/features/appearance/TypographyPage.tsx`, and their unit, DOM, and E2E
+tests. Where this historical Revision 5 record differs from the V7 implementation,
+the V7 contract takes precedence.
 
 **On the D-numbering.** The in-repo audit
 (`docs/2026-11-05-typography-consistency-audit.md`) records confirmed defects as
@@ -8903,16 +8908,17 @@ the audit's D-1/D-2/D-3 are dispositioned by outcome 7 below, the audit's D-5 by
 outcome 6, and the audit's D-6 by outcome 2. The remaining Revision 5 dispositions
 (D-0, D-4, D-7, D-8 and D-9 through D-13) are recorded in the Revision 5
 specification itself, which is not in this repository; they are not restated here
-and must not be inferred from the audit's numbering. Where this section and the
-audit disagree, Revision 5 governs.
+and must not be inferred from the audit's numbering. Revision 5 governed those dispositions at approval time; it does not override the later V7 reconciliation documented below.
 
-Seven visible outcomes and the architectural dispositions approved under Revision 5:
+Seven visible outcomes and architectural dispositions recorded from Revision 5 (with later V7 reconciliations called out):
 
-- **1. Interface minimum 14px; migrate saved 12/13 to 14 (Option A):**
-  Interface font size floor is 14px (slider range 14–24px). Preset buttons:
-  `[14, 16, 18, 20]`. Stored values of 12 or 13 migrate cleanly to 14px at
-  hydration and pre-paint bootstrap. Option B (retaining 12/13 with artificial
-  flat plateaus) was rejected.
+- **1. Interface font-size range — V7 reconciliation:**
+  The current contract is 12–24px inclusive, with a 15px default. Every integer
+  in this range is a normal valid setting; the runtime normalizer and pre-paint
+  bootstrap preserve valid stored values. Revision 5's earlier proposal to set a
+  14px floor and migrate smaller stored values is superseded by V7
+  (`72c63f9`) and the consolidated reconciliation (`a073961`). The current
+  implementation does not migrate valid values within the 12–24px range.
 - **2. Page-title hierarchy (one meaningful `h1` per route):**
   Every settings route renders exactly one `h1` at consistent page-title sizing
   (`text-base font-semibold`). `PageTitleStrip` serves as context chrome with a
@@ -8934,10 +8940,14 @@ Seven visible outcomes and the architectural dispositions approved under Revisio
   remain compact metadata on the fixed monospace channel (`--font-mono`), which
   no setting writes.
 - **7. Scale-responsive compact metadata with a 9px floor:**
-  The literal-pixel inventory (25 migrated, 1 investigated control, 2 geometry
-  exceptions kept) scales with `--interface-font-size`. `text-3xs` is floored
-  at 9px via `max(9px, calc(var(--interface-font-size) * 0.625))`. The three
-  active `0.84375×` ad-hoc multipliers migrated to `text-sm` (+0.5px default increase).
+  The original literal-pixel inventory and its retained geometry exceptions are
+  recorded as Revision 5 history. In the current V7 CSS, compact utilities scale
+  with root `rem` while retaining the 9px floor:
+  `text-2xs = max(9px, 0.6875rem)` and
+  `text-3xs = max(9px, 0.625rem)`. The earlier
+  `--interface-font-size`-based formula is no longer used. The floor remains
+  intentional at small interface sizes, where it can compress the visual
+  difference between compact tiers.
 - **Control geometry & weight pins:**
   Investigated `ProviderDialog` context-window input uses `h-auto min-h-5
   leading-none w-20 px-1 py-0.5 text-3xs md:text-3xs` (measured at 10px / 20px

@@ -28,7 +28,7 @@ import { mono } from "@web/components/assistant-ui/elements/surfaces";
  * contracts), while the runtime applicator is exercised against a real
  * document. The two together prove:
  *
- * - `applyTypographyToDom` writes the v2 variables and NEVER `--font-mono`;
+ * - `applyTypographyToDom` writes the v3 variables and NEVER `--font-mono`;
  * - the generic monospace rule still maps `.font-mono` to `var(--font-mono)`;
  * - code surfaces and the terminal block carry their own variables;
  * - the OpenCode JSON preview's nested `<code>` is covered by the same rule
@@ -161,7 +161,7 @@ describe("applyTypographyToDom — variable ownership", () => {
     root.style.cssText = "";
   });
 
-  it("writes the v2 variables and never --font-mono", () => {
+  it("writes the v3 variables and never --font-mono", () => {
     const written: string[] = [];
     const style = rootStyle();
     const original = style.setProperty.bind(style);

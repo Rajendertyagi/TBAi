@@ -6,7 +6,7 @@
  * - Resilient total reads falling back safely to defaults
  * - Single framework-free DOM applicator writing root CSS custom properties and root rem font-size
  *
- * v3 (2026-11-06): Interface Size controls root rem scaling (14–24px).
+ * v3 (2026-11-06): Interface Size controls root rem scaling (12–24px).
  * Independent ownership per rendering context — Interface, Code, Terminal, and Reading.
  * `--font-mono` is the fixed generic monospace stack and is NEVER written by a setting;
  * code surfaces use `--code-font-family`, terminal output uses `--terminal-font-family`.
@@ -324,12 +324,9 @@ function isValidMonoFontId(value: unknown): value is string {
 }
 
 /**
- * Migrates a v1 record (either historical shape) to v2.
- *
- * `baseSize` (12–24px) maps to `appScale` as `baseSize / 16`. Every legacy
- * value is a sixteenth and exactly representable in binary floating point, so
- * the conversion is lossless: 13 → 0.8125 (81.25%), 14 → 0.875 (87.5%),
- * 15 → 0.9375 (93.75%), 18 → 1.125 (112.5%).
+ * Migrates either historical v1 record shape directly into the current v3 config.
+ * The legacy `baseSize` is preserved as `interfaceFontSize` when it is within
+ * the supported 12–24px range; invalid values fall back to the 15px default.
  */
 function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
   const legacyBase = isValidRange(parsed.baseSize, 12, 24)

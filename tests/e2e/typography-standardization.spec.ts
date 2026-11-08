@@ -14,7 +14,7 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
  * - the badge's content-driven minimum at the maximum interface size;
  * - a real structured tool payload following the Code channel (not Interface);
  * - Lato registering every advertised weight for both probe texts;
- * - the 12/13 interface size preserved (V7 12–24px contract) reaching first paint;
+ * - the 12px minimum interface size reaching first paint;
  * - Mermaid renderer font reactivity and rem-based scaling;
  * - Sonner toast font inheritance without blanket !important;
  * - Dialog viewport constraints at 600px, 700px, and 900px.
@@ -162,8 +162,8 @@ test.describe("compact tiers and the 9px floor", () => {
   });
 });
 
-test.describe("interface font-size boundary (V7: 12–24px, 12/13 preserved)", () => {
-  test("a stored 12 paints at 12px and the setting reads 12", async ({ page }) => {
+test.describe("interface font-size range (12–24px)", () => {
+  test("the 12px minimum paints at 12px and remains selected", async ({ page }) => {
     await page.goto("/#/typography");
     await applyTypography(page, { interfaceFontSize: 12 });
     await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
@@ -857,4 +857,42 @@ test.describe("Dialog viewport constraints", () => {
       await expect(dialogContent).not.toBeVisible();
     });
   }
+
+
+test.describe("Typography settings previews", () => {
+  test("Interface and Reading previews follow independent typography settings", async ({ page }) => {
+    await page.goto("/#/typography");
+    await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible();
+
+    const interfacePreview = page.locator('[data-slot="interface-typography-preview"]');
+    const readingPreview = page.locator('[data-slot="reading-typography-preview"]');
+    await expect(interfacePreview).toBeVisible();
+    await expect(readingPreview).toBeVisible();
+
+    const interfaceLineHeightBefore = await interfacePreview.evaluate(
+      (element) => getComputedStyle(element).lineHeight,
+    );
+    const readingLineHeightBefore = await readingPreview.evaluate(
+      (element) => getComputedStyle(element).lineHeight,
+    );
+
+    await page.getByRole("button", { name: "Relaxed (1.65)" }).click();
+
+    await expect
+      .poll(() => interfacePreview.evaluate((element) => getComputedStyle(element).lineHeight))
+      .toBe(interfaceLineHeightBefore);
+    await expect
+      .poll(() => readingPreview.evaluate((element) => getComputedStyle(element).lineHeight))
+      .not.toBe(readingLineHeightBefore);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (JSON.parse(localStorage.getItem("tbai-typography") || "{}") as {
+              readingLineHeight?: number;
+            }).readingLineHeight,
+        ),
+      )
+      .toBe(1.65);
+  });
 });

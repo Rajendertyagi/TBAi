@@ -293,7 +293,7 @@
 }
 
 /* 10px @16px, but never below 9px: max(9px, 0.625rem) enforces a 9px legibility
-   floor at small root sizes (e.g. 14px root = 9px floor), while scaling up
+   floor at small root sizes (e.g. 12px root = 9px floor), while scaling up
    proportionally at larger sizes (e.g. 20px root = 12.5px, 24px root = 15px). */
 @utility text-3xs {
   font-size: max(9px, 0.625rem);

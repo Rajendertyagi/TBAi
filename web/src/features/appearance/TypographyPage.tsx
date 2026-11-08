@@ -163,8 +163,6 @@ export function TypographyPage() {
   const handleResetAll = async () => {
     const next = resetTypography();
     setTypography(next);
-    writeTypography(next);
-    applyTypographyToDom(next);
     if (!desktopZoom) {
       toast.success(
         "Typography restored to default. Window zoom is available only in the desktop application.",
@@ -233,8 +231,6 @@ export function TypographyPage() {
           onReset={() => {
             const next = resetInterfaceTypography(typography);
             setTypography(next);
-            writeTypography(next);
-            applyTypographyToDom(next);
           }}
         >
           <SettingRow
@@ -316,11 +312,11 @@ export function TypographyPage() {
               Interface Preview
             </div>
             <div
+              data-slot="interface-typography-preview"
               style={{
                 fontFamily: currentUiFont?.stack,
                 fontWeight: effectiveUiWeight,
                 fontSize: `${typography.interfaceFontSize}px`,
-                lineHeight: typography.readingLineHeight,
               }}
               className="text-foreground"
             >
@@ -336,8 +332,6 @@ export function TypographyPage() {
           onReset={() => {
             const next = resetCodeTypography(typography);
             setTypography(next);
-            writeTypography(next);
-            applyTypographyToDom(next);
           }}
         >
           <SettingRow
@@ -440,8 +434,6 @@ export function TypographyPage() {
           onReset={() => {
             const next = resetTerminalTypography(typography);
             setTypography(next);
-            writeTypography(next);
-            applyTypographyToDom(next);
           }}
         >
           <SettingRow
@@ -555,8 +547,6 @@ export function TypographyPage() {
           onReset={() => {
             const next = resetReadingTypography(typography);
             setTypography(next);
-            writeTypography(next);
-            applyTypographyToDom(next);
             if (desktopZoom) {
               void requestWindowZoom(DEFAULT_WINDOW_ZOOM);
             }
@@ -670,6 +660,19 @@ export function TypographyPage() {
               })}
             </div>
           </SettingRow>
+
+          <div className="rounded-xl bg-muted/20 p-4 border border-border/30">
+            <div className="text-[10.5px] uppercase font-mono tracking-wider text-muted-foreground mb-2">
+              Reading Preview
+            </div>
+            <p
+              data-slot="reading-typography-preview"
+              className="aui-md-p text-sm text-foreground"
+            >
+              This paragraph demonstrates the selected reading line spacing used in chat
+              transcripts, markdown content, and assistant reasoning.
+            </p>
+          </div>
         </Card>
       </div>
     </div>
