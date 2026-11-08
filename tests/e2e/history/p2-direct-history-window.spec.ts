@@ -39,6 +39,10 @@ async function seedConversation(request: APIRequestContext): Promise<string> {
     data: { title: `p2 window ${Date.now()}`, workspaceMode: "simple", engine: "direct" },
   });
   const { id } = (await created.json()) as { id: string };
+  // Message ids are globally unique (not just per conversation). Namespace each
+  // seed run so fixed/global ids cannot collide across projects or shared DBs,
+  // following the transcriptAnchoring helper pattern.
+  const prefix = `seed-${Math.random().toString(36).slice(2, 10)}`;
 
   try {
     // This fixture is a single parent-linked chain. The storage layer allocates
@@ -52,8 +56,8 @@ async function seedConversation(request: APIRequestContext): Promise<string> {
       const response = await request.post(`/api/conversations/${id}/messages`, {
         data: {
           message: storedMessage(
-            `seed-${index}`,
-            index === 0 ? null : `seed-${index - 1}`,
+            `${prefix}-${index}`,
+            index === 0 ? null : `${prefix}-${index - 1}`,
             `seeded-body-${index}`,
             role,
           ),

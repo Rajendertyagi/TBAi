@@ -20,14 +20,15 @@ import { expect, test, type Page } from "@playwright/test";
 const BASE = "/";
 
 /** Create a throwaway folder and return it. Folder rows upsert by *path*,
- *  so a unique path per run keeps each spec hermetic. Scratch dirs live
- *  under D:\PM (per maintainer), created on disk first so folder
- *  registration sees a real path. */
+ *  so a unique path per run keeps each spec hermetic. The directory is created
+ *  on disk before registration because the folder API requires a real path. */
 async function createFolder(page: Page): Promise<{ id: string; name: string; dir: string }> {
   const suffix = Math.random().toString(36).slice(2, 10);
   const name = `ua-a-${suffix}`;
-  const dir = `D:/PM/${name}`;
   const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = path.join(os.tmpdir(), "tbai-e2e-phase-ua-a", name);
   fs.mkdirSync(dir, { recursive: true });
   const res = await page.request.post("/api/folders", {
     data: { path: dir, name },
@@ -40,8 +41,7 @@ async function createFolder(page: Page): Promise<{ id: string; name: string; dir
 async function deleteFolder(page: Page, folder: { id: string; dir: string }): Promise<void> {
   await page.request.delete(`/api/folders/${folder.id}`).catch(() => {});
   // Removing the row is NOT enough: createFolder made this directory on disk, so
-  // without this every run left a scratch dir behind forever. 25 had piled up
-  // under D:\PM, and a spec that cannot clean up after itself is not hermetic.
+  // without this every run left a scratch dir behind. Clean it up reliably.
   const fs = await import("node:fs");
   fs.rmSync(folder.dir, { recursive: true, force: true });
 }

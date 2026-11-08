@@ -691,10 +691,11 @@ describe("MCP lifecycle (Phase 4)", () => {
       expect(didStart, "HTTP initialize request should be pending before disconnect").toBe(true);
       expect(statusOf(created.id)).toBe("connecting");
 
-      // Calling disconnectAll synchronously invalidates the in-flight attempt
-      // before any transport-close await. Release the request immediately after
-      // starting shutdown, so either a late rejection or late resolution is
-      // exercised without depending on scheduler timing.
+      // disconnectAll invalidates the in-flight connect before awaiting transport
+      // close. Releasing the withheld initialize response immediately after
+      // shutdown starts lets that pending connect settle late (after invalidation)
+      // as either a late rejection or late resolution; the test asserts neither
+      // path resurrects the connection or schedules a reconnect.
       const disconnecting = mcpManager.disconnectAll();
       releaseResponse();
       await disconnecting;
