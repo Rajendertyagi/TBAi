@@ -231,7 +231,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
     });
   });
 
-  it("migrates v2 records normalizing interfaceFontSize * appScale clamped to 14-24", () => {
+  it("migrates v2 records normalizing interfaceFontSize * appScale clamped to 12-24", () => {
     withStorage(undefined, (storage) => {
       const v2Record = {
         version: 2,
@@ -285,7 +285,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
         .interfaceFontSize,
     ).toBe(18);
 
-    // Clamping to 12â€“24px
+    // Clamping to 12GÇô24px
     // 14 * 0.75 = 10.5 -> 11 -> clamped to 12
     expect(
       readStoredTypography({ version: 2, interfaceFontSize: 14, appScale: 0.75 }).interfaceFontSize,

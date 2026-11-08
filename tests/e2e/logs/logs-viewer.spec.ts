@@ -29,7 +29,10 @@ test("logs viewer: settings, live entries, filtering, export, files", async ({ p
     await expect(dialog.getByText("Default Capture Level")).toBeVisible();
     await expect(dialog.getByText("Per-Scope Overrides")).toBeVisible();
     await expect(dialog.getByRole("switch", { name: "Toggle file sink" })).toBeVisible();
-    await dialog.getByRole("button", { name: "Close" }).click();
+    await dialog
+      .locator("div.border-t")
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
 
     // The list is virtualized: isolate our row via search so it renders.
     await search.fill(marker);
@@ -75,7 +78,10 @@ test("logs viewer: settings, live entries, filtering, export, files", async ({ p
     await expect(
       filesDialog.getByText(/Total Disk Files|No log files found on disk/i),
     ).toBeVisible();
-    await filesDialog.getByRole("button", { name: "Close" }).click();
+    await filesDialog
+      .locator("div.border-t")
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
   } finally {
     await request.put("/api/logs/settings", {
       data: { level: before.level, targets: before.targets ?? [] },

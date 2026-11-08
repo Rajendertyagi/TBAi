@@ -1146,13 +1146,13 @@ describe("G2 development origin: configuration and CDP payloads", () => {
     const configured = "http://localhost:3000";
     const first = {
       type: "page",
-      url: configured + "/",
+      url: `${configured}/`,
       title: "TBAi",
       webSocketDebuggerUrl: "ws://127.0.0.1:55000/devtools/page/first",
     };
     const replacement = {
       type: "page",
-      url: configured + "/chat/1",
+      url: `${configured}/chat/1`,
       title: "TBAi",
       webSocketDebuggerUrl: "ws://127.0.0.1:55000/devtools/page/second",
     };
@@ -1180,7 +1180,7 @@ describe("G2 development origin: configuration and CDP payloads", () => {
     const configured = "http://localhost:3000";
     const complete = parseDevPageSnapshot({
       origin: configured,
-      href: configured + "/chat",
+      href: `${configured}/chat`,
       title: "TBAi",
       readyState: "complete",
     });
@@ -1192,7 +1192,7 @@ describe("G2 development origin: configuration and CDP payloads", () => {
     for (const readyState of ["loading", "interactive", null, "unloaded"]) {
       const snapshot = parseDevPageSnapshot({
         origin: configured,
-        href: configured + "/",
+        href: `${configured}/`,
         title: "TBAi",
         readyState,
       });

@@ -22,8 +22,8 @@ import { expect, test } from "@playwright/test";
 const V3_DEFAULTS = {
   version: 3,
   interfaceFontFamily: "inter",
-  interfaceFontSize: 16,
-  interfaceFontWeight: 400,
+  interfaceFontSize: 15,
+  interfaceFontWeight: 300,
   codeFontFamily: "jetbrains-mono",
   codeFontSize: 13,
   codeFontWeight: 400,
@@ -78,7 +78,8 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     const testSizes = [14, 16, 20, 24];
 
     for (const size of testSizes) {
-      await page.goto("/#/appearance");
+      // V7 typography controls live on /typography; use it for the Select overlay check.
+      await page.goto("/#/typography");
       await page.waitForLoadState("domcontentloaded");
 
       // Set interface size in localStorage and reload
@@ -134,19 +135,25 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
       // Verify Logs page scroll container functions cleanly
       await page.goto("/#/logs");
       await page.waitForLoadState("domcontentloaded");
-      const recentHeading = page.getByRole("heading", { name: "Recent logs" });
-      await expect(recentHeading).toBeVisible({ timeout: 15000 });
+      await expect(page.getByRole("heading", { name: "Runtime Logs", level: 1 })).toBeVisible({
+        timeout: 15000,
+      });
 
-      const logScrollContainer = page.locator(".h-\\[30rem\\]").first();
-      if (await logScrollContainer.isVisible()) {
-        const dimensions = await logScrollContainer.evaluate((el) => ({
-          clientHeight: el.clientHeight,
-          scrollHeight: el.scrollHeight,
-          scrollTop: el.scrollTop,
-        }));
-        expect(dimensions.clientHeight).toBeGreaterThan(0);
-        expect(dimensions.scrollHeight).toBeGreaterThanOrEqual(dimensions.clientHeight);
-      }
+      // LogsViewer uses a virtualized overflow-y-auto scroll container (not a fixed h-[30rem]).
+      const logScrollContainer = page
+        .locator("div.overflow-y-auto")
+        .filter({
+          has: page.locator('div[style*="position: relative"]'),
+        })
+        .first();
+      await expect(logScrollContainer).toBeVisible({ timeout: 15000 });
+      const dimensions = await logScrollContainer.evaluate((el) => ({
+        clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      }));
+      expect(dimensions.clientHeight).toBeGreaterThan(0);
+      expect(dimensions.scrollHeight).toBeGreaterThanOrEqual(dimensions.clientHeight);
     }
   });
 
@@ -215,7 +222,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("scoped resets modify only the target section", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     // Start with custom settings for all sections
@@ -244,9 +251,14 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
 
     const readSaved = () =>
       page.evaluate(() => JSON.parse(localStorage.getItem("tbai-typography") || "{}"));
+    const cardReset = (title: string) =>
+      page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: title, level: 2 }) })
+        .getByRole("button", { name: "Reset" });
 
-    // Click "Reset code"
-    const resetCodeBtn = page.getByRole("button", { name: "Reset code" });
+    // Reset code (V7: per-card "Reset" on Typography page)
+    const resetCodeBtn = cardReset("Code Block Typography");
     await expect(resetCodeBtn).toBeVisible();
     await resetCodeBtn.click();
 
@@ -264,20 +276,20 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     expect(saved.terminalWrap).toBe(false);
     expect(saved.readingLineHeight).toBe(1.65);
 
-    // Click "Reset interface"
-    const resetInterfaceBtn = page.getByRole("button", { name: "Reset interface" });
+    // Reset interface
+    const resetInterfaceBtn = cardReset("Interface Typography");
     await expect(resetInterfaceBtn).toBeVisible();
     await resetInterfaceBtn.click();
 
     saved = await readSaved();
     expect(saved.interfaceFontFamily).toBe("inter");
-    expect(saved.interfaceFontSize).toBe(16);
-    expect(saved.interfaceFontWeight).toBe(400);
+    expect(saved.interfaceFontSize).toBe(15);
+    expect(saved.interfaceFontWeight).toBe(300);
     // Preserved:
     expect(saved.terminalFontFamily).toBe("source-code-pro");
 
-    // Click "Reset terminal"
-    const resetTerminalBtn = page.getByRole("button", { name: "Reset terminal" });
+    // Reset terminal
+    const resetTerminalBtn = cardReset("Terminal Typography");
     await expect(resetTerminalBtn).toBeVisible();
     await resetTerminalBtn.click();
 
@@ -289,15 +301,15 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     // Preserved:
     expect(saved.readingLineHeight).toBe(1.65);
 
-    // Click "Reset reading"
-    const resetReadingBtn = page.getByRole("button", { name: "Reset reading" });
+    // Reset reading (Window zoom & Reading card)
+    const resetReadingBtn = cardReset("Window zoom & Reading");
     await expect(resetReadingBtn).toBeVisible();
     await resetReadingBtn.click();
 
     saved = await readSaved();
     expect(saved.readingLineHeight).toBe(1.5);
 
-    // Click "Reset all"
+    // Reset all
     const resetAllBtn = page.getByRole("button", { name: "Reset all" });
     await expect(resetAllBtn).toBeVisible();
     await resetAllBtn.click();
@@ -307,7 +319,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("interface changes do not modify code or terminal typography", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     const codePre = page.locator(".aui-shiki-base pre.shiki").first();
@@ -368,7 +380,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("code changes do not modify interface or terminal typography", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     const terminalBlock = page.locator('[data-slot="terminal-block"]').first();
@@ -419,7 +431,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("terminal changes do not modify interface or code typography", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     const codePre = page.locator(".aui-shiki-base pre.shiki").first();
@@ -472,7 +484,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("code word wrap is visual only — copied source is byte-identical", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     const codePre = page.locator(".aui-shiki-base pre.shiki").first();
@@ -496,7 +508,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
   });
 
   test("terminal wrapping does not affect code wrapping", async ({ page }) => {
-    await page.goto("/#/appearance");
+    await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     const codePre = page.locator(".aui-shiki-base pre.shiki").first();

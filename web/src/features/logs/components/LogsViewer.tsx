@@ -488,9 +488,7 @@ export function LogsViewer() {
       <div className="shrink-0 border-b border-border bg-card/40 backdrop-blur-xs p-3 space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm tracking-tight text-foreground">
-              Runtime Logs
-            </span>
+            <h1 className="font-semibold text-sm tracking-tight text-foreground">Runtime Logs</h1>
             <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono text-3xs">
               {filteredEntries.length} / {entries.length}
             </span>

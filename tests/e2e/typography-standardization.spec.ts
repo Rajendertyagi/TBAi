@@ -14,7 +14,7 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
  * - the badge's content-driven minimum at the maximum interface size;
  * - a real structured tool payload following the Code channel (not Interface);
  * - Lato registering every advertised weight for both probe texts;
- * - the 12/13 → 14 migration reaching first paint;
+ * - the 12/13 interface size preserved (V7 12–24px contract) reaching first paint;
  * - Mermaid renderer font reactivity and rem-based scaling;
  * - Sonner toast font inheritance without blanket !important;
  * - Dialog viewport constraints at 600px, 700px, and 900px.
@@ -28,8 +28,8 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
 const V3_DEFAULTS = {
   version: 3,
   interfaceFontFamily: "inter",
-  interfaceFontSize: 16,
-  interfaceFontWeight: 400,
+  interfaceFontSize: 15,
+  interfaceFontWeight: 300,
   codeFontFamily: "jetbrains-mono",
   codeFontSize: 13,
   codeFontWeight: 400,
@@ -44,6 +44,7 @@ const V3_DEFAULTS = {
 const SETTINGS_ROUTES = [
   { path: "/providers", heading: "Providers", strip: "Providers" },
   { path: "/appearance", heading: "Appearance", strip: "Appearance" },
+  { path: "/typography", heading: "Typography", strip: "Typography" },
   { path: "/workspace", heading: "Workspace", strip: "Workspace" },
   { path: "/opencode-config", heading: "OpenCode Configuration", strip: "OpenCode Config" },
   { path: "/folders", heading: "Folders", strip: "Folders" },
@@ -51,7 +52,7 @@ const SETTINGS_ROUTES = [
   { path: "/memory", heading: "Memory", strip: "Memory" },
   { path: "/quick-messages", heading: "Quick Messages", strip: "Quick Messages" },
   { path: "/mcp", heading: "MCP Servers", strip: "MCP" },
-  { path: "/logs", heading: "Logs", strip: "Logs" },
+  { path: "/logs", heading: "Runtime Logs", strip: "Logs" },
 ] as const;
 
 /** Seed the stored typography, then reload so the pre-paint bootstrap runs. */
@@ -65,26 +66,6 @@ async function applyTypography(
   }, config);
   await page.reload();
   await page.waitForLoadState("domcontentloaded");
-}
-
-/** Computed font-size (px) of the first element containing `needle`. */
-async function fontSizeOf(page: Page, needle: string): Promise<number | null> {
-  const locator = page.locator(`text=${needle}`).first();
-  await expect(locator).toBeVisible({ timeout: 10_000 });
-  return locator.evaluate((el) => {
-    let curr: HTMLElement = el as HTMLElement;
-    while (curr.firstElementChild) {
-      const childWithText = Array.from(curr.children).find((c) =>
-        (c.textContent ?? "").includes(needle),
-      ) as HTMLElement | undefined;
-      if (childWithText) {
-        curr = childWithText;
-      } else {
-        break;
-      }
-    }
-    return Number.parseFloat(getComputedStyle(curr).fontSize);
-  });
 }
 
 test.describe("page-title convention", () => {
@@ -132,22 +113,38 @@ test.describe("compact tiers and the 9px floor", () => {
 
   for (const tier of cases) {
     test(`renders xs/2xs/3xs at ${tier.size}px`, async ({ page }) => {
-      await page.goto("/#/appearance");
+      await page.goto("/#/typography");
       await applyTypography(page, { interfaceFontSize: tier.size });
+      await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
+        timeout: 15_000,
+      });
 
-      const xs = await fontSizeOf(page, "A provider-agnostic, local-first");
-      const twoXs = await fontSizeOf(page, "Live Typography Preview");
-      const threeXs = await fontSizeOf(page, "UI: ");
+      // Typography controls moved to /typography in V7; measure tier classes in the
+      // real browser context (intent preserved: xs/2xs/3xs scale with interface size).
+      const sizes = await page.evaluate(() => {
+        const measure = (cls: string) => {
+          const el = document.createElement("span");
+          el.className = cls;
+          el.textContent = "x";
+          el.style.position = "absolute";
+          el.style.visibility = "hidden";
+          document.body.appendChild(el);
+          const px = Number.parseFloat(getComputedStyle(el).fontSize);
+          el.remove();
+          return px;
+        };
+        return { xs: measure("text-xs"), twoXs: measure("text-2xs"), threeXs: measure("text-3xs") };
+      });
 
-      expect(xs).toBeCloseTo(tier.xs, 2);
-      expect(twoXs).toBeCloseTo(tier.twoXs, 2);
-      expect(threeXs).toBeCloseTo(tier.threeXs, 2);
+      expect(sizes.xs).toBeCloseTo(tier.xs, 2);
+      expect(sizes.twoXs).toBeCloseTo(tier.twoXs, 2);
+      expect(sizes.threeXs).toBeCloseTo(tier.threeXs, 2);
     });
   }
 
   test("no rendered text falls below 9px at the minimum interface size", async ({ page }) => {
-    await page.goto("/#/appearance");
-    await applyTypography(page, { interfaceFontSize: 14 });
+    await page.goto("/#/typography");
+    await applyTypography(page, { interfaceFontSize: 12 });
 
     const tooSmall = await page.evaluate(() => {
       const offenders: string[] = [];
@@ -165,18 +162,39 @@ test.describe("compact tiers and the 9px floor", () => {
   });
 });
 
-test.describe("migration to the 14px minimum", () => {
-  test("a stored 12 paints at 14px and the setting reads 14", async ({ page }) => {
-    await page.goto("/#/appearance");
+test.describe("interface font-size boundary (V7: 12–24px, 12/13 preserved)", () => {
+  test("a stored 12 paints at 12px and the setting reads 12", async ({ page }) => {
+    await page.goto("/#/typography");
     await applyTypography(page, { interfaceFontSize: 12 });
+    await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
+      timeout: 15_000,
+    });
 
-    const rootComputed = await page.evaluate(() =>
-      Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-    );
-    expect(rootComputed).toBe(14);
-    await expect(page.getByRole("spinbutton", { name: "Interface font size (px)" })).toHaveValue(
-      "14",
-    );
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(12);
+    // V7 Typography page uses a Select (not a spinbutton) for interface font size.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                JSON.parse(localStorage.getItem("tbai-typography") || "{}") as {
+                  interfaceFontSize?: number;
+                }
+              ).interfaceFontSize,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(12);
+    await expect(page.locator("button").filter({ hasText: /^12px/ }).first()).toBeVisible();
   });
 });
 
@@ -584,15 +602,18 @@ test.describe("Mermaid renderer font and scaling integration", () => {
       expect(svgWidth16).toMatch(/rem$/);
       const computedPixelWidth16 = await svg.evaluate((el) => el.getBoundingClientRect().width);
 
-      // 3. Live change: Switch Interface Font to Outfit via appearance settings without page reload
-      await page.goto("/#/appearance");
-      await expect(page.getByRole("heading", { name: "Appearance", level: 1 })).toBeVisible({
+      // 3. Live change: Switch Interface Font to Outfit via Typography settings without page reload
+      // (V7 moved typography controls from /appearance to /typography.)
+      await page.goto("/#/typography");
+      await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
         timeout: 15_000,
       });
-      // Click Interface font select and select Outfit
-      const fontSelect = page.locator('button:has-text("Roboto")').first();
+      // Interface Typography card: family, weight, size selects (in order).
+      const interfaceCard = page.locator("section").filter({ hasText: "Interface Typography" });
+      const fontSelect = interfaceCard.getByRole("combobox").first();
+      await expect(fontSelect).toContainText("Roboto");
       await fontSelect.click();
-      await page.locator('[role="option"]:has-text("Outfit")').click();
+      await page.getByRole("option", { name: "Outfit" }).click();
 
       // Return to chat transcript WITHOUT reloading
       await page.goto(`/#/chat/${conversationId}`);
@@ -613,10 +634,15 @@ test.describe("Mermaid renderer font and scaling integration", () => {
         )
         .toContain("outfit");
 
-      // 4. Interface Size scaling: Change size to 24px via Appearance without changing font
-      await page.goto("/#/appearance");
-      const sizeSlider = page.getByRole("slider", { name: "Interface font size" });
-      await sizeSlider.fill("24");
+      // 4. Interface Size scaling: Change size to 24px via Typography without changing font
+      await page.goto("/#/typography");
+      await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
+        timeout: 15_000,
+      });
+      const interfaceCard2 = page.locator("section").filter({ hasText: "Interface Typography" });
+      const sizeSelect = interfaceCard2.getByRole("combobox").nth(2);
+      await sizeSelect.click();
+      await page.getByRole("option", { name: /^24px/ }).click();
       // Return to chat transcript without reload
       await page.goto(`/#/chat/${conversationId}`);
       await expect(diagram).toBeVisible({ timeout: 15_000 });
