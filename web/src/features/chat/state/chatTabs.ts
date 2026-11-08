@@ -1,28 +1,22 @@
 import { create } from "zustand";
 import { logger } from "../../../lib/logger";
+import { ROUTES } from "../../../config/routes";
 
 export const NEW_DRAFT_TAB_ID = "new";
 const STORAGE_KEY = "tbai:openTabs";
 const DEFAULT_GROUP_ID = "main";
 
 /**
- * Unified tab model: chat threads AND settings pages live in one strip.
+ * Unified tab model: chat threads and Code conversations live in one strip.
  * - Chat tab: `{ kind: "chat", ref: threadId | "new" }`, key `chat:<ref>`.
  * - Agent tab (OpenCode Code mode): `{ kind: "agent", ref: conversationId }`, key `agent:<ref>`.
- * - Page tab: `{ kind: "page", ref: route }`, key `page:<route>`.
- *   Page tabs are VESTIGIAL (documented, kept): `loadPersisted` drops any
- *   `kind: "page"` entry on every reload, so no user can create or restore one.
- *   `healTab`, `tabForKey`, `urlForTab`, and `openPage` retain the branch for
- *   backwards compatibility with old persisted localStorage shapes that may
- *   still carry a `page:` key; they are inert in practice because
- *   `loadPersisted` filters them out. Do NOT add new page-tab callers.
  * Message/streaming state is NOT here (assistant-ui runtime owns it);
  * this is open-tab layout only. `groupId` is split-screen future-proofing.
  */
 export interface Tab {
   key: string;
-  kind: "chat" | "page" | "agent";
-  /** threadId (or "new" draft) for chat tabs; conversationId for agent tabs; route for page tabs. */
+  kind: "chat" | "agent";
+  /** threadId (or "new" draft) for chat tabs; conversationId for agent tabs. */
   ref: string;
 }
 
@@ -31,7 +25,6 @@ export interface ChatTabsState {
   activeKey: string | undefined;
   groupId: string;
   openChat: (threadId: string) => void;
-  openPage: (route: string) => void; // Vestigial — no production callers; see the Tab doc comment.
   openAgent: (conversationId: string) => void;
   close: (key: string) => void;
   /**
@@ -73,10 +66,6 @@ export function healTab(value: unknown): Tab | null {
   const key: string = t.key;
   // Rebuild from the key prefix — the key is the source of truth, never the
   // stored kind/ref (those are what got poisoned).
-  if (key.startsWith("page:")) {
-    const ref = key.slice(5);
-    return ref.length > 0 ? { key, kind: "page", ref } : null;
-  }
   if (key.startsWith("agent:")) {
     const ref = key.slice(6);
     return ref.length > 0 && !ref.startsWith(":") ? { key, kind: "agent", ref } : null;
@@ -88,21 +77,27 @@ export function healTab(value: unknown): Tab | null {
   return null;
 }
 
-function loadPersisted(): PersistedTabs {
+export const chatKey = (threadId: string): string => `chat:${threadId}`;
+export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
+
+/**
+ * Fresh draft tab. The workbench never sits at zero tabs (codeg parity), so
+ * closers fall back to exactly one of these instead of inventing ad-hoc
+ * replacements in multiple places.
+ */
+export function freshDraftTab(): Tab {
+  return { key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID };
+}
+
+export function loadPersisted(): PersistedTabs {
   const loaded = loadRaw();
-  // Tabs are conversations only (codeg parity): drop any page tabs persisted
-  // by the interim unified-tab build; chat tabs carry over untouched.
-  // Tabs are conversations + agent (Code mode) only; drop any page tabs
-  // persisted by the interim unified-tab build. Chat and agent tabs carry over.
-  const tabs = loaded.tabs.filter((t) => t.kind !== "page");
-  const activeKey =
-    tabs.some((t) => t.key === loaded.activeKey)
-      ? loaded.activeKey
-      : tabs[0]?.key;
+  // Workbench never sits at zero tabs (codeg parity)
+  const tabs = loaded.tabs.length > 0 ? loaded.tabs : [freshDraftTab()];
+  const activeKey = tabs.some((t) => t.key === loaded.activeKey) ? loaded.activeKey : tabs[0]?.key;
   return { tabs, activeKey };
 }
 
-function loadRaw(): PersistedTabs {
+export function loadRaw(): PersistedTabs {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { tabs: [], activeKey: undefined };
@@ -113,23 +108,16 @@ function loadRaw(): PersistedTabs {
       parsed !== null &&
       Array.isArray((parsed as { openIds?: unknown }).openIds)
     ) {
-      const openIds = (parsed as { openIds: unknown[] }).openIds.filter(
-        (id): id is string => typeof id === "string",
-      );
-      const tabs = openIds.map(
-        (id): Tab => ({ key: `chat:${id}`, kind: "chat", ref: id }),
-      );
+      const openIds = (parsed as { openIds: unknown[] }).openIds
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        .filter((id, idx, arr) => arr.indexOf(id) === idx);
+      const tabs = openIds.map((id): Tab => ({ key: chatKey(id), kind: "chat", ref: id }));
       const legacy = parsed as { activeId?: unknown };
       const activeKey =
-        typeof legacy.activeId === "string"
-          ? `chat:${legacy.activeId}`
+        typeof legacy.activeId === "string" && tabs.some((t) => t.ref === legacy.activeId)
+          ? chatKey(legacy.activeId)
           : tabs[0]?.key;
-      return {
-        tabs: activeKey && !tabs.some((t) => t.key === activeKey)
-          ? [...tabs, { key: activeKey, kind: "chat", ref: activeKey.slice(5) }]
-          : tabs,
-        activeKey,
-      };
+      return { tabs, activeKey };
     }
     const unifiedShape =
       typeof parsed === "object" && parsed !== null
@@ -138,11 +126,11 @@ function loadRaw(): PersistedTabs {
     if (Array.isArray(unifiedShape)) {
       const tabs = unifiedShape
         .map(healTab)
-        .filter((t): t is Tab => t !== null);
+        .filter((t): t is Tab => t !== null)
+        .filter((t, idx, arr) => arr.findIndex((x) => x.key === t.key) === idx);
       const legacy = parsed as { activeKey?: unknown };
       const activeKey =
-        typeof legacy.activeKey === "string" &&
-        tabs.some((t) => t.key === legacy.activeKey)
+        typeof legacy.activeKey === "string" && tabs.some((t) => t.key === legacy.activeKey)
           ? legacy.activeKey
           : tabs[0]?.key;
       return { tabs, activeKey };
@@ -167,17 +155,12 @@ function persist(tabs: Tab[], activeKey: string | undefined): void {
 const initial = loadPersisted();
 
 function withActive(tabs: Tab[], activeKey: string): { tabs: Tab[]; activeKey: string } {
-  const next = tabs.some((t) => t.key === activeKey)
-    ? tabs
-    : [...tabs, tabForKey(activeKey)];
+  const next = tabs.some((t) => t.key === activeKey) ? tabs : [...tabs, tabForKey(activeKey)];
   persist(next, activeKey);
   return { tabs: next, activeKey };
 }
 
 function tabForKey(key: string): Tab {
-  if (key.startsWith("page:")) {
-    return { key, kind: "page", ref: key.slice(5) };
-  }
   if (key.startsWith("agent:")) {
     return { key, kind: "agent", ref: key.slice(6) };
   }
@@ -190,23 +173,10 @@ function tabForKey(key: string): Tab {
   return { key: chatKey(key), kind: "chat", ref: key };
 }
 
-export const chatKey = (threadId: string): string => `chat:${threadId}`;
-export const pageKey = (route: string): string => `page:${route}`;
-export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
-
-/**
- * Fresh draft tab. The workbench never sits at zero tabs (codeg parity), so
- * closers fall back to exactly one of these instead of inventing ad-hoc
- * replacements in multiple places.
- */
-function freshDraftTab(): Tab {
-  return { key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID };
-}
-
-/** URL a tab points at: chat tabs → thread route, agent tabs → code route, page tabs → their route. */
+/** URL a tab points at: chat tabs → thread route, agent tabs → code route. */
 export function urlForTab(tab: Tab): string {
-  if (tab.kind === "agent") return `/code/${tab.ref}`;
-  return tab.kind === "chat" ? `/chat/${tab.ref}` : tab.ref;
+  if (tab.kind === "agent") return ROUTES.code(tab.ref);
+  return ROUTES.chat(tab.ref);
 }
 
 /**
@@ -217,7 +187,7 @@ export function urlForTab(tab: Tab): string {
  * engine column and are all Direct.
  */
 export function threadUrl(remoteId: string, engine?: string | null): string {
-  return engine === "opencode" ? `/code/${remoteId}` : `/chat/${remoteId}`;
+  return engine === "opencode" ? ROUTES.code(remoteId) : ROUTES.chat(remoteId);
 }
 
 /**
@@ -227,10 +197,7 @@ export function threadUrl(remoteId: string, engine?: string | null): string {
  * Returns null for non-conversation paths (draft hosts neither axis).
  */
 export function conversationIdFromPath(pathname: string): string | null {
-  if (pathname.startsWith("/chat/") || pathname.startsWith("/code/")) {
-    return pathname.slice(6) || null;
-  }
-  return null;
+  return ROUTES.parseConversationId(pathname);
 }
 
 /**
@@ -243,7 +210,10 @@ export function conversationIdFromPath(pathname: string): string | null {
  * never a conversation route, and query strings never carry identity.
  */
 export function routeStillReferencesRef(pathname: string, ref: string): boolean {
-  return pathname === `/chat/${ref}` || pathname === `/code/${ref}`;
+  if (ref === NEW_DRAFT_TAB_ID) {
+    return pathname === ROUTES.CHAT_NEW;
+  }
+  return ROUTES.parseConversationId(pathname) === ref;
 }
 
 /**
@@ -271,8 +241,7 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
     logger.info("chat", "tab.open", { kind: "agent", conversationId });
     set((state) => withActive(state.tabs, agentKey(conversationId)));
   },
-  openPage: (route) =>
-    set((state) => withActive(state.tabs, pageKey(route))),
+
   close: (key) =>
     set((state) => {
       const remaining = state.tabs.filter((t) => t.key !== key);
@@ -309,9 +278,9 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
           ? nextActiveAfterClose(state.tabs, state.activeKey)
           : undefined;
       const activeKey = activeGone
-        ? (candidate && tabs.some((t) => t.key === candidate)
-            ? candidate
-            : tabs[tabs.length - 1]?.key)
+        ? candidate && tabs.some((t) => t.key === candidate)
+          ? candidate
+          : tabs[tabs.length - 1]?.key
         : state.activeKey;
       logger.info("chat", "tab.close", {
         conversationId: ref,
@@ -353,12 +322,8 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
         const nextKey = agentKey(realId);
         const tabs = state.tabs
           .filter((t) => t.key !== draftKey)
-          .filter(
-            (t, index, arr) => arr.findIndex((x) => x.key === t.key) === index,
-          );
-        const next = tabs.some((t) => t.key === nextKey)
-          ? tabs
-          : [...tabs, tabForKey(nextKey)];
+          .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
+        const next = tabs.some((t) => t.key === nextKey) ? tabs : [...tabs, tabForKey(nextKey)];
         logger.info("chat", "conversation.draft_resolved", {
           conversationId: realId,
           engine: "opencode",
@@ -368,14 +333,9 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
       }
       const newKey = chatKey(realId);
       const tabs = state.tabs
-        .map((t) =>
-          t.key === draftKey ? { ...t, key: newKey, ref: realId } : t,
-        )
-        .filter(
-          (t, index, arr) => arr.findIndex((x) => x.key === t.key) === index,
-        );
-      const nextActiveKey =
-        state.activeKey === draftKey ? newKey : state.activeKey;
+        .map((t) => (t.key === draftKey ? { ...t, key: newKey, ref: realId } : t))
+        .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
+      const nextActiveKey = state.activeKey === draftKey ? newKey : state.activeKey;
       logger.info("chat", "conversation.draft_resolved", {
         conversationId: realId,
         engine: "direct",
@@ -410,10 +370,7 @@ if (typeof window !== "undefined") {
 }
 
 /** Key to activate after closing `closedKey` (right neighbor preferred). */
-export function nextActiveAfterClose(
-  tabs: Tab[],
-  closedKey: string,
-): string | undefined {
+export function nextActiveAfterClose(tabs: Tab[], closedKey: string): string | undefined {
   const remaining = tabs.filter((t) => t.key !== closedKey);
   if (remaining.length === 0) return undefined;
   const closedIndex = tabs.findIndex((t) => t.key === closedKey);

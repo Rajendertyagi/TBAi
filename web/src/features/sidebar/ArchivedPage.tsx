@@ -34,7 +34,7 @@ export function ArchivedPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-border px-4 py-3">
-        <h1 className="text-sm font-semibold">{title}</h1>
+        <h1 className="text-base font-semibold">{title}</h1>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {items.length === 0 ? (

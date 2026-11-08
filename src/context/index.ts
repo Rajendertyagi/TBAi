@@ -8,7 +8,13 @@
  * wide surface now would invite a second assembler later.
  */
 
-export { assembleContext, buildInstructionsLayer, buildToolLayer, logAssembly, logContextOverflow } from "./assemble";
+export {
+  assembleContext,
+  buildInstructionsLayer,
+  buildToolLayer,
+  logAssembly,
+  logContextOverflow,
+} from "./assemble";
 export type { AssembleContextResult } from "./assemble";
 
 export {
@@ -93,7 +99,12 @@ export type {
   SelectedMemory,
 } from "./memory";
 
-export { classifyDivergence, identifyCurrentTurn, countModelVisibleParts, reconcileWithStoredHistory } from "./divergence";
+export {
+  classifyDivergence,
+  identifyCurrentTurn,
+  countModelVisibleParts,
+  reconcileWithStoredHistory,
+} from "./divergence";
 
 // Tier 2 — the universal assembly ceiling. Exported so the route can render a
 // breach as a distinct failure and so tests can assert the constant directly.

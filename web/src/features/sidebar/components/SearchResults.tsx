@@ -52,9 +52,7 @@ export function SearchResults({
       onExpandedChange={setExpanded}
     >
       {showSkeleton &&
-        [0, 1, 2].map((i) => (
-          <div key={i} className="h-8 rounded-full bg-muted animate-pulse" />
-        ))}
+        [0, 1, 2].map((i) => <div key={i} className="h-8 rounded-full bg-muted animate-pulse" />)}
 
       {items.map((item) => (
         <SidebarThreadRow

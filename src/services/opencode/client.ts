@@ -1,5 +1,6 @@
 import { OpenCode } from "@opencode/client";
-import { getOpenCodeAuthHeaders, getOpenCodeDirectoryHeaders } from "./runtime";
+import type { OpenCodeTransport } from "./http";
+import { getOpenCodeDirectoryHeaders } from "./runtime";
 
 /**
  * The official OpenCode V2 client bound to one managed server base URL.
@@ -7,8 +8,6 @@ import { getOpenCodeAuthHeaders, getOpenCodeDirectoryHeaders } from "./runtime";
  * thrown value into TBAi's own error vocabulary through `./errors`.
  */
 export type OpenCodeClient = ReturnType<typeof OpenCode.make>;
-
-const transport: typeof globalThis.fetch = globalThis.fetch;
 
 /** One response the client received, kept only long enough to answer a question. */
 interface ObservedResponse {
@@ -26,42 +25,50 @@ const MAX_OBSERVED_RESPONSES = 8;
 const observedResponses = new WeakMap<OpenCodeClient, ObservedResponse[]>();
 
 /**
- * Wraps the real transport so every response is recorded before it is handed on.
+ * Wraps a transport so every response is recorded before it is handed on.
+ * Composition order is bound-first, then observe: the bounded transport runs,
+ * and only a response it returns is recorded. An origin mismatch or a refused
+ * redirect therefore propagates untouched instead of being swallowed here.
  *
- * The response object itself is passed through untouched and unread: the official
- * client still parses bodies exactly as it always would. Only the status is
- * observed, which is the one thing the client provably cannot report.
+ * The underlying fetch is resolved on every call, so the real implementation is
+ * used and a test can substitute one without reaching into module internals.
  */
 function createObservingTransport(
   record: ObservedResponse[],
-): typeof globalThis.fetch {
+  inner: OpenCodeTransport,
+): OpenCodeTransport {
   const observing = async (
-    input: Parameters<typeof transport>[0],
-    init?: Parameters<typeof transport>[1],
+    input: Parameters<OpenCodeTransport>[0],
+    init?: Parameters<OpenCodeTransport>[1],
   ): Promise<Response> => {
-    const response = await transport(input, init);
+    const response = await inner(input, init);
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     record.push({ url, status: response.status });
     if (record.length > MAX_OBSERVED_RESPONSES) record.shift();
     return response;
   };
   // `fetch` also carries `preconnect`; the wrapper must remain a drop-in.
-  return Object.assign(observing, { preconnect: transport.preconnect });
+  return Object.assign(observing, { preconnect: inner.preconnect });
 }
 
-/** Creates an authenticated, optionally directory-scoped native V2 client. */
+/**
+ * Creates an authenticated, optionally directory-scoped native V2 client.
+ *
+ * `transport` is REQUIRED and owns the credential: the client sends no
+ * `Authorization` of its own, so a caller can never pair the managed password
+ * with an adopted origin. There is deliberately no header-based legacy path —
+ * every caller resolves a service through `runtimeTarget` or `serviceAccess`
+ * and passes the transport that came with it.
+ */
 export function createOpenCodeClient(
   baseUrl: string,
-  options: { directory?: string | null } = {},
+  options: { directory?: string | null; transport: OpenCodeTransport },
 ): OpenCodeClient {
   const record: ObservedResponse[] = [];
   const client = OpenCode.make({
     baseUrl,
-    headers: {
-      ...getOpenCodeAuthHeaders(),
-      ...getOpenCodeDirectoryHeaders(options.directory),
-    },
-    fetch: createObservingTransport(record),
+    headers: getOpenCodeDirectoryHeaders(options.directory),
+    fetch: createObservingTransport(record, options.transport),
   });
   observedResponses.set(client, record);
   return client;

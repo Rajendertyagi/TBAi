@@ -38,7 +38,7 @@ import { createHash } from "node:crypto";
 import type { UIMessage } from "ai";
 import { logger } from "../../lib/logger";
 import { currentTurnStartIndex } from "../compaction/contract";
-import { evaluateMemorySafety, type MemorySafetyReason } from "./safety";
+import type { MemorySafetyReason } from "./safety";
 import { countExclusions, selectMemories } from "./select";
 import {
   memoryBudgetTokens,
@@ -114,7 +114,10 @@ export function renderMemoryBlock(selected: readonly SelectedMemory[]): string {
 }
 
 /** Deterministic id for the injected block, derived from what it contains. */
-function blockIdFor(conversationId: string | undefined, selected: readonly SelectedMemory[]): string {
+function blockIdFor(
+  conversationId: string | undefined,
+  selected: readonly SelectedMemory[],
+): string {
   const digest = createHash("sha256")
     .update(`${conversationId ?? ""}|${selected.map((memory) => memory.id).join(",")}`)
     .digest("hex")
@@ -125,7 +128,10 @@ function blockIdFor(conversationId: string | undefined, selected: readonly Selec
 /** The current turn's text, used only to populate the advisory provider query. */
 function currentUserText(messages: readonly UIMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: string; parts?: { type?: string; text?: unknown }[] };
+    const message = messages[index] as {
+      role?: string;
+      parts?: { type?: string; text?: unknown }[];
+    };
     if (message?.role !== "user") continue;
     return (message.parts ?? [])
       .filter((part) => part?.type === "text" && typeof part.text === "string")

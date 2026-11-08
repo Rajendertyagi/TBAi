@@ -1,6 +1,6 @@
 import { getWelcomeScopeSnapshot } from "./welcomeScope";
 import { getWelcomeEngineSnapshot } from "./welcomeEngine";
-import { useSettingsStore } from "../../../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "../../../lib/logger";
 import { apiFetch } from "../../../lib/platform";
 

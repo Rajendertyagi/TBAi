@@ -22,7 +22,11 @@ export const modelCapabilitiesSchema = z.object({
  * resolver outputs, not facts about a model, so persisting them would assert
  * something no source said.
  */
-export const contextWindowSourceSchema = z.enum(["provider_reported", "configured"]);
+export const contextWindowSourceSchema = z.enum([
+  "provider_reported",
+  "configured",
+  "model_catalog",
+]);
 
 export const modelOptionSchema = z.object({
   id: z.string().min(1).max(200),
@@ -64,7 +68,8 @@ export const chatRequestSchema = z
     tools: z.unknown().optional(),
     callSettings: z.unknown().optional(),
     config: z.unknown().optional(),
-  }).strict();
+  })
+  .strict();
 
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(120),
@@ -137,40 +142,62 @@ export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
 /** Trimmed too: a whitespace id is not a valid identifier. */
 export const memoryIdSchema = z.string().trim().min(1).max(200);
 
-// Conversation persistence (assistant-ui RemoteThreadListAdapter)
-export const conversationCreateSchema = z.object({
-  title: z.string().min(1).max(200).optional(),
-  providerId: z.string().optional().nullable(),
-  modelId: z.string().max(200).optional().nullable(),
-  reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
-  systemPrompt: z.string().optional(),
-  // Two-mode workspace model (codeg-aligned). Simple Chat = disposable per-
-  // conversation workspace; Project Chat = attached to a registered folder.
-  workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
-  workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
-  // OpenCode session id for Code mode (set by the backend, accepted on create/update).
-  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
-  // Engine selection + OpenCode agent/model chosen at creation (unified picker).
-  engine: z.enum(["direct", "opencode"]).optional(),
-  opencodeAgent: z.string().min(1).max(200).optional().nullable(),
-  opencodeModel: z.string().min(1).max(200).optional().nullable(),
-  opencodeVariant: z.string().min(1).max(100).optional().nullable(),
-  // Idempotency identity for draft materialization (Phase 4): the client
-  // generates one key per draft and replays it on retry, so a create that
-  // committed but whose response was lost resolves to the same conversation
-  // instead of minting a duplicate row. Opaque to the server otherwise.
-  clientRequestId: z.string().min(1).max(200).optional(),
-  // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
-  // malformed or absent value must not arm Auto.
-  opencodeAutoApprove: z.boolean().optional(),
-}).superRefine((value, ctx) => {
-  if (value.workspaceMode === "project" && !value.workspaceFolderId) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "workspaceFolderId is required for project chats",
-    });
-  }
+/**
+ * The id shape shared by every conversation-scoped request body. Declared once
+ * so a limit change cannot drift between the routes that accept these ids.
+ */
+const identifierSchema = z.string().min(1).max(200);
+
+/** OpenCode session id: an opaque server-side identity, same limits as a conversation id. */
+export const openCodeSessionIdSchema = identifierSchema;
+
+/**
+ * `POST /api/opencode/session/activity` body. The pair is checked against the
+ * conversation row before any OpenCode request, so a caller cannot probe a
+ * session it does not own.
+ */
+export const openCodeSessionActivitySchema = z.object({
+  conversationId: identifierSchema,
+  sessionId: openCodeSessionIdSchema,
 });
+export type OpenCodeSessionActivityRequest = z.infer<typeof openCodeSessionActivitySchema>;
+
+// Conversation persistence (assistant-ui RemoteThreadListAdapter)
+export const conversationCreateSchema = z
+  .object({
+    title: z.string().min(1).max(200).optional(),
+    providerId: z.string().optional().nullable(),
+    modelId: z.string().max(200).optional().nullable(),
+    reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
+    systemPrompt: z.string().optional(),
+    // Two-mode workspace model (codeg-aligned). Simple Chat = disposable per-
+    // conversation workspace; Project Chat = attached to a registered folder.
+    workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
+    workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
+    // OpenCode session id for Code mode (set by the backend, accepted on create/update).
+    opencodeSessionId: openCodeSessionIdSchema.optional().nullable(),
+    // Engine selection + OpenCode agent/model chosen at creation (unified picker).
+    engine: z.enum(["direct", "opencode"]).optional(),
+    opencodeAgent: z.string().min(1).max(200).optional().nullable(),
+    opencodeModel: z.string().min(1).max(200).optional().nullable(),
+    opencodeVariant: z.string().min(1).max(100).optional().nullable(),
+    // Idempotency identity for draft materialization (Phase 4): the client
+    // generates one key per draft and replays it on retry, so a create that
+    // committed but whose response was lost resolves to the same conversation
+    // instead of minting a duplicate row. Opaque to the server otherwise.
+    clientRequestId: z.string().min(1).max(200).optional(),
+    // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
+    // malformed or absent value must not arm Auto.
+    opencodeAutoApprove: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.workspaceMode === "project" && !value.workspaceFolderId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "workspaceFolderId is required for project chats",
+      });
+    }
+  });
 
 export const conversationUpdateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
@@ -186,7 +213,7 @@ export const conversationUpdateSchema = z.object({
   titleSource: z.enum(["auto", "user"]).optional(),
   workspaceMode: z.enum(["simple", "project"]).optional(),
   workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
-  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+  opencodeSessionId: openCodeSessionIdSchema.optional().nullable(),
   engine: z.enum(["direct", "opencode"]).optional(),
   opencodeAgent: z.string().min(1).max(200).optional().nullable(),
   opencodeModel: z.string().min(1).max(200).optional().nullable(),
@@ -284,6 +311,21 @@ export const streamStatusQuerySchema = z
 
 export const messageUpsertSchema = z.object({
   message: storedMessageSchema,
+});
+
+/**
+ * Query for a bounded history window (P2).
+ *
+ * `direction` selects the walk: `older` walks back from `anchorId` toward the
+ * root, `newer` walks down from the authoritative tip toward the anchor. A null
+ * `anchorId` means "start at the tip", which is what an initial load asks for.
+ * `limit` is a message count, not a page size — the server returns the window it
+ * can prove, plus the boundaries the client needs to decide the next move.
+ */
+export const messageWindowQuerySchema = z.object({
+  direction: z.enum(["older", "newer"]).default("older"),
+  anchorId: z.string().min(1).max(256).nullable().default(null),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
 });
 
 // Agentic tool request bodies (server-executed in the workspace sandbox)
@@ -459,6 +501,7 @@ export const mcpServerCreateSchema = z.object({
   authType: z.enum(["none", "bearer", "basic", "oauth"]).default("none"),
   authToken: z.string().max(5000).optional().nullable(),
   roots: z.array(z.string().max(2000)).max(50).optional().nullable(),
+  disabledTools: z.array(z.string().max(200)).max(500).optional().nullable(),
   enabled: z.boolean().optional(),
   autoConnect: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
@@ -473,6 +516,11 @@ export const mcpServerUpdateSchema = mcpServerCreateSchema.partial();
 
 // Test accepts the same connection shape as create (no id required).
 export const mcpServerTestSchema = mcpServerCreateSchema;
+
+// Enable/disable a server (boolean flag).
+export const mcpServerEnableSchema = z.object({
+  enabled: z.boolean(),
+});
 
 // McpServerCreate/Test describe *input* payloads (defaults like authType apply
 // at parse time), so direct object literals without authType typecheck.
@@ -492,7 +540,9 @@ export const mcpElicitResolveSchema = z.object({
   serverId: z.string().min(1),
   elicitationId: z.string().min(1),
   action: z.enum(["accept", "decline", "cancel"]),
-  content: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).optional(),
+  content: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]))
+    .optional(),
 });
 
 export type McpResourceRead = z.infer<typeof mcpResourceReadSchema>;
@@ -508,10 +558,11 @@ export const schedulerJobCreateSchema = z.object({
   cronExpression: z.string().min(1).max(200).optional().nullable(),
   execAt: z.number().int().positive().optional().nullable(),
   timezone: z.string().min(1).max(80),
-  providerId: z.string().min(1),
-  modelId: z.string().min(1).max(200),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  providerId: z.string().min(1).optional(),
+  modelId: z.string().min(1).max(200).optional(),
   thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
-  workspacePath: z.string().min(1).max(4096),
+  workspacePath: z.string().min(1).max(4096).optional(),
   prompt: z.string().min(1).max(100000),
   conversationPolicy: z.enum(["dedicated_thread", "existing_thread"]).optional(),
   conversationId: z.string().min(1).max(200).optional().nullable(),
@@ -520,6 +571,15 @@ export const schedulerJobCreateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 export const schedulerJobUpdateSchema = schedulerJobCreateSchema.partial();
@@ -572,6 +632,16 @@ const schedulerCreateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 const schedulerListSchema = z
@@ -591,6 +661,14 @@ const schedulerGetSchema = z
 const schedulerUpdateSchema = z.object({
   action: z.literal("update"),
   jobId: z.string().min(1).max(200),
+  /**
+   * Pause/resume is reachable through this tool: the `update` handler forwards
+   * the parsed args to the store, which owns `status`, and `list` filters on
+   * it. Declaring it here makes the VALIDATED contract match what the handler
+   * already does — previously `status` reached the store unvalidated, because
+   * Zod strips unknown keys silently instead of rejecting them.
+   */
+  status: z.enum(["active", "paused", "cancelled"]).optional(),
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).optional().nullable(),
   enabled: z.boolean().optional(),
@@ -610,6 +688,16 @@ const schedulerUpdateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 const schedulerDeleteSchema = z
@@ -746,7 +834,11 @@ export const logFileSchema = z.object({
   maxMb: z.number().positive().max(1024).default(5),
   keepFiles: z.number().int().min(1).max(100).default(20),
   maxTotalMb: z.number().positive().max(4096).default(100),
-  retentionHours: z.number().positive().max(24 * 30).default(24),
+  retentionHours: z
+    .number()
+    .positive()
+    .max(24 * 30)
+    .default(24),
 });
 export const logSettingsSchema = z.object({
   level: logLevelFilterSchema,
@@ -788,7 +880,10 @@ export const clientLogEventSchema = z.object({
   message: z.string().max(2000).optional(),
   /** Client epoch ms — the ordering key across the browser/backend boundary. */
   ts: z.number().int().nonnegative(),
-  operationId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+  operationId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,64}$/)
+    .optional(),
   threadId: z.string().max(200).optional(),
   conversationId: z.string().max(200).optional(),
   fields: z

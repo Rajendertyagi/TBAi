@@ -8,7 +8,7 @@
 
 import { useAuiState } from "@assistant-ui/react";
 import { useThreadTokenUsage } from "@assistant-ui/ai-sdk";
-import { type FC, type ReactNode } from "react";
+import type { FC, ReactNode } from "react";
 import {
   ContextDisplayBar as ContextDisplayBarBase,
   ContextDisplayContent,
@@ -53,10 +53,7 @@ function ContextDisplayRootInternal({
 function ContextDisplayRoot(props: ContextDisplayRootProps) {
   if (props.usage !== undefined) {
     return (
-      <ContextDisplayRootBase
-        modelContextWindow={props.modelContextWindow}
-        usage={props.usage}
-      >
+      <ContextDisplayRootBase modelContextWindow={props.modelContextWindow} usage={props.usage}>
         {props.children}
       </ContextDisplayRootBase>
     );
@@ -89,11 +86,7 @@ const ContextDisplayRing: FC<WiredPresetProps> = ({ usage, ...rest }) =>
   );
 
 const ContextDisplayBar: FC<WiredPresetProps> = ({ usage, ...rest }) =>
-  usage !== undefined ? (
-    <ContextDisplayBarBase usage={usage} {...rest} />
-  ) : (
-    <WiredBar {...rest} />
-  );
+  usage !== undefined ? <ContextDisplayBarBase usage={usage} {...rest} /> : <WiredBar {...rest} />;
 
 const ContextDisplayText: FC<WiredPresetProps> = ({ usage, ...rest }) =>
   usage !== undefined ? (

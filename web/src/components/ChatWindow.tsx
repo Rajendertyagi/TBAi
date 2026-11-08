@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import {
   ActionBarPrimitive,
   ErrorPrimitive,
@@ -6,10 +7,10 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAuiState,
-  useMessageTiming,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import { Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
 import { SessionTimeline } from "./assistant-ui/elements/session-timeline";
 import {
@@ -30,18 +31,28 @@ import { CodeDiff } from "./assistant-ui/elements/code-diff";
 import { patchToCodeDiffs } from "../lib/patch-to-diffs";
 import { toolsConfig } from "../config/tools";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
-import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
+import { MessageActions, MessageCopyAction } from "./assistant-ui/elements/message-actions";
+import { messageActionsConfig } from "../config/messageActions";
 import { ScrollPill } from "./ScrollPill";
+import { VirtualizedTranscript } from "./VirtualizedTranscript";
+import { DirectViewportBridge } from "../features/chat/history/DirectViewportBridge";
 import { ThreadBootSkeleton } from "./assistant-ui/elements/thread-boot-skeleton";
 import { CompactionDivider } from "./assistant-ui/elements/compaction-divider";
 import { DIRECT_COMPACT_DATA_NAME } from "../features/chat/compactCommand";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
 import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
-import { useSettingsStore } from "../stores";
+import {
+  ComposerDock,
+  useComposerInset,
+  useComposerReserve,
+} from "../features/chat/components/ComposerDock";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
 import { formatDuration } from "@/tools/elapsed";
+import { AgentStatus } from "./assistant-ui/elements/agent-status";
+import { useAssistantActivity } from "../features/chat/hooks/useAssistantActivity";
 /**
  * Whether the thread boot skeleton renders. Pure (no hooks) so the
  * draft/loading/mode matrix is unit-testable without a DOM runner.
@@ -94,34 +105,75 @@ export function shouldShowSessionTimeline({
   return mode === "agent";
 }
 
+/**
+ * The composer's opaque extras.
+ *
+ * `ChatWindow` stays engine-neutral: it renders these nodes without knowing
+ * which engine produced them, so nothing under `features/opencode/` or
+ * `features/chat/` is imported here.
+ */
+export interface ComposerExtras {
+  /**
+   * Transient status presentations, rendered INSIDE the reserved status row
+   * (which holds its height whether or not anything is showing). Direct: the
+   * pill. Code: the primary status and the restoration notice.
+   */
+  status?: ReactNode;
+  /**
+   * Interactive content (questions / forms), rendered ABOVE the reserved row at
+   * its natural height. Never constrained to the status row: a form is content,
+   * not a label, and pinning it to a pill's height would clip it.
+   */
+  interactive?: ReactNode;
+  /**
+   * Below-composer row content (agent mode only): the connection heart and any
+   * display-only chips. Its own constant-height row, outside the reserved row;
+   * the heart's popover is an out-of-flow overlay.
+   */
+  below?: ReactNode;
+}
+
+/**
+ * The Direct status pill.
+ *
+ * It renders into the reserved status row, so the marker rides on the pill
+ * itself rather than on a wrapper that would add its own flow box.
+ */
+function AssistantStatusPill() {
+  const activity = useAssistantActivity();
+  if (!activity) return null;
+
+  return (
+    <AgentStatus
+      data-primary-status
+      {...activity}
+      className="min-w-0 max-w-full shrink animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none"
+    />
+  );
+}
+
 export function ChatWindow({
   isDraft = false,
   mode = "chat",
-  aboveComposerExtra,
-  belowComposerExtra,
+  composerExtras,
 }: {
   /** chat = TBAi chat; agent = OpenCode Code mode (separate runtime). */
   mode?: "chat" | "agent";
   isDraft?: boolean;
   /**
-   * Opaque node rendered in the composer folder, directly ABOVE the composer
-   * box. Same contract and the same reason as {@link belowComposerExtra}: kept
-   * opaque so this file stays free of engine-specific imports, with the owner
-   * (e.g. OpenCodeView) supplying whatever belongs there.
+   * Opaque content for the composer folder, split by concern:
    *
-   * Above rather than below because the surfaces that belong here are things
-   * the reader must act on before composing — the Code-mode question dock is
-   * the current owner. The transcript viewport is `flex-1` and the folder is
-   * auto-height, so a node placed here shrinks the transcript rather than
-   * covering it, and no measured height or floating panel is needed.
+   * - `interactive` (questions, forms) keeps its natural height above the
+   *   status row;
+   * - `status` renders inside a CONSTANT-height reserved row between the
+   *   interactive content and the composer, so a transient status appearing or
+   *   disappearing cannot resize the folder and move the transcript/composer;
+   * - `below` occupies the existing agent-mode chip row under the composer.
+   *
+   * The split is what makes layout stability structural rather than something
+   * each caller has to remember.
    */
-  aboveComposerExtra?: ReactNode;
-  /**
-   * Opaque node rendered in the composer folder row (agent mode only).
-   * Kept opaque so this file stays free of engine-specific imports —
-   * the owner (e.g. OpenCodeView) supplies whatever belongs there.
-   */
-  belowComposerExtra?: ReactNode;
+  composerExtras?: ComposerExtras;
 }) {
   // Single composer instance for the whole app: one tag, one live mount,
   // identical size/features everywhere. Identity is structural, never
@@ -152,30 +204,122 @@ export function ChatWindow({
   const showAgentScopeChip = mode === "agent";
   const composer = <Composer isWelcomeDraft={showWelcome} isCodeSurface={isCodeSurface} />;
 
+  // The composer overlay's measured height, published by `ComposerDock` through
+  // the thread viewport store. The pill sits on this number (the dock's top
+  // edge); the transcript reserves this PLUS the tail gap, so the newest line
+  // keeps clear air above the fade band instead of ending inside it.
+  const composerInset = useComposerInset();
+  const composerReserve = useComposerReserve();
+
+  // The row renderer for the virtualized timeline. It switches on assistant-ui's
+  // own row type, so the timeline decides only WHICH rows are mounted, never
+  // what a row looks like — every case reuses an existing component, and the
+  // part case shares `AssistantPart` with the ordinary message renderer.
+  //
+  // Its identity is stable (memoized on `mode`): the timeline invokes it for
+  // every mounted row, so a fresh function per render re-renders the list.
+  const renderRow = useCallback<
+    NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>
+  >((info) => <ChatRow info={info} mode={mode} />, [mode]);
+
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
       {showWelcome ? (
-        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 pb-4">
+        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto py-6 pb-4">
           <WelcomeScreen composer={composer} />
         </ThreadPrimitive.Viewport>
       ) : (
         <>
-          <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-6 pb-4">
-            {showBoot ? <ThreadBootSkeleton /> : null}
-            <ThreadPrimitive.Messages>
-              {({ message }) =>
-                message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />
-              }
-            </ThreadPrimitive.Messages>
-          </ThreadPrimitive.Viewport>
+          {/* P2 rebased architecture: one virtualized timeline for history AND
+              the live streaming tail, so there is a single scroll position.
+              `ThreadPrimitive.Viewport` is deliberately NOT used — its auto-scroll
+              assumes every message is mounted, which is exactly what
+              virtualization removes. The bridge supplies measurements and the
+              paging control; it holds no window policy. */}
+          <VirtualizedTranscript
+            // The vertical spacing is MARGIN, not padding, and that is load-bearing.
+            //
+            // Padding on a scroll container is part of its scrollable overflow, so
+            // `py-6 pb-4` added 40px to `scrollHeight` that the virtualizer's
+            // `getTotalSize()` cannot see. That made the scrollport's end-distance
+            // disagree with virtual-core's by exactly 40px, which is why
+            // `resizeItem`'s `wasAtEnd` reported "at end" while the viewport was
+            // not. Margin is outside the border box and contributes nothing to the
+            // scrollable region, so the spacing is identical and the geometry is
+            // exact: `scrollHeight === getTotalSize()`.
+            //
+            // Horizontal padding is untouched - it affects scrollWidth, not the
+            // vertical geometry this corrects.
+            //
+            // No bottom margin: the composer is now an OVERLAY (`ComposerDock`)
+            // positioned against the bottom of this column, and the scrollport
+            // must reach that same bottom edge. A `mb-4` would leave a 16px band
+            // the scrollport could not enter, and the transcript's live end would
+            // sit that far above the dock. The bottom spacing the margin used to
+            // provide now lives in the dock's own padding, inside the measured
+            // reserve.
+            // Horizontal geometry is the chat column: `mx-auto max-w-[…]` caps
+            // the scrollport at `--chat-column-width` and centres it, while the
+            // inner `px-4` gutter is unchanged. The composer dock caps the same
+            // width with the same inner gutter, so the text and the box it is
+            // typed into share one left edge. Horizontal only — the vertical
+            // invariant above (margin, not padding; `scrollHeight ===
+            // getTotalSize()`) is untouched.
+            className="mx-auto w-full min-h-0 max-w-[var(--chat-column-width)] flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6"
+            // The overlay's measured height plus the tail gap.
+            // `paddingEnd` is virtualizer-aware: it is part of
+            // `getTotalSize()`, so the total-size container grows by exactly the
+            // reserve and `scrollHeight === getTotalSize()` still holds. CSS
+            // padding on the scrollport would break that invariant (see the
+            // header note in `VirtualizedTranscript`).
+            paddingEnd={composerReserve}
+            renderRow={renderRow}
+            // The scroll-to-latest control lives INSIDE the transcript, next to
+            // the paging control: it reads the virtualizer through context, and
+            // that context only exists below the transcript that owns it. It is
+            // passed as `overlay`, not `header`, because it is a fixed chip that
+            // floats over the transcript - the header slot is the paging bar.
+            header={
+              <>
+                {showBoot ? <ThreadBootSkeleton /> : null}
+                <DirectViewportBridge />
+              </>
+            }
+            overlay={<ScrollPill bottomOffset={composerInset} />}
+          />
 
-          <ScrollPill />
-
-          <div className="mx-auto w-full max-w-3xl px-4 pb-4">
-            {/* In flow, between the transcript and the composer, so the
-                viewport's `flex-1` absorbs the height and the last rows stay
-                reachable. No absolute positioning, no measurement. */}
-            {aboveComposerExtra ? <div className="pt-2">{aboveComposerExtra}</div> : null}
+          <ComposerDock>
+            {/* Interactive content sits ABOVE the reserved row and keeps its
+                natural height: a question form is content, and clipping it to a
+                status pill's height would make it unusable. Its own add/remove
+                flow height is intentional, not a status jump. */}
+            {composerExtras?.interactive ? (
+              <div data-composer-interactive className="pt-2">
+                {composerExtras.interactive}
+              </div>
+            ) : null}
+            {/* The reserved status row. It is ALWAYS mounted and its one-line
+                height is fixed by `--status-reserved-height`, so a status pill
+                appearing, disappearing or changing label cannot resize the
+                composer folder — which is what used to move the transcript and
+                composer. `flex-wrap` lets the primary and the restoration
+                notice coexist as sibling pills and wrap to a second line only
+                when the row is too narrow to hold both; `gap-2` is also the
+                wrapped line-gap. Every `AgentStatus` pill is 38px tall because
+                its trailing wrapper is always a `size-6` box (6 + 24 + 6 + 2
+                border), so one line is 38+8(pb)=46px and two lines are
+                38+8(gap)+38+8(pb)=92px. Both numbers are asserted by the
+                geometry spec.
+                The Direct pill renders here only in chat mode: Code mode's
+                primary is supplied by its own runtime owner through `status`,
+                and composing both would report one turn twice. */}
+            <div
+              data-status-row
+              className="flex flex-wrap items-center gap-2 min-w-0 overflow-x-clip pb-2 min-h-[var(--status-reserved-height)]"
+            >
+              {mode === "chat" ? <AssistantStatusPill /> : null}
+              {composerExtras?.status ?? null}
+            </div>
             {composer}
             {showScopePicker && (
               <div className="px-1 pt-1">
@@ -185,31 +329,130 @@ export function ChatWindow({
             {/* Agent (Code) mode: display-only workspace chip — the OpenCode
                 session's working directory is set at session-create time and
                 cannot be re-rooted mid-session. Reuses the same static chip
-                as bound Direct threads. An optional owner-supplied node
-                (e.g. the Code-mode status heart) shares the row. */}
+                as bound Direct threads. The connection heart shares this
+                constant-height row; it is deliberately OUTSIDE the reserved
+                status row, and its popover is an out-of-flow overlay. */}
             {showAgentScopeChip && (
-              <div className="flex items-center gap-1 px-1 pt-1">
+              <div data-composer-below className="flex items-center gap-1 px-1 pt-1">
                 <div className="min-w-0 flex-1">
                   <WelcomeScopePicker editable={false} />
                 </div>
-                {belowComposerExtra}
+                {composerExtras?.below}
               </div>
             )}
-          </div>
+          </ComposerDock>
         </>
       )}
     </ThreadPrimitive.Root>
   );
 }
 
-function TurnCopyButton() {
-  const isCopied = useAuiState((s) => s.message.isCopied);
+/** One row's render info, as `ThreadPrimitive.Row` passes it. */
+type ThreadRowInfo = Parameters<
+  NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>
+>[0];
+
+/**
+ * Renders one assistant-ui thread row using TBAi's own components.
+ *
+ * Exported so the DOM suite can mount the REAL row composition — this switch
+ * together with `selectTranscriptRows` — under a real runtime. A virtualizer
+ * needs measurable scroll geometry that a DOM test cannot provide; the rows it
+ * feeds are the part whose behaviour is asserted.
+ *
+ * `mode` is the owning engine, never re-derived from tool names.
+ *
+ * ## Why the assistant cases do not render `AssistantMessage`
+ *
+ * Core 0.3.30 emits a `message` row only for a non-assistant message or an
+ * assistant message the composer is editing; every other assistant message
+ * becomes `part` rows (and a part-less one becomes no rows at all). So
+ * `AssistantMessage`, which owns the error card, the action bar and the
+ * timeline, never mounted for the messages a reader actually sees — a failed
+ * turn carried `status: { type: "incomplete", reason: "error" }` and showed
+ * nothing. The chrome is therefore rendered from the row that owns it: the
+ * first part row (timeline), the last part row (error + footer), and the
+ * `turn-end` row for a part-less message, whose scopes all resolve through the
+ * library's own `MessageByIdProvider`.
+ */
+export function ChatRow({ info, mode }: { info: ThreadRowInfo; mode: "chat" | "agent" }) {
+  switch (info.type) {
+    case "message":
+      return info.message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />;
+    case "part":
+      return (
+        <AssistantPartRow part={info.part} indices={info.row.indices} mode={mode}>
+          {info.children}
+        </AssistantPartRow>
+      );
+    case "turn-end":
+      return <PartlessAssistantTail />;
+    default:
+      return null;
+  }
+}
+
+/**
+ * One part row: the part itself plus the message-level chrome the row owns.
+ *
+ * The timeline goes on the FIRST row because it summarizes the whole turn and
+ * has always sat above the parts; the error card and footer go on the LAST row
+ * because they close the message. Exactly one row can satisfy each condition
+ * (`indices` partition the message's parts), so neither duplicates across
+ * rows, and a one-row message owns both.
+ */
+function AssistantPartRow({
+  part,
+  indices,
+  mode,
+  children,
+}: {
+  part: Parameters<typeof AssistantPart>[0]["part"];
+  indices: readonly number[];
+  mode: "chat" | "agent";
+  children?: ReactNode;
+}) {
+  const partCount = useAuiState((s) => s.message.parts.length);
+  const isFirstRow = Math.min(...indices) === 0;
+  const isLastRow = Math.max(...indices) === partCount - 1;
+
   return (
-    <ActionBarPrimitive.Copy asChild>
-      <TooltipIconButton tooltip={isCopied ? "Copied!" : "Copy message"} side="bottom">
-        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      </TooltipIconButton>
-    </ActionBarPrimitive.Copy>
+    <>
+      {isFirstRow && shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
+      <AssistantPart part={part}>{children}</AssistantPart>
+      {isLastRow ? <AssistantMessageTail /> : null}
+    </>
+  );
+}
+
+/**
+ * The turn-end row's chrome, for the one message shape that has no rows of its
+ * own.
+ *
+ * Both engines can produce an assistant message with `content: []` and an error
+ * status — the AI SDK converter appends one when the last message is not an
+ * assistant, and the OpenCode projection does the same when no assistant
+ * message can be named. Such a message yields no part rows, so its error would
+ * otherwise have nowhere to render. Every other assistant message renders its
+ * tail from its last part row (or, while editing, from its `message` row), so
+ * this is deliberately narrow: it must not fire for those, or the card would
+ * appear twice.
+ */
+function PartlessAssistantTail() {
+  const ownedElsewhere = useAuiState(
+    (s) =>
+      s.message.role !== "assistant" || s.message.composer.isEditing || s.message.parts.length > 0,
+  );
+  return ownedElsewhere ? null : <AssistantMessageTail />;
+}
+
+/** The closing chrome of an assistant message: its error, then its footer. */
+function AssistantMessageTail() {
+  return (
+    <>
+      <AssistantError />
+      <AssistantTurnFooter />
+    </>
   );
 }
 
@@ -226,10 +469,8 @@ function UserMessage() {
         <MessagePrimitive.Parts />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
-        {timeStr && (
-          <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>
-        )}
-        <TurnCopyButton />
+        {timeStr && <span className="text-2xs tabular-nums text-background/50">{timeStr}</span>}
+        <MessageCopyAction />
       </div>
     </MessagePrimitive.Root>
   );
@@ -247,87 +488,23 @@ function UserMessage() {
 // `display: "standalone"` keeps its approval card out of a collapsed group, and
 // it is why the `tool-call` case below is reachable at all — every other tool
 // call arrives as a `group-tool` node.
-const groupedBy = groupPartByType({
+//
+// `TKey` is stated explicitly because it cannot be inferred from this literal.
+// `groupPartByType<TKey>` takes every array as `readonly TKey[]`, and inference
+// fixes `TKey` from the FIRST property before the later ones are checked, so
+// `reasoning: ["group-reasoning"]` alone narrowed it and `"tool-call"` then
+// failed as not assignable. Naming the union states the intent the map already
+// had and matches the upstream `groupPartByType` example, which lists several
+// distinct group keys.
+type TChatGroupKey = "group-reasoning" | "group-tool";
+
+const groupedBy = groupPartByType<TChatGroupKey>({
   reasoning: ["group-reasoning"],
   "tool-call": ["group-tool"],
   "standalone-tool-call": [],
 });
 
 function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
-  const timing = useMessageTiming();
-  const createdAt = useAuiState((s) => s.message.createdAt);
-  // Live-stream detection must ALSO require a running thread: restored
-  // messages carry no timing data (it is never persisted), so timing-only
-  // detection sticks every reloaded message in "streaming" forever (ticking
-  // timer, hidden provenance footer). Gating on thread.isRunning keeps live
-  // streams live while letting settled history settle.
-  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
-  const custom = useAuiState(
-    (s) =>
-      (s.message.role === "assistant"
-        ? (s.message.metadata?.custom as
-             | {
-              usage?: { totalTokens?: number };
-              modelId?: string;
-              providerId?: string;
-              reasoningLevel?: string;
-            }
-            | undefined)
-        : undefined) ?? undefined,
-  );
-  // Provider display names for the provenance chips (server stores ids).
-  const providers = useSettingsStore((s) => s.providers);
-
-  const total = custom?.usage?.totalTokens;
-  const modelId = custom?.modelId;
-  const providerName = custom?.providerId
-    ? (providers.find((p) => p.id === custom.providerId)?.name ??
-      custom.providerId)
-    : undefined;
-  const thinking =
-    custom?.reasoningLevel && custom.reasoningLevel !== "off"
-      ? custom.reasoningLevel
-      : undefined;
-  const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
-  // Routed through `formatDuration`, the one owner of how a span is written.
-  //
-  // These two used to format inline with `(ms / 1000).toFixed(1)`, which is the
-  // exact defect `formatDuration` was written to remove: a real 299-second turn
-  // rendered `299.0s` in this footer while the tool badge on the same card read
-  // `4m 59s`. Two spellings of the same fact on one screen, one of them
-  // unreadable. Caught by looking at a live subagent capture, not by a test.
-  const durationSec = !isStreaming && timing?.totalStreamTime != null
-    ? formatDuration(timing.totalStreamTime)
-    : undefined;
-  const timeStr =
-    createdAt instanceof Date
-      ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      : undefined;
-
-  const [liveMs, setLiveMs] = useState(0);
-  useEffect(() => {
-    if (!isStreaming) { setLiveMs(0); return; }
-    const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
-    return () => clearInterval(interval);
-  }, [isStreaming]);
-  const liveDuration = isStreaming && liveMs > 0 ? formatDuration(liveMs) : undefined;
-
-  const [hovered, setHovered] = useState(false);
-  const showTimestamp = hovered && !!timeStr;
-
-  const handleMouseEnter = () => setHovered(true);
-  const handleMouseLeave = () => setHovered(false);
-
-  const primaryLabel = liveDuration || durationSec || timeStr;
-  const displayLabel = showTimestamp && timeStr ? timeStr : (primaryLabel ?? "");
-
-  const hasMetadata = total != null || modelId != null || providerName != null;
-  const metadataChips = [];
-  if (total != null) metadataChips.push(`${total}t`);
-  if (providerName) metadataChips.push(providerName);
-  if (modelId) metadataChips.push(modelId);
-  if (thinking) metadataChips.push(`thinking:${thinking}`);
-
   return (
     <MessagePrimitive.Root className="flex animate-in flex-col items-start fade-in-0 slide-in-from-bottom-1 duration-200">
       {/* No single assistant bubble. Each node below owns its own surface, so a
@@ -356,145 +533,295 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
             the count is structurally always 0 and the line reads as a bug. See
             {@link shouldShowSessionTimeline}. */}
         {shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
+        {/* `GroupedParts` takes a render FUNCTION, so the shared part renderer is
+            passed as a reference — the same one the virtualized row renderer
+            uses, so an assistant part is rendered by one implementation. */}
         <MessagePrimitive.GroupedParts groupBy={groupedBy}>
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-reasoning": {
-                // `counts` rather than one part's status: a run of reasoning
-                // stays marked as streaming while ANY part is still arriving.
-                const running = part.counts.running > 0;
-                // `defaultOpen`: the thinking block is expanded and STAYS
-                // expanded once the stream ends. Without it the disclosure
-                // falls back to collapsed the moment `streaming` goes false,
-                // so the reasoning a reader just watched stream in vanished
-                // behind a one-line trigger. A manual toggle still wins — see
-                // `ReasoningRoot`'s `userOpen ?? (streaming || initialOpen)`.
-                return (
-                  <ReasoningRoot streaming={running} defaultOpen>
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                );
-              }
-              case "group-tool":
-                return (
-                  <AutoOpenToolGroup
-                    active={part.counts.running > 0}
-                    // A group holding a tool that needs approval is not settled,
-                    // even though it is not running. Opening it is what makes a
-                    // permission card visible rather than hiding it inside a
-                    // collapsed block.
-                    pending={part.counts.requiresAction > 0}
-                    count={part.indices.length}
-                  >
-                    {children}
-                  </AutoOpenToolGroup>
-                );
-              case "text":
-                return (
-                  <MarkdownText
-                    components={{
-                      SyntaxHighlighter: HighlightingSyntax,
-                      a: ({ className, ...props }) => (
-                        <a {...props} className={className} target="_blank" rel="noreferrer" />
-                      ),
-                    }}
-                  />
-                );
-              case "reasoning":
-                return <Reasoning {...part} />;
-              case "tool-call":
-                return (
-                  part.toolUI ?? (
-                    <ToolFallback
-                      {...part}
-                      toolName={prettyToolName(part.toolName)}
-                    />
-                  )
-                );
-              // Data parts are LEAF parts: `children` is a sentinel that throws
-              // (see the library's `GroupedParts` docs — `children` is only
-              // meaningful for `group-…` cases), so the part must render itself.
-              // This is what makes the Direct compaction divider appear at all;
-              // before this case it fell into `default` below and rendered
-              // nothing. Keyed on the part name rather than rendering every data
-              // part, so an unregistered name still renders nothing.
-              case "data":
-                return part.name === DIRECT_COMPACT_DATA_NAME ? (
-                  <CompactionDivider {...part} />
-                ) : null;
-              // Trailing streaming affordance emitted by GroupedParts (default
-              // mode "no-text"). Previously unhandled, so it rendered nothing.
-              //
-              // Gated on the THREAD, not just the message: the library's
-              // condition is per-message, so a message left marked `running`
-              // (an errored turn that never produced text) emits this forever
-              // while the thread is idle — a permanent "still working" pulse
-              // next to a live composer. `thread.isRunning` is the same
-              // authoritative signal the composer uses to unmount its send
-              // button, so the affordance can only appear while work is real.
-              case "indicator":
-                return threadIsRunning ? <ThinkingIndicator /> : null;
-              default:
-                return null;
-            }
-          }}
+          {AssistantPartSlot}
         </MessagePrimitive.GroupedParts>
         <AssistantError />
       </div>
 
-      <div
-        className={cn(
-          "mt-1.5 flex items-center gap-1.5 min-h-6",
-          isStreaming ? "opacity-100" : "opacity-80 hover:opacity-100",
-        )}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <div className="flex items-center gap-0.5">
-          <TurnCopyButton />
-          <ActionBarPrimitive.Reload asChild>
-            <TooltipIconButton tooltip="Regenerate response" side="bottom">
-              <RefreshCw className="size-3.5" />
-            </TooltipIconButton>
-          </ActionBarPrimitive.Reload>
-        </div>
-
-        {isStreaming && (
-          <div className="flex items-center gap-1.5 ml-1">
-            <Loader2 className="size-3 animate-spin text-muted-foreground" />
-            <span className="text-[11px] tabular-nums text-muted-foreground">
-              {liveDuration || "0.0s"}
-            </span>
-          </div>
-        )}
-
-        {!isStreaming && hasMetadata && (
-          <div className="ml-auto flex items-center gap-1">
-            <span
-              className={cn(
-                "text-[11px] tabular-nums text-muted-foreground transition-opacity hover:text-foreground",
-                showTimestamp && "text-foreground",
-              )}
-              title={displayLabel}
-            >
-              {displayLabel}
-            </span>
-            {metadataChips.map((chip, i) => (
-              <span
-                key={i}
-                className="text-[10px] tabular-nums text-muted-foreground/70"
-                title={chip}
-              >
-                {chip}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      <AssistantTurnFooter />
     </MessagePrimitive.Root>
+  );
+}
+
+const SENT_AT_TIME = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+const SENT_AT_DATE_AND_TIME = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/** Today shows the clock alone; older turns also name the day. */
+function formatSentAt(epochMs: number): string {
+  const sentAt = new Date(epochMs);
+  const isToday = sentAt.toDateString() === new Date().toDateString();
+  return (isToday ? SENT_AT_TIME : SENT_AT_DATE_AND_TIME).format(sentAt);
+}
+
+const TOKEN_THOUSAND = 1_000;
+const TOKEN_MILLION = 1_000_000;
+
+/** `4660` -> `4.7k`, `1_240_000` -> `1.2M`. */
+function compactTokenCount(total: number): string {
+  if (total >= TOKEN_MILLION) return `${(total / TOKEN_MILLION).toFixed(1)}M`;
+  if (total >= TOKEN_THOUSAND) return `${(total / TOKEN_THOUSAND).toFixed(1)}k`;
+  return String(total);
+}
+
+/**
+ * `google` -> `Google`. The first letter only, so a configured name that already
+ * carries its own capitalisation — `OpenRouter`, `Ollama` — is left alone.
+ */
+function capitalizeFirst(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** `-`, `_` and whitespace all read as word breaks in a model id. */
+const MODEL_NAME_BREAK = /[-_\s]+/;
+
+/**
+ * A model id written as a name: `gemini-3.5-flash-lite` -> `Gemini 3.5 Flash Lite`.
+ *
+ * Used only when the provider configuration carries no `label` for the model,
+ * which is the normal case: Gemini's discovery endpoint reports no display name,
+ * so every Gemini turn would otherwise read as a raw slug. The untouched id stays
+ * in the segment's `title`, because the id is the fact and this is its reading
+ * form.
+ */
+function formatModelName(id: string): string {
+  return id
+    .split(MODEL_NAME_BREAK)
+    .filter((word) => word.length > 0)
+    .map(capitalizeFirst)
+    .join(" ");
+}
+
+/** Footer metadata as both engines write it. */
+interface AssistantFooterCustom {
+  usage?: { totalTokens?: number };
+  modelId?: string;
+  providerId?: string;
+  reasoningLevel?: string;
+  agent?: string;
+  turnStartedAt?: number;
+  turnTiming?: { startedAt: number; endedAt: number; durationMs: number };
+}
+
+/**
+ * The message's closing footer.
+ *
+ * One line, in reading order: what answered (model details), how (agent, Code
+ * only), how long it took, and when it was sent — then the token count and the
+ * copy/regenerate actions. Everything flows in that order at one type size;
+ * nothing is pushed to the trailing edge, so the end of the line is the end of
+ * the reading, not a separate right-hand column.
+ *
+ * ## Both times, always
+ *
+ * The duration and the sent-at clock used to share one slot with a hover swap:
+ * the duration while the vendor's in-memory timing survived, the stored clock
+ * after a reload. The consumer sees one number that silently changes meaning.
+ * Now both are rendered, always, and both come from the same place: the
+ * server's turn record.
+ *
+ *  - `custom.turnStartedAt` is written on the stream's `start` event (Direct)
+ *    or taken from the assistant record's `time.created` (Code). The live
+ *    count is `now - turnStartedAt`, so it is anchored to the request, not to
+ *    the moment the footer mounted — a new part remounting the last row cannot
+ *    restart it.
+ *  - `custom.turnTiming` is closed on `finish` (Direct) or from
+ *    `time.completed` (Code), so the settled duration is the same number
+ *    before and after a reload.
+ *
+ * An answer recorded before the turn clock existed has neither, and then this
+ * footer shows no duration and no clock. That is deliberate: the only time the
+ * runtime can supply for restored Direct history is `createdAt`, which it
+ * assigns when the page loads, so a fallback to it would print the current time
+ * as the send time — the exact confusion being fixed here.
+ *
+ * The vendor's `useMessageTiming` is deliberately not read: it is measured from
+ * the first streamed chunk, lives in memory only, and its converter overwrites
+ * stored metadata while a turn is live.
+ */
+function AssistantTurnFooter() {
+  // Liveness is PER MESSAGE, not per thread.
+  //
+  // `message.status.type === "running"` is the runtime's own answer, and both
+  // engines maintain it in the same place: the external-store core derives an
+  // auto status as `isLast && isRunning` (core `runtime/utils/auto-status.ts`),
+  // which is what backs Direct (`useChatRuntime`) and Code (the OpenCode
+  // projection) alike. The previous predicate paired a per-message signal
+  // (`timing`, never persisted) with `thread.isRunning`, so every restored or
+  // completed message looked live for as long as any turn was streaming — a
+  // spinner on all history, and the provenance row hidden behind it.
+  const isRunningMessage = useAuiState((s) => s.message.status?.type === "running");
+  const custom = useAuiState(
+    (s) =>
+      (s.message.role === "assistant"
+        ? (s.message.metadata?.custom as AssistantFooterCustom | undefined)
+        : undefined) ?? undefined,
+  );
+  // The footer is a reading surface and the server stores ids, so display names
+  // come from the same provider configuration the composer reads.
+  const providers = useSettingsStore((s) => s.providers);
+  const provider = custom?.providerId
+    ? providers.find((p) => p.id === custom.providerId)
+    : undefined;
+
+  const total = custom?.usage?.totalTokens;
+  const modelId = custom?.modelId;
+  const providerName = provider
+    ? capitalizeFirst(provider.name)
+    : custom?.providerId
+      ? capitalizeFirst(custom.providerId)
+      : undefined;
+  // A configured label wins. Otherwise the id is written as a name, because a
+  // slug is a storage key, not something a reader should be shown.
+  const modelName = modelId
+    ? (provider?.models?.find((m) => m.id === modelId)?.label ?? formatModelName(modelId))
+    : undefined;
+  const thinking =
+    custom?.reasoningLevel && custom.reasoningLevel !== "off" ? custom.reasoningLevel : undefined;
+  const agent = custom?.agent;
+
+  // A running message whose turn record is already closed (the stream finished
+  // while the thread settles) shows the settled duration, not a live count.
+  const settledDurationMs = custom?.turnTiming?.durationMs;
+  const liveAnchor =
+    settledDurationMs === undefined && isRunningMessage ? custom?.turnStartedAt : undefined;
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (liveAnchor === undefined) return;
+    // Seed immediately: the first interval tick is a full second away, and the
+    // clock would otherwise stand still for that second.
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), messageActionsConfig.liveTickMs);
+    return () => clearInterval(interval);
+  }, [liveAnchor]);
+
+  // Routed through `formatDuration`, the one owner of how a span is written.
+  //
+  // These two used to format inline with `(ms / 1000).toFixed(1)`, which is the
+  // exact defect `formatDuration` was written to remove: a real 299-second turn
+  // rendered `299.0s` in this footer while the tool badge on the same card read
+  // `4m 59s`. Two spellings of the same fact on one screen, one of them
+  // unreadable. Caught by looking at a live subagent capture, not by a test.
+  const durationLabel =
+    settledDurationMs === undefined
+      ? liveAnchor === undefined
+        ? undefined
+        : formatDuration(Math.max(0, now - liveAnchor))
+      : formatDuration(settledDurationMs);
+
+  // When the turn was sent — from the persisted turn record, and nothing else.
+  //
+  // `message.createdAt` is deliberately NOT a fallback. On a restored Direct
+  // history the runtime assigns it at import time, because the history window
+  // carries `{ id, parent_id, format, content }` and no timestamp of its own;
+  // printing it would put the moment the page loaded on every old answer as if
+  // it were when the turn was sent. That is the "refresh shows the current time"
+  // confusion this footer exists to remove, so an answer recorded before the
+  // turn clock shows no clock rather than a fabricated one.
+  const sentAt = custom?.turnTiming?.startedAt ?? custom?.turnStartedAt;
+
+  const separators = messageActionsConfig.footer;
+  const segments: { key: string; node: ReactNode }[] = [];
+  if (providerName || modelName || thinking) {
+    segments.push({
+      key: "model",
+      node: (
+        <span
+          data-slot="message-model"
+          className="min-w-0 truncate text-muted-foreground"
+          title={modelId}
+        >
+          {providerName ? <span className="text-muted-foreground/70">{providerName} </span> : null}
+          {modelName}
+          {thinking ? <span className="text-muted-foreground/70"> thinking:{thinking}</span> : null}
+        </span>
+      ),
+    });
+  }
+  if (agent) {
+    segments.push({
+      key: "agent",
+      node: (
+        <span data-slot="message-agent" className="text-muted-foreground">
+          {agent}
+        </span>
+      ),
+    });
+  }
+  if (durationLabel !== undefined) {
+    segments.push({
+      key: "duration",
+      node: (
+        <span
+          data-slot={liveAnchor === undefined ? "turn-duration" : "live-turn"}
+          className="flex items-center gap-1 tabular-nums text-muted-foreground"
+        >
+          {liveAnchor === undefined ? null : <Loader2 className="size-3 animate-spin" />}
+          {durationLabel}
+        </span>
+      ),
+    });
+  }
+  if (sentAt !== undefined) {
+    segments.push({
+      key: "sent-at",
+      node: (
+        <span data-slot="message-sent-at" className="text-muted-foreground">
+          {formatSentAt(sentAt)}
+        </span>
+      ),
+    });
+  }
+  if (total != null) {
+    segments.push({
+      key: "tokens",
+      node: (
+        <span
+          data-slot="message-tokens"
+          className="tabular-nums text-muted-foreground/70"
+          title={separators.tokensTitle(total)}
+        >
+          {compactTokenCount(total)} {separators.tokenSuffix}
+        </span>
+      ),
+    });
+  }
+
+  return (
+    <div
+      data-slot="turn-footer"
+      className={cn(
+        "mt-1.5 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs",
+        liveAnchor === undefined ? "opacity-80 hover:opacity-100" : "opacity-100",
+      )}
+    >
+      {/* Every segment in reading order, separated uniformly, then the actions —
+          nothing is pinned to the trailing edge, so the line reads left to right
+          all the way through. */}
+      {segments.map((segment, index) => (
+        <Fragment key={segment.key}>
+          {index > 0 ? (
+            <span aria-hidden className="text-muted-foreground/70">
+              {separators.separator}
+            </span>
+          ) : null}
+          {segment.node}
+        </Fragment>
+      ))}
+      <MessageActions />
+    </div>
   );
 }
 
@@ -505,6 +832,105 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
  * hides the approval card inside it, which is how a permission ended up
  * invisible inside a nested block.
  */
+/**
+ * Renders ONE assistant part (or part group).
+ *
+ * Shared by the ordinary message renderer (`MessagePrimitive.GroupedParts`) and
+ * the virtualized timeline's `ThreadPrimitive.Row`, so there is exactly ONE
+ * implementation of how an assistant part looks. The two renderers differ only
+ * in what wraps them, never in the part itself.
+ *
+ * `part`/`children` are `MessagePrimitive.GroupedParts`' own props, which is
+ * also what a row's `part` case carries, so this fits both without adaptation.
+ */
+function AssistantPart({
+  part,
+  children,
+}: {
+  part: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0]["part"];
+  children?: ReactNode;
+}) {
+  // Thread-level, so it is read here rather than threaded down from the message:
+  // the streaming affordance below is about the THREAD still working, and the
+  // library's per-message condition would keep it lit forever after an errored
+  // turn that produced no text.
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+
+  switch (part.type) {
+    case "group-reasoning": {
+      // `counts` rather than one part's status: a run of reasoning stays marked
+      // as streaming while ANY part is still arriving.
+      const running = part.counts.running > 0;
+      // `defaultOpen`: the thinking block is expanded and STAYS expanded once the
+      // stream ends. Without it the disclosure falls back to collapsed the moment
+      // `streaming` goes false, so the reasoning a reader just watched stream in
+      // vanished behind a one-line trigger. A manual toggle still wins — see
+      // `ReasoningRoot`'s `userOpen ?? (streaming || initialOpen)`.
+      return (
+        <ReasoningRoot streaming={running} defaultOpen>
+          <ReasoningTrigger active={running} />
+          <ReasoningContent aria-busy={running}>
+            <ReasoningText>{children}</ReasoningText>
+          </ReasoningContent>
+        </ReasoningRoot>
+      );
+    }
+    case "group-tool":
+      return (
+        <AutoOpenToolGroup
+          active={part.counts.running > 0}
+          // A group holding a tool that needs approval is not settled, even
+          // though it is not running. Opening it is what makes a permission card
+          // visible rather than hiding it inside a collapsed block.
+          pending={part.counts.requiresAction > 0}
+          count={part.indices.length}
+        >
+          {children}
+        </AutoOpenToolGroup>
+      );
+    case "text":
+      return (
+        <MarkdownText
+          components={{
+            SyntaxHighlighter: HighlightingSyntax,
+            a: ({ className, ...props }) => (
+              <a {...props} className={className} target="_blank" rel="noreferrer" />
+            ),
+          }}
+        />
+      );
+    case "reasoning":
+      return <Reasoning {...part} />;
+    case "tool-call":
+      return part.toolUI ?? <ToolFallback {...part} toolName={prettyToolName(part.toolName)} />;
+    // Data parts are LEAF parts: `children` is a sentinel that throws (see the
+    // library's `GroupedParts` docs — `children` is only meaningful for
+    // `group-…` cases), so the part must render itself. This is what makes the
+    // Direct compaction divider appear at all. Keyed on the part name rather
+    // than rendering every data part, so an unregistered name renders nothing.
+    case "data":
+      return part.name === DIRECT_COMPACT_DATA_NAME ? <CompactionDivider {...part} /> : null;
+    // Trailing streaming affordance emitted by GroupedParts (default mode
+    // "no-text"). Gated on the THREAD (see above) so it can only appear while
+    // work is real.
+    case "indicator":
+      return threadIsRunning ? <ThinkingIndicator /> : null;
+    default:
+      return null;
+  }
+}
+
+/** `GroupedParts` render-function form, for use as its child. */
+function AssistantPartSlot(
+  props: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0],
+) {
+  return <AssistantPart part={props.part}>{props.children}</AssistantPart>;
+}
+
 function AutoOpenToolGroup({
   active,
   pending = false,
@@ -573,9 +999,9 @@ function HighlightingSyntax(props: {
     // matching how the legacy viewer rendered one block per file.
     return (
       <div data-slot="code-diff-list" className="w-full space-y-2">
-        {files.map((file, index) => (
+        {files.map((file) => (
           <CodeDiff
-            key={`${index}-${file.filename}`}
+            key={file.filename}
             filename={file.filename}
             additions={file.additions}
             deletions={file.deletions}
@@ -601,27 +1027,7 @@ function HighlightingSyntax(props: {
 }
 
 function AssistantError() {
-  return (
-    <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="mt-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
-        <AssistantErrorMessage />
-      </ErrorPrimitive.Root>
-    </MessagePrimitive.Error>
-  );
-}
-
-/**
- * Transport-aware error copy. Reads the raw message error through the
- * library's own hook and substitutes the single specified copy for transport
- * kills; every other error renders exactly as before (same component, same
- * DOM). No state changes, no runtime interference, no recovery attempts.
- */
-function AssistantErrorMessage() {
-  // Message-error text read through `useAuiState` from `@assistant-ui/react`
-  // (the provider's context). Selector mirrors the library's own
-  // `messageErrorText` predicate line-for-line; only `incomplete`/`error`
-  // message statuses carry a value and error-likes collapse to their message.
-  const error = useAuiState((s) => {
+  const statusError = useAuiState((s) => {
     const status = s.message.status;
     if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
     const err = status.error;
@@ -634,8 +1040,84 @@ function AssistantErrorMessage() {
     ) {
       return err.message;
     }
-    return err ?? "An error occurred";
+    return err ? String(err) : "An error occurred";
   });
-  const copy = error === undefined ? null : chatErrorCopy(classifyChatError(error));
-  return <>{copy ?? <ErrorPrimitive.Message />}</>;
+
+  // The reloaded copy of the same failure, read back from history.
+  //
+  // A stored failure has no `status` — the AI SDK converter drops an assistant
+  // status on the way in — so `MessagePrimitive.Error` and
+  // `ErrorPrimitive.Message` both render null for it. The text instead lives in
+  // message metadata, where the chat route wrote `sanitizeStreamError`'s output;
+  // the converter folds it into `custom`, which is why it is read from
+  // `metadata.custom.error`.
+  //
+  // Gated on the last message for the same reason the runtime's own auto status
+  // is (core `runtime/utils/auto-status.ts`: `isLast && error`): a live error
+  // belongs to the turn that just failed, and a turn the user has since moved
+  // past must not keep wearing a card with a Retry action that would re-run it.
+  const storedError = useAuiState((s) => {
+    if (s.message.role !== "assistant") return undefined;
+    if (s.thread.messages.at(-1)?.id !== s.message.id) return undefined;
+    const custom = s.message.metadata?.custom as { error?: unknown } | undefined;
+    const text = custom?.error;
+    return typeof text === "string" && text.length > 0 ? text : undefined;
+  });
+
+  const error = statusError ?? storedError;
+  if (!error) return null;
+
+  const transportCopy = chatErrorCopy(classifyChatError(error));
+  const displayText = transportCopy ?? error;
+  const lower = displayText.toLowerCase();
+  const isQuotaOrAuthError =
+    lower.includes("usage limit") ||
+    lower.includes("free usage") ||
+    lower.includes("authentication failed") ||
+    lower.includes("connect a provider") ||
+    lower.includes("401");
+
+  const hasRawDetails = displayText.length > 300;
+
+  // One card, rendered by both paths. `MessagePrimitive.Error` is only the
+  // render gate for a live error status; it holds no markup of its own, so the
+  // reloaded state uses the identical element without it.
+  const card = (
+    <ErrorPrimitive.Root
+      role="alert"
+      className="mt-2 flex flex-col gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertCircle className="size-4 shrink-0 text-destructive" />
+          <span className="break-words">{displayText}</span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isQuotaOrAuthError && (
+            <Button size="xs" variant="outline" asChild className="h-6 text-2xs">
+              <Link to="/settings/providers">Open Provider Settings</Link>
+            </Button>
+          )}
+          <ActionBarPrimitive.Reload asChild>
+            <Button size="xs" variant="outline" className="h-6 text-2xs">
+              <RefreshCw className="mr-1 size-3" />
+              Retry
+            </Button>
+          </ActionBarPrimitive.Reload>
+        </div>
+      </div>
+      {hasRawDetails && (
+        <details className="mt-1 text-2xs text-muted-foreground/90">
+          <summary className="cursor-pointer font-medium hover:text-foreground">
+            Error Details
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-3xs text-foreground">
+            {displayText}
+          </pre>
+        </details>
+      )}
+    </ErrorPrimitive.Root>
+  );
+
+  return statusError === undefined ? card : <MessagePrimitive.Error>{card}</MessagePrimitive.Error>;
 }

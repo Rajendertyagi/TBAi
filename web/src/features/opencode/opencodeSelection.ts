@@ -16,11 +16,8 @@ export function mergeOpenCodeSelectionState(
   patch: OpenCodeSelectionPatch,
 ): OpenCodeSelectionState {
   return {
-    agent: patch.opencodeAgent === undefined ? current.agent : patch.opencodeAgent ?? "",
-    model: patch.opencodeModel === undefined ? current.model : patch.opencodeModel ?? "",
-    variant:
-      patch.opencodeVariant === undefined
-        ? current.variant
-        : patch.opencodeVariant ?? "",
+    agent: patch.opencodeAgent === undefined ? current.agent : (patch.opencodeAgent ?? ""),
+    model: patch.opencodeModel === undefined ? current.model : (patch.opencodeModel ?? ""),
+    variant: patch.opencodeVariant === undefined ? current.variant : (patch.opencodeVariant ?? ""),
   };
 }

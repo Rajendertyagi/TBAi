@@ -20,11 +20,14 @@ export const ACTIVITY_BAR_WIDTH = 48;
 /** Width of one native-style caption button (min / max / close). */
 export const CAPTION_BUTTON_WIDTH = 46;
 
-/** Combined width of the three caption buttons (3 × 46px). */
-export const WINDOW_CONTROLS_WIDTH = 138;
-
-/** Caption-button strip occupying the window's top-right (Tauri only). */
-export const WINDOW_CAPTION_WIDTH = 138;
+/**
+ * Caption-button strip occupying the window's top-right (Tauri only).
+ *
+ * Derived from the button width rather than written as a literal, because it is
+ * exactly the three caption buttons side by side. An earlier revision declared
+ * the same 138px twice under two names; only one was ever read.
+ */
+export const WINDOW_CAPTION_WIDTH = CAPTION_BUTTON_WIDTH * 3;
 
 /** Left cluster: sidebar toggle + search (two icon buttons + padding). */
 export const LEFT_CHROME_CLUSTER = 80;

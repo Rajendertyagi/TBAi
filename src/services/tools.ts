@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { consumeGrant } from "./grants";
 
 /**
@@ -69,7 +69,9 @@ export interface GrantScope {
   tool: string;
 }
 
-export const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), "workspace"));
+export const WORKSPACE_DIR = path.resolve(
+  process.env.WORKSPACE_DIR || path.join(process.cwd(), "workspace"),
+);
 
 // Ensure the sandbox root exists so relative paths resolve predictably.
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -148,11 +150,7 @@ export function inspectTarget(
  * differently and fails closed. Anything else outside throws
  * `OutsideWorkspaceError` before any IO.
  */
-export function resolveSafe(
-  target: string,
-  base: string,
-  grantScope?: GrantScope,
-): string {
+export function resolveSafe(target: string, base: string, grantScope?: GrantScope): string {
   const { abs, real, root, inside } = inspectTarget(target, base);
   if (inside) return abs;
   if (grantScope) {
@@ -202,7 +200,11 @@ export type StatArgs = { path: string };
 export type DeleteArgs = { path: string };
 export type KillArgs = { pid: number };
 
-export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: string, grantScope?: GrantScope) {
+export function runRead(
+  { path: p, offset = 0, limit }: ReadArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
   const abs = resolveSafe(p, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   if (!fs.statSync(abs).isFile()) throw new ToolError(`Not a file: ${p}`);
@@ -225,14 +227,22 @@ export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: 
   };
 }
 
-export function runWrite({ path: p, content }: WriteArgs, workspaceDir: string, grantScope?: GrantScope) {
+export function runWrite(
+  { path: p, content }: WriteArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
   const abs = resolveSafe(p, workspaceDir, grantScope);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, "utf8");
   return { path: p, bytes: Buffer.byteLength(content, "utf8"), created: !fs.existsSync(abs) };
 }
 
-export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditArgs, workspaceDir: string, grantScope?: GrantScope) {
+export function runEdit(
+  { path: p, oldText, newText, replaceAll = true }: EditArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
   const abs = resolveSafe(p, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   const original = fs.readFileSync(abs, "utf8");
@@ -240,7 +250,9 @@ export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditAr
   const count = original.split(oldText).length - 1;
   if (count === 0) throw new ToolError(`oldText not found in ${p}`);
 
-  const updated = replaceAll ? original.split(oldText).join(newText) : original.replace(oldText, newText);
+  const updated = replaceAll
+    ? original.split(oldText).join(newText)
+    : original.replace(oldText, newText);
   fs.writeFileSync(abs, updated, "utf8");
 
   const idx = original.indexOf(oldText);
@@ -328,7 +340,11 @@ export function previewEdit(
 }
 
 export async function runBash(
-  { command, cwd, onOutput }: BashArgs & {
+  {
+    command,
+    cwd,
+    onOutput,
+  }: BashArgs & {
     onOutput?: (event: BashOutputEvent) => void;
   },
   workspaceDir: string,
@@ -418,7 +434,11 @@ export async function runBash(
 
 // ---- Coding tools (workspace-sandboxed, read-only unless noted) ----
 
-export function runList({ path: dir = "." }: ListArgs, workspaceDir: string, grantScope?: GrantScope) {
+export function runList(
+  { path: dir = "." }: ListArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
   const abs = resolveSafe(dir, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${dir}`);
   const stat = fs.statSync(abs);
@@ -470,7 +490,11 @@ const SEARCH_SKIP_DIRS = new Set([
 const MAX_SEARCH_FILES = 5000;
 const MAX_SEARCH_BYTES = 1_000_000;
 
-export function runSearch({ query, path: target = ".", maxResults = 50 }: SearchArgs, workspaceDir: string, grantScope?: GrantScope) {
+export function runSearch(
+  { query, path: target = ".", maxResults = 50 }: SearchArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
   if (!query) throw new ToolError("Search query is required");
   const abs = resolveSafe(target, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${target}`);
@@ -560,10 +584,10 @@ export function runDelete({ path: p }: DeleteArgs, workspaceDir: string, grantSc
 // ---- Computer tools ----
 
 function runPowershellJson(command: string): unknown {
-  const proc = Bun.spawnSync(
-    ["powershell.exe", "-NoProfile", "-Command", command],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", command], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const out = new TextDecoder().decode(proc.stdout);
   if (proc.exitCode !== 0) {
     const err = new TextDecoder().decode(proc.stderr);
@@ -593,10 +617,13 @@ export function runKill({ pid }: KillArgs) {
   if (!Number.isInteger(pid) || pid <= 0) throw new ToolError(`Invalid pid: ${pid}`);
   if (pid <= 4) throw new ToolError(`Refusing to kill system process ${pid}`);
   if (pid === process.pid) throw new ToolError("Refusing to kill the TBAi server itself");
-  const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", `Stop-Process -Id ${pid} -Force`], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const proc = Bun.spawnSync(
+    ["powershell.exe", "-NoProfile", "-Command", `Stop-Process -Id ${pid} -Force`],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   if (proc.exitCode !== 0) {
     const err = new TextDecoder().decode(proc.stderr);
     throw new ToolError(`Could not kill ${pid}: ${err.slice(0, 500) || `exit ${proc.exitCode}`}`);
@@ -605,7 +632,7 @@ export function runKill({ pid }: KillArgs) {
 }
 
 export async function runSysinfo() {
-  const os = await import("os");
+  const os = await import("node:os");
   return {
     platform: os.platform(),
     arch: os.arch(),

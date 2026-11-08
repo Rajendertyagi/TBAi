@@ -56,7 +56,11 @@ function resolveBaseUrl(): string {
 }
 
 export default defineConfig({
-  testDir: "./e2e",
+  // E2E specs moved to the repository's single test root during the
+  // tests-centralization migration. The config stays in `web/` because `web/`
+  // owns the Playwright dependency and the server under test; only testDir
+  // crosses over. `scripts/run-e2e.ts` reads the same directory.
+  testDir: "../tests/e2e",
   fullyParallel: false,
   reporter: "line",
   // Live acceptance specs are opt-in; see `liveSpecs` above.
@@ -78,6 +82,11 @@ export default defineConfig({
           stderr: "pipe" as const,
         },
       }),
+  // Traces, screenshots and `error-context.md` land inside the test tree that
+  // owns them, not in `web/test-results/` beside the app source. Playwright's
+  // default would put them under `web/`, which is the application root and a
+  // place where a stray artifact directory is easy to mistake for a real one.
+  outputDir: "../tests/.artifacts/playwright",
   projects: [
     // Two browsers, each runnable with and without a window.
     //

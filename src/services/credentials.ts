@@ -69,7 +69,9 @@ export class CredentialStore {
   initialize(): void {
     if (!this.key) {
       const row = db
-        .query<{ key_hex: string }, SQLQueryBindings[]>("SELECT key_hex FROM credential_key WHERE id = 1")
+        .query<{ key_hex: string }, SQLQueryBindings[]>(
+          "SELECT key_hex FROM credential_key WHERE id = 1",
+        )
         .get();
       if (row) {
         this.key = hexToBytes(row.key_hex);
@@ -97,9 +99,7 @@ export class CredentialStore {
     // cannot be hidden by an in-memory cache.
     if (!this.key) this.initialize();
     const row = db
-      .query<{ value: string }, SQLQueryBindings[]>(
-        "SELECT value FROM app_settings WHERE key = ?",
-      )
+      .query<{ value: string }, SQLQueryBindings[]>("SELECT value FROM app_settings WHERE key = ?")
       .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
     if (!row) {
       this.toolApprovalSecretReady = false;
@@ -117,9 +117,7 @@ export class CredentialStore {
 
   private loadOrCreateToolApprovalSecret(): string {
     const row = db
-      .query<{ value: string }, SQLQueryBindings[]>(
-        "SELECT value FROM app_settings WHERE key = ?",
-      )
+      .query<{ value: string }, SQLQueryBindings[]>("SELECT value FROM app_settings WHERE key = ?")
       .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
 
     if (row) {
@@ -128,18 +126,17 @@ export class CredentialStore {
 
     const secret = bytesToHex(randomBytes(TOOL_APPROVAL_SECRET_BYTES));
     const encrypted = this.encryptValue(secret);
-    db.run(
-      `INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [TOOL_APPROVAL_SECRET_SETTING_KEY, encrypted, Date.now()],
-    );
+    db.run(`INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      TOOL_APPROVAL_SECRET_SETTING_KEY,
+      encrypted,
+      Date.now(),
+    ]);
 
     // INSERT OR IGNORE makes startup safe if another local initialization wins
     // the race. Always read back the persisted value rather than trusting the
     // candidate in memory.
     const persisted = db
-      .query<{ value: string }, SQLQueryBindings[]>(
-        "SELECT value FROM app_settings WHERE key = ?",
-      )
+      .query<{ value: string }, SQLQueryBindings[]>("SELECT value FROM app_settings WHERE key = ?")
       .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
     if (!persisted) {
       throw new CredentialError("Failed to persist tool approval secret");
@@ -153,9 +150,7 @@ export class CredentialStore {
       secret = this.decryptValue(envelopeJson);
     } catch {
       // decryptValue already emits the credential funnel line with safe fields.
-      throw new CredentialError(
-        "Failed to load tool approval secret (data may be corrupted)",
-      );
+      throw new CredentialError("Failed to load tool approval secret (data may be corrupted)");
     }
     if (!TOOL_APPROVAL_SECRET_HEX_RE.test(secret)) {
       logger.error("credential", "credential.error", {
@@ -163,9 +158,7 @@ export class CredentialStore {
         retryable: false,
         errorType: "CredentialError",
       });
-      throw new CredentialError(
-        "Failed to load tool approval secret (data may be corrupted)",
-      );
+      throw new CredentialError("Failed to load tool approval secret (data may be corrupted)");
     }
     return secret;
   }
@@ -199,7 +192,7 @@ export class CredentialStore {
         "SELECT encrypted_api_key FROM provider_configs WHERE id = ?",
       )
       .get(providerId);
-    if (!row || !row.encrypted_api_key) {
+    if (!row?.encrypted_api_key) {
       throw new CredentialError("No API key configured for this provider");
     }
     const envelope = JSON.parse(row.encrypted_api_key) as EncryptedEnvelope;
@@ -212,9 +205,7 @@ export class CredentialStore {
         providerId,
         ...errorLogFields(err),
       });
-      throw new CredentialError(
-        "Failed to decrypt credential (data may be corrupted)",
-      );
+      throw new CredentialError("Failed to decrypt credential (data may be corrupted)");
     }
   }
 

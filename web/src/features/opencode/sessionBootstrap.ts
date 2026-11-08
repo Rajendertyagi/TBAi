@@ -1,5 +1,6 @@
 import { logger } from "@/lib/logger";
 import { apiFetch } from "@/lib/platform";
+import type { V2ActivityState } from "./v2Types";
 
 /**
  * Result of bootstrapping an OpenCode session for a conversation.
@@ -7,6 +8,11 @@ import { apiFetch } from "@/lib/platform";
 export interface OpenCodeSessionBootstrapResult {
   sessionId: string;
   directory: string | null;
+  /**
+   * True only when the backend verified and adopted an existing live session.
+   * A reuse fact, not a restart fact.
+   */
+  reusedExistingSession: boolean;
 }
 
 /**
@@ -17,6 +23,15 @@ export interface OpenCodeSessionBootstrapResult {
  * copy of the literal.
  */
 export const OPENCODE_BOOTSTRAP_PATH = "/api/opencode/session";
+
+/**
+ * The backend-filtered activity read for one conversation/session pair.
+ *
+ * `session.active` returns the managed process's GLOBAL active map, so the
+ * browser never calls it. This TBAi route returns only the requested session's
+ * activity and verifies the pair first.
+ */
+export const OPENCODE_SESSION_ACTIVITY_PATH = "/api/opencode/session/activity";
 
 /**
  * Conversation-keyed in-flight bootstrap registry.
@@ -62,7 +77,7 @@ export async function bootstrapOpenCodeSession(
     return existing;
   }
 
-  let promiseRef: { current: Promise<OpenCodeSessionBootstrapResult> | null } = { current: null };
+  const promiseRef: { current: Promise<OpenCodeSessionBootstrapResult> | null } = { current: null };
   const promise = (async () => {
     const histStart = Date.now();
     logger.debug("opencode", "history.load_start", {
@@ -80,6 +95,7 @@ export async function bootstrapOpenCodeSession(
       const data = (await res.json().catch(() => ({}))) as {
         sessionId?: string;
         directory?: string | null;
+        reusedExistingSession?: unknown;
         error?: string;
       };
 
@@ -108,6 +124,8 @@ export async function bootstrapOpenCodeSession(
       return {
         sessionId: data.sessionId,
         directory: data.directory ?? null,
+        // Strict: a malformed or absent value is NOT evidence of reuse.
+        reusedExistingSession: data.reusedExistingSession === true,
       };
     } finally {
       // Race protection: only delete if the map entry still holds THIS exact promise.
@@ -123,13 +141,50 @@ export async function bootstrapOpenCodeSession(
 }
 
 /**
- * Conservative invalidation: if an in-flight operation is active, leave it alone
- * so manual Retry does not spawn concurrent requests. Genuine failures already
- * self-clean upon rejection.
+ * Reads the backend-filtered activity for one session.
+ *
+ * This is a STATUS read, never a resume control, and it must never make a
+ * conversation load fail: every failure — non-OK, malformed body, abort,
+ * network — resolves to `unknown`. `unknown` is not idle, and a caller must
+ * never render it as "not running".
+ *
+ * @param input - The conversation/session pair and the caller's abort signal.
+ * @returns The confirmed activity, or `unknown` when none could be established.
  */
-export function invalidateBootstrap(_conversationId: string): void {
-  // Conservative by contract: an active in-flight bootstrap is NOT cancelled or dropped.
-  // When a bootstrap settles or fails, the map entry is automatically cleaned up.
+export async function fetchOpenCodeSessionActivity(input: {
+  conversationId: string;
+  sessionId: string;
+  signal: AbortSignal;
+}): Promise<V2ActivityState> {
+  try {
+    const res = await apiFetch(OPENCODE_SESSION_ACTIVITY_PATH, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        conversationId: input.conversationId,
+        sessionId: input.sessionId,
+      }),
+      signal: input.signal,
+    });
+    const data = (await res.json().catch(() => ({}))) as { activity?: unknown };
+    if (!res.ok) {
+      logger.debug("opencode", "session.activity_read_failed", {
+        status: res.status,
+      });
+      return "unknown";
+    }
+    // Only the two authoritative answers are accepted; anything else is a
+    // malformed response, not a third state.
+    return data.activity === "running" || data.activity === "not-running"
+      ? data.activity
+      : "unknown";
+  } catch (error) {
+    if (input.signal.aborted) return "unknown";
+    logger.warn("opencode", "session.activity_read_error", {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return "unknown";
+  }
 }
 
 /**
@@ -137,4 +192,41 @@ export function invalidateBootstrap(_conversationId: string): void {
  */
 export function clearAllBootstraps(): void {
   inFlightBootstraps.clear();
+}
+
+export const OPENCODE_RECONCILE_DIRECTORY_PATH = "/api/opencode/session/reconcile-directory";
+
+/**
+ * Reconciles the persisted directory for an OpenCode session after an external move.
+ */
+export async function reconcileOpenCodeSessionDirectory(
+  conversationId: string,
+): Promise<{ sessionId: string; directory: string | null }> {
+  const convId = typeof conversationId === "string" ? conversationId.trim() : "";
+  if (!convId) {
+    throw new Error("conversationId is required");
+  }
+
+  const res = await apiFetch(OPENCODE_RECONCILE_DIRECTORY_PATH, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: convId }),
+  });
+
+  const data = (await res.json().catch(() => ({}))) as {
+    sessionId?: string;
+    directory?: string | null;
+    error?: string;
+  };
+
+  if (!res.ok || !data.sessionId) {
+    throw new Error(
+      data.error || `Failed to reconcile OpenCode session directory: HTTP ${res.status}`,
+    );
+  }
+
+  return {
+    sessionId: data.sessionId,
+    directory: data.directory ?? null,
+  };
 }

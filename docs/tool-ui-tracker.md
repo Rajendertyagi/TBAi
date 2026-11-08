@@ -859,9 +859,9 @@ correct answer (*"That is right about OpenCode's `todowrite`"*) while the
 coverage table 500 lines above listed the tool as a working card. **A document
 that contradicts itself resolves in favour of the part that is easier to scan.**
 
-**The fix is an assertion, not a note.** `web/src/lib/opencode-v2-tools.ts` holds
+**The fix is an assertion, not a note.** `web/src/features/opencode/v2Tools.ts` holds
 the v2 set, the v1 aliases, and the v1-removed list, with the three sources
-above. `opencode-v2-tools.test.ts` asserts every v2 tool is registered, nothing
+above. `tests/unit/web/opencode/v2Tools.test.ts` asserts every v2 tool is registered, nothing
 removed is registered, every alias is *kept*, and nothing is registered outside
 the three lists. It also pins `TOOL_META` against the whole 30-name registry in
 both directions, since a stale entry there reads as a claim the tool is handled.

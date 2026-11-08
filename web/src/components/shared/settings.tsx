@@ -28,11 +28,7 @@ export function SettingsPage({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <h1 className="text-base font-semibold">{title}</h1>
-          {description && (
-            <p className="text-xs leading-5 text-muted-foreground">
-              {description}
-            </p>
-          )}
+          {description && <p className="text-xs leading-5 text-muted-foreground">{description}</p>}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
@@ -69,22 +65,14 @@ export function SettingsSection({
 }) {
   const Icon = icon;
   return (
-    <section
-      className={cn("space-y-3 rounded-xl border border-border bg-card p-4", className)}
-    >
+    <section className={cn("space-y-3 rounded-xl border border-border bg-card p-4", className)}>
       <div
-        className={cn(
-          "flex justify-between gap-3",
-          description ? "items-start" : "items-center",
-        )}
+        className={cn("flex justify-between gap-3", description ? "items-start" : "items-center")}
       >
         <div className="min-w-0 space-y-1">
           <h2 className="text-sm font-semibold">
             {controlId ? (
-              <label
-                htmlFor={controlId}
-                className="flex cursor-pointer items-center gap-2"
-              >
+              <label htmlFor={controlId} className="flex cursor-pointer items-center gap-2">
                 {Icon && (
                   <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 )}
@@ -99,15 +87,9 @@ export function SettingsSection({
               </span>
             )}
           </h2>
-          {description && (
-            <p className="text-xs leading-5 text-muted-foreground">
-              {description}
-            </p>
-          )}
+          {description && <p className="text-xs leading-5 text-muted-foreground">{description}</p>}
         </div>
-        {(action ?? control) && (
-          <div className="shrink-0">{action ?? control}</div>
-        )}
+        {(action ?? control) && <div className="shrink-0">{action ?? control}</div>}
       </div>
       {children}
     </section>
@@ -133,10 +115,7 @@ export function SettingRow({
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <div
-        className={cn(
-          "flex justify-between gap-3",
-          description ? "items-start" : "items-center",
-        )}
+        className={cn("flex justify-between gap-3", description ? "items-start" : "items-center")}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-sm">
@@ -146,9 +125,7 @@ export function SettingRow({
             {label}
           </div>
           {description && (
-            <div className="text-xs leading-5 text-muted-foreground">
-              {description}
-            </div>
+            <div className="text-xs leading-5 text-muted-foreground">{description}</div>
           )}
         </div>
         {control && <div className="shrink-0">{control}</div>}

@@ -70,11 +70,7 @@ export function resolveApiProtocol(
 export function usesOpenAICompatibleModel(
   config: Pick<ModelInput, "type" | "apiProtocol">,
 ): boolean {
-  if (
-    config.type !== "openai" &&
-    config.type !== "custom" &&
-    config.type !== "ollama"
-  ) {
+  if (config.type !== "openai" && config.type !== "custom" && config.type !== "ollama") {
     return false;
   }
   return resolveApiProtocol(config) === "chat-completions";
@@ -86,19 +82,12 @@ export function usesOpenAICompatibleModel(
  * @param config - The provider being built.
  * @returns The compatible provider's name for a gateway model, else `"openai"`.
  */
-export function providerOptionsNamespace(
-  config: Pick<ModelInput, "type" | "apiProtocol">,
-): string {
-  return usesOpenAICompatibleModel(config)
-    ? OPENAI_COMPATIBLE_PROVIDER_NAME
-    : "openai";
+export function providerOptionsNamespace(config: Pick<ModelInput, "type" | "apiProtocol">): string {
+  return usesOpenAICompatibleModel(config) ? OPENAI_COMPATIBLE_PROVIDER_NAME : "openai";
 }
 
 /** Resolve an OpenAI-compatible model for the given wire protocol. */
-function buildOpenAIModel(
-  config: ModelInput,
-  protocol: ApiProtocol | undefined,
-): LanguageModel {
+function buildOpenAIModel(config: ModelInput, protocol: ApiProtocol | undefined): LanguageModel {
   const settings: { apiKey?: string; baseURL?: string } = {};
   if (config.apiKey) settings.apiKey = config.apiKey;
   if (config.endpoint) settings.baseURL = config.endpoint;

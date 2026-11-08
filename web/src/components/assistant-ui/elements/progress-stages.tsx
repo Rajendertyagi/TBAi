@@ -72,7 +72,7 @@ export const ProgressStages: FC<Props> = ({ data }) => {
     <div className="my-2 rounded-lg border border-border/60 bg-muted/30 p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
         <span className="font-medium text-foreground">Agent progress</span>
-        <span className="ml-auto text-[10px] tabular-nums">
+        <span className="ml-auto text-3xs tabular-nums">
           {activeCount > 0 ? `${activeCount}/${totalCount} active` : `${totalCount} steps`}
         </span>
       </div>

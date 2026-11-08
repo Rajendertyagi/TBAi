@@ -1,7 +1,7 @@
 # MCP — Model Context Protocol Client
 
 TBAi includes a **standards-based generic MCP client** built on the official
-[`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk). It
+[`@modelcontextprotocol/client`](https://www.npmjs.com/package/@modelcontextprotocol/client) v2.3.1. It
 connects to **any** compliant MCP server over **STDIO**, **Streamable HTTP**, or **legacy SSE**,
 discovers its capabilities (tools, resources, prompts, server info), and exposes those tools to the
 chat model via **AI SDK v7** `tool()` wrappers. No server-specific code is required — point TBAi at
@@ -20,9 +20,10 @@ a server and its tools become model-callable automatically.
   over the `/api/mcp` REST API.
 - **Portable config.** Server definitions are stored in SQLite (`mcp_servers` table). Auth tokens are
   encrypted at rest with the same local DEK as provider keys (see `security.md`).
-- **Non-coder-friendly GUI.** The MCP panel (`web/src/components/McpPanel.tsx`) lets a user add a
-  server by name + transport + command/URL, test the connection, watch live status, browse the
-  discovered tools/resources/prompts, and see recent server notifications — no JSON, no CLI.
+- **Non-coder-friendly GUI.** The MCP panel (`web/src/features/mcp/components/McpPanel.tsx`) lets
+  a user add a server by name + transport + command/URL, test the connection, watch live status,
+  browse the discovered tools/resources/prompts, and see recent server notifications — no JSON, no
+  CLI.
 
 ## Architecture
 
@@ -74,7 +75,7 @@ A singleton (`mcpManager`) that owns all MCP connections for the process.
     `auth_type`/`auth_token` (bearer → `Authorization: Bearer …`, basic → `Authorization: Basic
     base64(token)`, oauth → bearer).
   - `sse`: `SSEClientTransport` (legacy MCP servers) with the same auth header construction.
-- **Connection lifecycle.** `connect(config)` builds a `Client` (`@modelcontextprotocol/sdk/client`),
+- **Connection lifecycle.** `connect(config)` builds a `Client` (`@modelcontextprotocol/client`),
   passes client capabilities `{ sampling: {}, elicitation: {}, roots: { listChanged: false } }`
   (these are **client** capabilities — do not set `tools/resources/prompts` here; those are server
   capabilities), attaches notification handlers, calls `client.connect()`, then discovers tools /
@@ -145,9 +146,9 @@ Auth tokens use the same AES-256-GCM local DEK as provider keys (`encryptSecret`
   `McpServerDraft`.
 - `web/src/config/navigation.ts` — adds a `mcp` view (`ViewId`) and a bottom-nav entry (Plug icon),
   configuration-driven like every other nav item.
-- `web/src/stores/mcpStore.ts` — Zustand store for the server list, selected server, test status, and
-  live events; fetches from `/api/mcp`.
-- `web/src/components/McpPanel.tsx` — the management GUI: add/edit/delete, enable toggle,
+- `web/src/features/mcp/state/mcpStore.ts` — Zustand store for the server list, selected server, test
+  status, and live events; fetches from `/api/mcp`.
+- `web/src/features/mcp/components/McpPanel.tsx` — the management GUI: add/edit/delete, enable toggle,
   connect/disconnect/refresh, **Test connection**, and panels for tools / resources / prompts plus a
   recent-events feed. Non-coder-friendly: transport + auth pickers, key-value env/header editors, no
   raw JSON.

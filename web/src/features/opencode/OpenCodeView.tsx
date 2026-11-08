@@ -8,8 +8,9 @@ import { DevToolsGate } from "@/components/DevToolsGate";
 import { ChatWindow } from "@/components/ChatWindow";
 import { ThreadBootSkeleton } from "@/components/assistant-ui/elements/thread-boot-skeleton";
 import { appToolkit } from "@/tools/toolkit";
+import { ROUTES } from "@/config/navigation";
 import { useConversationTab } from "@/features/chat/state/useConversationTab";
-import { OPENCODE_INIT_TIMEOUT_MS } from "@/config/opencode";
+import { OPENCODE_INIT_TIMEOUT_MS } from "@/features/opencode/config";
 import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
@@ -19,14 +20,13 @@ import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { shouldReconnectForEpoch } from "./recoveryEpoch";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { FirstPromptHandoff } from "./FirstPromptHandoff";
-import {
-  bootstrapOpenCodeSession,
-  invalidateBootstrap,
-} from "./sessionBootstrap";
+import { bootstrapOpenCodeSession } from "./sessionBootstrap";
 import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
+import { OpenCodeRecoveryNotice } from "./OpenCodeRecoveryNotice";
+import { OpenCodePrimaryStatus } from "./OpenCodePrimaryStatus";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
 
 /**
@@ -45,6 +45,10 @@ export function OpenCodeView() {
   // without it a finished reply only appears after a history reload. Kept
   // beside the id so the two are always set together and never used apart.
   const [eventDirectory, setEventDirectory] = useState<string | null>(null);
+  // True only when the backend verified and adopted an existing live session.
+  // Set with the id/directory from the same bootstrap result, because it
+  // describes that exact session.
+  const [reusedExistingSession, setReusedExistingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Init attempt counter: bumping it re-runs the session fetch (a single,
   // idempotent "start one server / resume one session" call — never a poll).
@@ -70,7 +74,11 @@ export function OpenCodeView() {
   // different things and conflating them is how the blank state reappears.
   const config = useOpenCodeConversationConfig(agentId);
   const { models, defaultModel: serverDefault } = useOpenCodeCapabilities();
-  const defaultModel = useResolvedOpenCodeModel(config?.opencodeModel ?? null, models, serverDefault);
+  const defaultModel = useResolvedOpenCodeModel(
+    config?.opencodeModel ?? null,
+    models,
+    serverDefault,
+  );
   const defaultAgent = config?.opencodeAgent ?? undefined;
   const defaultModelWithVariant = defaultModel
     ? { ...defaultModel, ...(config?.opencodeVariant ? { variant: config.opencodeVariant } : {}) }
@@ -79,19 +87,29 @@ export function OpenCodeView() {
   const retry = useCallback(() => {
     setError(null);
     setTimedOut(false);
-    if (agentId) {
-      invalidateBootstrap(agentId);
-    }
+    // L3: the `invalidateBootstrap(agentId)` call was DELETED on 2026-10-22.
+    //
+    // It was an empty function, and what it PROMISED - "do not spawn a
+    // concurrent request while one is in flight" - is already guaranteed: the
+    // bootstrap map self-cleans in its own `finally`, so a failed attempt is
+    // gone by the time the reader presses Retry, and an attempt still in
+    // flight is shared rather than duplicated. A function that promises a reset
+    // and does nothing is worse than its absence, because the caller reads it
+    // as a guarantee it does not have.
+    //
+    // The retry itself is the `attempt` lever: it re-runs the effect, which
+    // calls `bootstrapOpenCodeSession` again.
     setAttempt((n) => n + 1);
-  }, [agentId]);
+  }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `sessionId` is SET by this effect (line below), so depending on it would re-run the whole session bootstrap as soon as the id arrives - bootstrapping a second session for the one it just created. The bootstrap is keyed on `agentId` and on `attempt` (the retry lever) by design.
   useEffect(() => {
-    if (!agentId || !agentId.trim()) {
+    if (!agentId?.trim()) {
       // No auto-created conversation: Code mode shares the welcome draft
       // with normal chat (engine picker). The first send with the OpenCode
       // engine mints the conversation and routes here, so visiting /code
       // alone must never leave phantom rows behind.
-      navigate("/chat/new", { replace: true });
+      navigate(ROUTES.CHAT_NEW, { replace: true });
       return;
     }
 
@@ -114,6 +132,7 @@ export function OpenCodeView() {
         // `sessionId` exists — always builds its event subscription from a
         // client that already carries the scope.
         setEventDirectory(data.directory);
+        setReusedExistingSession(data.reusedExistingSession);
         setSessionId(data.sessionId);
       })
       .catch((e: unknown) => {
@@ -170,6 +189,7 @@ export function OpenCodeView() {
       defaultModel={defaultModelWithVariant}
       defaultAgent={defaultAgent}
       conversationId={agentId}
+      reusedExistingSession={reusedExistingSession}
     />
   );
 }
@@ -180,6 +200,7 @@ function AgentRuntime({
   defaultModel,
   defaultAgent,
   conversationId,
+  reusedExistingSession,
 }: {
   sessionId: string;
   eventDirectory: string | null;
@@ -187,6 +208,8 @@ function AgentRuntime({
   defaultAgent?: string;
   /** The TBAi conversation this session belongs to — the Auto shield's owner. */
   conversationId?: string;
+  /** Verified session reuse, from the same bootstrap result that produced `sessionId`. */
+  reusedExistingSession: boolean;
 }) {
   // The conversation's persisted OpenCode config, read through the existing
   // path. `opencodeAutoApprove` on it is the Auto shield's single source of
@@ -253,10 +276,7 @@ function AgentRuntime({
   // model context, but the OpenCode runtime never reads model context (it
   // builds prompts server-side from OpenCode's own tool list), so that half is
   // inert here. Only the renderer half takes effect.
-  const config = useMemo(
-    () => AuiConfig({ tools: Tools({ toolkit: appToolkit }) }),
-    [],
-  );
+  const config = useMemo(() => AuiConfig({ tools: Tools({ toolkit: appToolkit }) }), []);
 
   // The composer's session-dependent seams read from here (the Shield chip's
   // reconcile path, and the built-in `/compact` action's session/directory/
@@ -271,7 +291,11 @@ function AgentRuntime({
       setDesiredSelection: controller.setDesiredSelection,
       reconcileStagedRevert: controller.reconcileStagedRevert,
       ...(defaultModel
-        ? { providerID: defaultModel.providerID, modelID: defaultModel.modelID, ...(defaultModel.variant ? { variant: defaultModel.variant } : {}) }
+        ? {
+            providerID: defaultModel.providerID,
+            modelID: defaultModel.modelID,
+            ...(defaultModel.variant ? { variant: defaultModel.variant } : {}),
+          }
         : {}),
     }),
     [sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
@@ -293,10 +317,26 @@ function AgentRuntime({
             <div className="min-h-0 flex-1">
               <ChatWindow
                 mode="agent"
-                aboveComposerExtra={<OpenCodeQuestions />}
-                belowComposerExtra={
-                  <OpenCodeStatus compact onReconnect={reconnect} />
-                }
+                composerExtras={{
+                  // Interactive: natural height, above the reserved row.
+                  interactive: <OpenCodeQuestions />,
+                  // Status: transient presentations only — the primary owns the
+                  // active turn, the notice states what the reuse verified.
+                  // Primary first so it occupies the top line when the row wraps.
+                  status: (
+                    <>
+                      <OpenCodePrimaryStatus />
+                      <OpenCodeRecoveryNotice
+                        key={sessionId}
+                        reusedExistingSession={reusedExistingSession}
+                        sessionId={sessionId}
+                      />
+                    </>
+                  ),
+                  // The connection heart keeps its own constant-height row
+                  // outside the reserved status row; its popover is an overlay.
+                  below: <OpenCodeStatus compact onReconnect={reconnect} />,
+                }}
               />
             </div>
           </div>

@@ -56,7 +56,7 @@ import { Marker, MarkerContent } from "@/components/ui/marker";
  * reclaimed. The summary is durable; whether you had it open is not worth that.
  */
 
-/** The outcomes `src/routes/direct-compact-command.ts` emits. */
+/** The outcomes `src/routes/chat/compact-command.ts` emits. */
 export type CompactOutcome = "compacted" | "skipped" | "failed";
 
 /**

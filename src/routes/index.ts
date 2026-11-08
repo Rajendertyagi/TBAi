@@ -1,16 +1,24 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { sanitizeStreamError } from "../lib/redact";
 import { db } from "../db";
+import { WEB_DIST_DIR } from "../config/web-dist";
+import { isAllowedCorsOrigin } from "../config/cors";
+import { getActivePort, getReplacedPort } from "../services/server-listener";
 import { accountingMiddleware, metricsText, logLossMetricsText } from "../services/http-metrics";
-import { logger, runWithRequestContext, getRequestContext, resolveInboundCorrelation } from "../lib/logger";
+import {
+  logger,
+  runWithRequestContext,
+  getRequestContext,
+  resolveInboundCorrelation,
+} from "../lib/logger";
 import { errorLogFields } from "../lib/errors";
 import mcpApp from "./mcp";
 import logsApp from "./logs";
 import schedulerApp from "./scheduler";
-import chatApp from "./chat";
+import chatApp from "./chat/index";
 import toolsApp from "./tools";
 import providersApp from "./providers";
 import conversationsApp from "./conversations";
@@ -29,33 +37,71 @@ import serverApp from "./server";
  */
 const app = new Hono<{ Variables: { requestId: string } }>();
 
+/**
+ * The ports TBAi serves its own pages on: the live listener's port, and the
+ * port that listener replaced.
+ *
+ * The replaced port is what makes a port change work in a browser: the page is
+ * still on the old origin when the new one comes up, and it asks the new
+ * origin whether it is ready. That request is cross-origin, so the new
+ * listener has to trust the page it replaced.
+ *
+ * The trust is BOUNDED: the listener reports the replaced port only while the
+ * restart transition is still open (`REPLACED_PORT_TRUST_WINDOW_MS`), so the
+ * old origin does not stay trusted for the life of the process.
+ */
+function servedPagePorts(): number[] {
+  return [getActivePort(), getReplacedPort()].filter((port) => port > 0);
+}
+
 app.use(
   "*",
   cors({
-    origin: (origin) => {
-      if (
-        !origin ||
-        origin === "http://app.localhost" ||
-        /^http:\/\/localhost(:\d+)?$/.test(origin) ||
-        /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-      ) {
-        return origin || "*";
-      }
-      return null;
-    },
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    /**
+     * Only the origins TBAi actually serves a page from may read a response:
+     * the packaged desktop webview, and TBAi's own pages on the port the
+     * listener is on (or the one it just replaced).
+     *
+     * The ports are DERIVED, never listed: the port is the user's choice, so
+     * a fixed port in the policy would break the first time the user moved
+     * off it — and it already had: the browser-mode restart probes the new
+     * origin from the page that is still on the old one, and that request is
+     * cross-origin.
+     *
+     * A request with **no** `Origin` header gets no CORS headers at all: it
+     * is a same-origin or a non-browser request, and neither is subject to
+     * CORS. The pre-narrowing policy answered `Access-Control-Allow-Origin: *`
+     * there, which handed a wildcard to anything that asked.
+     *
+     * The origins, and the evidence for each, are in `src/config/cors.ts`.
+     */
+    origin: (origin) => (isAllowedCorsOrigin(origin, servedPagePorts()) ? origin : null),
+    /**
+     * The methods the app actually calls.
+     *
+     * `PATCH` was missing from this list, and the app calls it in fifteen
+     * places (conversation rename, folder rename, memory edit, quick-message
+     * edit, scheduler job edit, the auto-approve toggle, the OpenCode chip).
+     * A `PATCH` is never a "simple" request, so the browser preflights it —
+     * and a preflight whose `Access-Control-Allow-Methods` omits the
+     * requested method FAILS, so the browser never sends the request. In the
+     * packaged app, where every API call is cross-origin, that blocked all
+     * of them. The method list has to name the methods the app uses:
+     * omitting one is not a restriction, it is a broken client.
+     */
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
       "Accept",
       "X-TBAI-Operation-ID",
-      "x-opencode-directory",
+      // The browser's only OpenCode scope input. It names the session; the
+      // backend resolves the workspace. The browser no longer sends a
+      // directory of its own choosing, and `x-opencode-directory` is
+      // deliberately not allowed here either.
+      "x-tbai-session",
       "x-request-id",
     ],
-    exposeHeaders: [
-      "x-resumable-stream-id",
-      "x-request-id",
-      "Content-Type",
-    ],
+    exposeHeaders: ["x-resumable-stream-id", "x-request-id", "Content-Type"],
   }),
 );
 
@@ -155,8 +201,7 @@ app.route("/api/server", serverApp);
 // Raw exception text never crosses either boundary.
 app.onError((err, c) => {
   const ctx = getRequestContext();
-  const requestId =
-    (c.get("requestId") as string | undefined) ?? ctx?.requestId ?? "req_unknown";
+  const requestId = (c.get("requestId") as string | undefined) ?? ctx?.requestId ?? "req_unknown";
   logger.error("http", "http.error", {
     requestId,
     ...(ctx?.operationId ? { operationId: ctx.operationId } : {}),
@@ -188,15 +233,29 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 /**
  * Where the built SPA is served from.
  *
- * Defaults to `<cwd>/dist/web` — the same `dist/` that holds the compiled
- * `tbai-server`, and the same layout the packaged/portable build produces. One
- * folder to copy, and no chance of local output diverging from what CI ships.
+ * `<installRoot>/dist/web` in a checkout and `<dirname(executable)>/web` when
+ * packaged — the same `dist/` that holds the compiled `tbai-server`, so one
+ * folder is the whole product and local output cannot diverge from what ships.
+ *
+ * Anchored to the install rather than to `process.cwd()`: the served directory
+ * must not depend on where the process was launched. Resolution and its
+ * rationale live in `src/config/web-dist.ts`.
  *
  * `WEB_DIST_DIR` remains the only seam that redirects this, which is what lets the
  * e2e suite and the CPU-profiling run serve a different artifact without touching
  * production code.
  */
-const DIST_DIR = process.env.WEB_DIST_DIR || path.join(process.cwd(), "dist", "web");
+const DIST_DIR = WEB_DIST_DIR;
+
+// A missing served directory is a deployment fault, and the symptom (every
+// route falls through to a 404) is indistinguishable from a routing bug. Say so
+// once, at composition, naming the path that was tried.
+if (!fs.existsSync(DIST_DIR)) {
+  logger.warn("server", "web_dist_missing", {
+    webDistDir: DIST_DIR,
+    message: "served SPA directory does not exist; GET / will 404",
+  });
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -234,7 +293,7 @@ function cacheControlFor(rel: string): string | null {
 // — the SPA fallback then takes over.
 function safeStaticPath(rel: string): string | null {
   const normalized = path.posix.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, "");
-  const resolved = path.resolve(DIST_DIR, "." + normalized);
+  const resolved = path.resolve(DIST_DIR, `.${normalized}`);
   if (resolved !== DIST_DIR && !resolved.startsWith(DIST_DIR + path.sep)) {
     return null;
   }
@@ -255,15 +314,21 @@ app.get("/readyz", async (c) => {
     // Cheap DB liveness probe: if SQLite is healthy the query succeeds.
     db.query("SELECT 1 AS ok").get();
   } catch {
-    return Response.json({ ready: false, error: "db_unavailable" }, {
-      status: 503,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-    });
+    return Response.json(
+      { ready: false, error: "db_unavailable" },
+      {
+        status: 503,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      },
+    );
   }
-  return Response.json({ ready: true }, {
-    status: 200,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
+  return Response.json(
+    { ready: true },
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    },
+  );
 });
 
 app.get("/metrics", (c) => {

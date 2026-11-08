@@ -10,10 +10,10 @@
  * "user approval required" error — approval gates can never be silently
  * bypassed. MCP tools are excluded in V1 (documented limitation).
  */
-import { streamText, stepCountIs, tool, type UIMessage } from "ai";
+import { streamText, stepCountIs, tool } from "ai";
 import { z } from "zod";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { getModel } from "../ai";
 import { registry } from "../../config/providers";
 import { credentialStore } from "../credentials";
@@ -60,34 +60,43 @@ function refusalTool(name: string, description: string) {
 export function buildSchedulerTools() {
   return {
     read_file: tool({
-      description:
-        "Read a text file from the workspace. Returns the file content.",
+      description: "Read a text file from the workspace. Returns the file content.",
       inputSchema: toolReadSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("read_file", async (args: any) => runRead(args, getWorkspaceDir())),
+      execute: instrumentedExecute("read_file", async (args: any) =>
+        runRead(args, getWorkspaceDir()),
+      ),
     }),
     list_dir: tool({
       description: "List files and folders inside the workspace.",
       inputSchema: toolListSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("list_dir", async (args) => runList(args, getWorkspaceDir())),
+      // Annotated as `any` to match the `read_file` sibling above: under
+      // strictNullChecks the SDK infers `unknown` for this callback when
+      // `inputSchema` is a plain zod object, and `runList` needs the parsed
+      // shape. The runtime validation still happens in `toolListSchema.parse`.
+      execute: instrumentedExecute("list_dir", async (args: any) =>
+        runList(args, getWorkspaceDir()),
+      ),
     }),
     search_files: tool({
-      description:
-        "Search file contents inside the workspace (case-insensitive).",
+      description: "Search file contents inside the workspace (case-insensitive).",
       inputSchema: toolSearchSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("search_files", async (args: any) => runSearch(args, getWorkspaceDir())),
+      execute: instrumentedExecute("search_files", async (args: any) =>
+        runSearch(args, getWorkspaceDir()),
+      ),
     }),
     file_info: tool({
       description: "Show size, type and timestamps for a workspace path.",
       inputSchema: toolStatSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("file_info", async (args: any) => runStat(args, getWorkspaceDir())),
+      execute: instrumentedExecute("file_info", async (args: any) =>
+        runStat(args, getWorkspaceDir()),
+      ),
     }),
     process_list: tool({
-      description:
-        "List running processes on this computer (pid, name, CPU, memory).",
+      description: "List running processes on this computer (pid, name, CPU, memory).",
       inputSchema: z.object({}),
       outputSchema: z.unknown(),
       execute: instrumentedExecute("process_list", async () => runProcesses()),
@@ -132,9 +141,7 @@ export function verifyJobWorkspace(workspacePath: string): string {
   const root = getWorkspaceDir();
   const abs = path.resolve(workspacePath);
   if (abs !== root && !abs.startsWith(root + path.sep)) {
-    throw new ToolError(
-      `Workspace "${workspacePath}" is outside the permitted workspace root`,
-    );
+    throw new ToolError(`Workspace "${workspacePath}" is outside the permitted workspace root`);
   }
   let probe = abs;
   while (true) {
@@ -215,18 +222,106 @@ export function resolveJobModel(job: SchedulerJob): {
 export async function ensureJobConversation(
   job: SchedulerJob,
 ): Promise<{ conversationId: string; created: boolean; safeToDelete: boolean }> {
+  if (job.engine === "opencode") {
+    if (job.opencodeSessionStrategy === "existing_conversation") {
+      if (!job.conversationId) {
+        throw new ToolError(
+          `Job "${job.name}" uses existing conversation strategy but has no conversation selected. Select a conversation when creating or editing the job.`,
+        );
+      }
+      const conv = await conversationService.get(job.conversationId);
+      if (!conv) {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" not found (deleted or archived). Update the job to select a valid conversation.`,
+        );
+      }
+      if (conv.status === "archived") {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" is archived. Update the job to select a valid conversation.`,
+        );
+      }
+      if (conv.engine !== "opencode") {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" does not belong to OpenCode engine. Update the job to select a valid OpenCode conversation.`,
+        );
+      }
+      if (
+        job.workspaceFolderId &&
+        conv.workspaceFolderId &&
+        job.workspaceFolderId !== conv.workspaceFolderId
+      ) {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" belongs to a different workspace folder.`,
+        );
+      }
+      // Verify directory compatibility via the authoritative resolver; never
+      // silently move or fall back. Prefer resolved dir over stale metadata.
+      try {
+        const { resolveConversationWorkspace } = await import("../workspace");
+        const resolved = await resolveConversationWorkspace(conv.id);
+        if (job.workspacePath && resolved.dir) {
+          if (path.resolve(job.workspacePath) !== path.resolve(resolved.dir)) {
+            throw new ToolError(
+              `Conversation "${job.conversationId}" belongs to a different workspace directory.`,
+            );
+          }
+        }
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(
+          `Conversation "${job.conversationId}" workspace is no longer resolvable.`,
+        );
+      }
+      return { conversationId: conv.id, created: false, safeToDelete: false };
+    }
+    if (job.opencodeSessionStrategy === "persistent") {
+      if (job.conversationId) {
+        const existing = await conversationService.get(job.conversationId);
+        if (existing && existing.status !== "archived") {
+          return { conversationId: existing.id, created: false, safeToDelete: true };
+        }
+      }
+      const created = await conversationService.create({
+        title: `[Scheduler] ${job.name}`,
+        providerId: "opencode",
+        modelId: job.opencodeModel ?? null,
+        workspaceMode: "project",
+        workspaceFolderId: job.workspaceFolderId,
+        engine: "opencode",
+        opencodeAgent: job.opencodeAgent ?? undefined,
+        opencodeModel: job.opencodeModel ?? undefined,
+        opencodeVariant: job.opencodeVariant ?? undefined,
+      });
+      schedulerStore.update(job.id, { conversationId: created.id });
+      return { conversationId: created.id, created: true, safeToDelete: true };
+    }
+    // fresh session strategy
+    const created = await conversationService.create({
+      title: `[Scheduler: Fresh] ${job.name}`,
+      providerId: "opencode",
+      modelId: job.opencodeModel ?? null,
+      workspaceMode: "project",
+      workspaceFolderId: job.workspaceFolderId,
+      engine: "opencode",
+      opencodeAgent: job.opencodeAgent ?? undefined,
+      opencodeModel: job.opencodeModel ?? undefined,
+      opencodeVariant: job.opencodeVariant ?? undefined,
+    });
+    return { conversationId: created.id, created: true, safeToDelete: true };
+  }
+
   if (job.conversationPolicy === "existing_thread") {
     if (!job.conversationId) {
       throw new ToolError(
         `Job "${job.name}" uses existing-thread mode but has no conversationId. ` +
-        `Select a conversation when creating or editing the job.`,
+          `Select a conversation when creating or editing the job.`,
       );
     }
     const conv = await conversationService.get(job.conversationId);
     if (!conv) {
       throw new ToolError(
         `Conversation "${job.conversationId}" not found (deleted or archived). ` +
-        `Update the job to select a valid conversation.`,
+          `Update the job to select a valid conversation.`,
       );
     }
     if (conv.status === "archived") {
@@ -275,6 +370,16 @@ export async function executeJobRun(
   conversationId: string,
   parentSignal?: AbortSignal,
 ): Promise<ExecutionResult> {
+  if (job.engine === "opencode") {
+    const { executeOpenCodeScheduledTurn } = await import("../opencode/scheduledExecution");
+    return executeOpenCodeScheduledTurn({
+      job,
+      run,
+      conversationId,
+      parentSignal,
+    });
+  }
+
   const requestId = run.requestId ?? newRequestId();
   const log = logger.child({
     requestId,
@@ -339,7 +444,11 @@ export async function executeJobRun(
         id: userMsgId,
         parent_id: tip,
         format: "ai-sdk/v6",
-        content: { id: userMsgId, role: "user", parts: [{ type: "text", text: displayPrompt, state: "done" as const }] },
+        content: {
+          id: userMsgId,
+          role: "user",
+          parts: [{ type: "text", text: displayPrompt, state: "done" as const }],
+        },
       });
       const result = streamText({
         model,
@@ -358,7 +467,11 @@ export async function executeJobRun(
         id: assistantMsgId,
         parent_id: userMsgId,
         format: "ai-sdk/v6",
-        content: { id: assistantMsgId, role: "assistant", parts: [{ type: "text", text, state: "done" as const }] },
+        content: {
+          id: assistantMsgId,
+          role: "assistant",
+          parts: [{ type: "text", text, state: "done" as const }],
+        },
       });
       const excerpt = text.slice(0, 2000);
       const durationMs = Date.now() - started;
@@ -399,21 +512,28 @@ export async function executeJobRun(
       }
       const norm = normalizeError(err);
       const aborted =
-        controller.signal.aborted ||
-        /abort|aborted|timeout|timed out/i.test(norm.message);
+        controller.signal.aborted || /abort|aborted|timeout|timed out/i.test(norm.message);
       const message = aborted
         ? `Run timed out after ${job.timeoutSeconds}s`
         : sanitizeStreamError(err);
       lastError = message;
       // Best-effort: persist an error message so the thread shows why it failed.
+      // G5 decision: chain the failure row to the thread tip, matching the
+      // success path. parent_id: null would make the row unreachable from the
+      // head chain and invisible to P1′ reconstruction.
       if (conversationId) {
         try {
           const errId = generateId();
+          const tip = await messageService.getThreadTip(conversationId);
           await messageService.upsertStored(conversationId, {
             id: errId,
-            parent_id: null,
+            parent_id: tip,
             format: "ai-sdk/v6",
-            content: { id: errId, role: "assistant", parts: [{ type: "text", text: `Error: ${message}`, state: "done" as const }] },
+            content: {
+              id: errId,
+              role: "assistant",
+              parts: [{ type: "text", text: `Error: ${message}`, state: "done" as const }],
+            },
           });
         } catch {
           /* persistence error must not mask the real error */

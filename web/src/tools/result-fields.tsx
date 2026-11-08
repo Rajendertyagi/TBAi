@@ -85,15 +85,14 @@ function isPrimitiveField(value: unknown): boolean {
 }
 
 /** The field pairs of a flat object, or `null` when it is not flat. */
-function flatFields(
-  value: unknown,
-): { key: string; value: unknown }[] | null {
+function flatFields(value: unknown): { key: string; value: unknown }[] | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  const entries = Object.entries(value as Record<string, unknown>).map(
-    ([key, field]) => ({ key, value: field }),
-  );
+  const entries = Object.entries(value as Record<string, unknown>).map(([key, field]) => ({
+    key,
+    value: field,
+  }));
   if (entries.length === 0) return null;
   if (!entries.every((entry) => isPrimitiveField(entry.value))) return null;
   return entries;
@@ -245,9 +244,5 @@ export function ResultRow({
 export function FieldsOrJson({ value }: { value: unknown }) {
   const flat = flatResultFields(value);
   if (flat !== null) return <FieldList {...flat} />;
-  return (
-    <BoundedBody
-      text={typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-    />
-  );
+  return <BoundedBody text={typeof value === "string" ? value : JSON.stringify(value, null, 2)} />;
 }

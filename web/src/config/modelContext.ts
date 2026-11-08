@@ -70,9 +70,7 @@ export function resolveContextWindow(source: ContextWindowSource): number {
   const live = validWindow(source.limitContext);
   if (live !== undefined) return live;
   if (source.modelId && source.groups) {
-    const configured = validWindow(
-      findModelOption(source.groups, source.modelId)?.contextWindow,
-    );
+    const configured = validWindow(findModelOption(source.groups, source.modelId)?.contextWindow);
     if (configured !== undefined) return configured;
   }
   return DEFAULT_MODEL_CONTEXT_WINDOW;
@@ -83,10 +81,8 @@ export function resolveContextWindow(source: ContextWindowSource): number {
  * provider-settings surfaces; the ring itself formats internally.
  */
 export function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000)
-    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (tokens >= 1_000)
-    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   return `${tokens}`;
 }
 

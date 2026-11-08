@@ -6,19 +6,14 @@
  * literals, per the configuration-first rule.
  */
 
-export type SidebarSectionId = "folders" | "chats" | "recent";
+export type SidebarSectionId = "folders" | "chats";
 
 export type SidebarSortMode = "updated" | "created";
 
 /** All reorderable sections, in default top-to-bottom order. */
-export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
-  "folders",
-  "chats",
-  "recent",
-];
+export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = ["folders", "chats"];
 
-export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] =
-  SIDEBAR_SECTION_IDS;
+export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] = SIDEBAR_SECTION_IDS;
 
 export const DEFAULT_SORT_MODE: SidebarSortMode = "updated";
 
@@ -30,10 +25,8 @@ export interface SidebarConfig {
   defaultSectionOrder: readonly SidebarSectionId[];
   /** Default thread sort. `updated` matches the server's newest-first order. */
   defaultSort: SidebarSortMode;
-  /** Whether the Recent section renders by default. */
-  showRecentByDefault: boolean;
-  /** Flat item cap for the Recent section (Chats paginates via the runtime). */
-  recentSectionLimit: number;
+  /** Page size for a folder's conversation list; the tail row grows it. */
+  folderChatLimit: number;
   /** Initial page size for the global search results list (grows via Load more). */
   searchResultLimit: number;
   /**
@@ -67,12 +60,32 @@ export interface SidebarConfig {
     searchShortcutHint: string;
     chats: string;
     folders: string;
-    recent: string;
+    /** Label for the section header's single `+` menu. */
+    addToSection: string;
+    /** "Open folder" item in the Folders section's `+` menu. */
+    openFolder: string;
+    /** Folder row menu: copies the folder's absolute path. */
+    copyFolderPath: string;
+    /** Folder row menu: starts a conversation scoped to this folder. */
+    newChatInFolder: string;
+    /** Folder row menu: opens the display-name dialog. */
+    renameFolder: string;
+    /** Title of that dialog. */
+    renameFolderTitle: string;
+    /** Folder row menu: opens the managed-links surface. */
+    manageLinks: string;
+    /** Folder row menu: opens the colour submenu. */
+    setColor: string;
+    /** Folder row menu: opens the folder in the OS file manager (desktop only). */
+    openInExplorer: string;
+    /** Toast when the desktop file manager cannot be reached. */
+    openInExplorerFailed: string;
+    /** Folder row menu: detaches the folder from the workspace. */
+    removeFromWorkspace: string;
     searchResults: string;
     archived: string;
     viewOptions: string;
     listOptions: string;
-    showRecent: string;
     showCompleted: string;
     sortBy: string;
     sortByUpdated: string;
@@ -88,18 +101,26 @@ export interface SidebarConfig {
     /** Chats section is scoped to non-folder chats, so its empty copy must not
      *  claim the user has never had a conversation. */
     noNonFolderChats: string;
-    browseArchived: string;
     noMatches: string;
     clearSearch: string;
     showMore: (remaining: number) => string;
     loadMore: string;
     backToChats: string;
     rename: string;
+    /** Title of the rename dialog (the menu label carries an ellipsis). */
+    renameTitle: string;
     archive: string;
     unarchive: string;
     delete: string;
+    /** Chat row menu label: opens the delete confirmation. */
+    deleteMenuItem: string;
+    /** Confirmation button inside that dialog. */
+    deleteAction: string;
     copyId: string;
+    copyUrl: string;
     openInNewTab: string;
+    /** Accessible name for the row's `⋯` menu trigger. */
+    moreOptions: string;
     deleteTitle: string;
     deleteDescription: (title: string) => string;
     cancel: string;
@@ -118,8 +139,7 @@ export interface SidebarConfig {
 export const sidebarConfig: SidebarConfig = {
   defaultSectionOrder: DEFAULT_SECTION_ORDER,
   defaultSort: DEFAULT_SORT_MODE,
-    showRecentByDefault: true,
-  recentSectionLimit: 10,
+  folderChatLimit: 8,
   searchResultLimit: 20,
   maxListPageSize: 500,
   searchDebounceMs: 300,
@@ -138,12 +158,21 @@ export const sidebarConfig: SidebarConfig = {
     searchShortcutHint: "Ctrl K",
     chats: "Chats",
     folders: "Folders",
-    recent: "Recent",
+    addToSection: "Add to section",
+    openFolder: "Open folder",
+    copyFolderPath: "Copy folder path",
+    newChatInFolder: "New chat in this folder",
+    renameFolder: "Rename folder…",
+    renameFolderTitle: "Rename folder",
+    manageLinks: "Manage links…",
+    setColor: "Set color",
+    openInExplorer: "Open folder in Explorer",
+    openInExplorerFailed: "Could not open the folder in Explorer.",
+    removeFromWorkspace: "Remove from workspace",
     searchResults: "Search results",
     archived: "Archived",
     viewOptions: "View options",
     listOptions: "List",
-    showRecent: "Show Recent section",
     showCompleted: "Show archived conversations",
     sortBy: "Sort by",
     sortByUpdated: "Last activity",
@@ -157,18 +186,22 @@ export const sidebarConfig: SidebarConfig = {
     collapseAll: "Collapse all sections",
     noConversations: "No conversations yet.",
     noNonFolderChats: "No chats outside folders yet.",
-    browseArchived: "Browse archived",
     noMatches: "No conversations match your search.",
     clearSearch: "Clear search",
-    showMore: (remaining: number) => `Show more (${remaining} more)`,
+    showMore: (remaining: number) => `Show ${remaining} more`,
     loadMore: "Load more",
     backToChats: "Back to conversations",
-    rename: "Rename",
+    rename: "Rename…",
+    renameTitle: "Rename conversation",
     archive: "Archive",
     unarchive: "Unarchive",
     delete: "Delete",
-    copyId: "Copy ID",
-    openInNewTab: "Open in New Tab",
+    deleteMenuItem: "Delete…",
+    deleteAction: "Delete",
+    copyId: "Copy chat ID",
+    copyUrl: "Copy URL",
+    openInNewTab: "Open in new tab",
+    moreOptions: "More options",
     deleteTitle: "Delete conversation?",
     deleteDescription: (title: string) =>
       `"${title}" will be permanently deleted. This cannot be undone.`,
@@ -204,8 +237,6 @@ export function sectionLabel(id: SidebarSectionId): string {
       return sidebarConfig.copy.folders;
     case "chats":
       return sidebarConfig.copy.chats;
-    case "recent":
-      return sidebarConfig.copy.recent;
   }
 }
 
@@ -237,4 +268,3 @@ export const chatHeaderConfig = {
     save: "Save",
   },
 };
-

@@ -1,85 +1,61 @@
-import { memo, useCallback, useState } from "react";
-import { useNavigate } from "react-router";
-import {
-  Archive,
-  ArchiveRestore,
-  Copy,
-  ExternalLink,
-  MessageSquare,
-  MoreVertical,
-  Pencil,
-  Trash2,
-} from "lucide-react";
-import {
-  ContextMenu,
-  ContextMenuTrigger,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@/components/ui/context-menu";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
-import { isPlainEnter } from "@/lib/ime";
+import { memo } from "react";
+import { ChevronDown } from "lucide-react";
 import { sidebarConfig } from "@/config/sidebar";
-import { historyConfig } from "@/config/history";
-import { useChatTabsStore, threadUrl } from "@/features/chat/state/chatTabs";
 import { useConversationsList } from "@/features/sidebar/hooks/useConversationsList";
-import {
-  renameConversation,
-  setConversationStatus,
-} from "@/features/chat/state/conversationMutations";
-import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
-import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
-
-const ROW_CLASS =
-  "group flex h-8 w-full items-center gap-1.5 rounded-full pl-6 pr-1 text-sm transition-colors duration-150 hover:bg-sidebar-accent";
+import type { Folder } from "@/types";
+import { SidebarThreadRow } from "./SidebarThreadRow";
 
 /**
- * Standalone conversation row rendered under a folder header in the sidebar's
- * "Folders" section. Reads via useConversationsList, scoped to THIS folder's
- * project chats only. Full conversation management: context menu (rename,
- * archive/unarchive, delete, copy ID), hover actions, live running dot (runtime
- * state), rename dialog.
+ * A folder's project chats, listed under its header.
+ *
+ * Reads via `useConversationsList`, scoped to THIS folder's project chats
+ * only: `workspaceMode: "project"` pairs with `folderId` so the server pins
+ * the membership test, and a hidden `kind='chat'` folder can never leak another
+ * folder's chats into this list.
+ *
+ * Rows are the shared `SidebarThreadRow` — this component owns the list, the
+ * loading state and the "show more" tail, nothing about a row's menu.
  */
 export const FolderConversationRow = memo(function FolderConversationRow({
-  folderId,
+  folder,
   activeId,
+  onOpenThread,
 }: {
-  folderId: string;
+  folder: Folder;
   activeId: string | null;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
-  // `workspaceMode: "project"` pairs with `folderId` so the server pins the
-  // membership test to project-scoped rows; a hidden `kind='chat'` folder can
-  // never leak another folder's chats into this list.
-  const { items, refetch } = useConversationsList({
+  const copy = sidebarConfig.copy;
+  const { items, isLoading, hasMore, loadMore, refetch } = useConversationsList({
     status: "regular",
     workspaceMode: "project",
-    folderId,
+    folderId: folder.id,
+    limit: sidebarConfig.folderChatLimit,
   });
+
+  // The folder row already carries the total, so the tail can say how many are
+  // left without a second request. Clamped at 0 because the count comes from the
+  // folder list and `items` from this list: a chat created between the two
+  // requests makes `items` momentarily longer than the count.
+  const remaining = Math.max(0, (folder.conversationCount ?? 0) - items.length);
+
+  if (isLoading && items.length === 0) {
+    return (
+      <div className="space-y-1 py-1" role="status" aria-label="Loading conversations">
+        {[0, 1].map((i) => (
+          <div
+            key={i}
+            className="h-[calc(var(--sidebar-row-height)-4px)] rounded-[var(--sidebar-row-radius)] bg-muted animate-pulse"
+          />
+        ))}
+      </div>
+    );
+  }
 
   if (items.length === 0) {
     return (
-      <div className="flex h-8 items-center pl-6 pr-1 text-xs text-muted-foreground">
-        {sidebarConfig.copy.noConversations}
+      <div className="flex h-[var(--sidebar-row-height)] items-center pl-2 text-xs text-left text-muted-foreground">
+        {copy.noConversations}
       </div>
     );
   }
@@ -87,245 +63,27 @@ export const FolderConversationRow = memo(function FolderConversationRow({
   return (
     <>
       {items.map((item) => (
-        <FolderConvRow
+        <SidebarThreadRow
           key={item.remoteId}
-          remoteId={item.remoteId}
-          title={item.title ?? "Untitled"}
-          status={item.status ?? "regular"}
-          isActive={activeId === item.remoteId}
-          engine={item.engine ?? null}
+          item={item}
+          onOpenThread={onOpenThread}
           onMutate={refetch}
+          activeId={activeId}
         />
       ))}
+
+      {(hasMore || remaining > 0) && (
+        <button
+          type="button"
+          onClick={loadMore}
+          className="flex h-[var(--sidebar-row-height)] w-full items-center gap-1.5 rounded-[var(--sidebar-row-radius)] pl-2 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-[var(--sidebar-row-hover-soft)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <ChevronDown aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {remaining > 0 ? copy.showMore(remaining) : copy.loadMore}
+          </span>
+        </button>
+      )}
     </>
   );
 });
-
-/**
- * Single conversation row inside a folder. Owns its own rename/delete
- * state so the parent list doesn't re-render on every action.
- */
-const FolderConvRow = memo(function FolderConvRow({
-  remoteId,
-  title: initialTitle,
-  status: rawStatus,
-  isActive,
-  engine,
-  onMutate,
-}: {
-  remoteId: string;
-  title: string;
-  status: string;
-  isActive: boolean;
-  /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
-  engine?: string | null;
-  onMutate?: () => void;
-}) {
-  const navigate = useNavigate();
-  const removeConversation = useDeleteConversation();
-  const openChat = useChatTabsStore((s) => s.openChat);
-  const openAgent = useChatTabsStore((s) => s.openAgent);
-  const copy = sidebarConfig.copy;
-
-  const status = rawStatus === "archived" ? "archived" : "regular";
-
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameValue, setRenameValue] = useState(initialTitle);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-
-  const handleOpenRename = useCallback(() => {
-    setRenameValue(initialTitle);
-    setRenameOpen(true);
-  }, [initialTitle]);
-
-  const handleConfirmRename = useCallback(async () => {
-    const next = renameValue.trim();
-    if (!next || next === initialTitle) {
-      setRenameOpen(false);
-      return;
-    }
-    try {
-      await renameConversation(remoteId, next);
-      onMutate?.();
-    } catch {
-      /* best effort */
-    }
-    setRenameOpen(false);
-  }, [renameValue, initialTitle, remoteId, onMutate]);
-
-  const handleArchiveToggle = useCallback(async () => {
-    try {
-      const nextStatus = status === "archived" ? "regular" : "archived";
-      await setConversationStatus(remoteId, nextStatus);
-      onMutate?.();
-    } catch {
-      /* best effort */
-    }
-  }, [remoteId, status, onMutate]);
-
-  const handleDelete = useCallback(async () => {
-    try {
-      await removeConversation(remoteId);
-      onMutate?.();
-    } catch {
-      /* best effort */
-    }
-    setDeleteOpen(false);
-  }, [remoteId, removeConversation, onMutate]);
-
-  const handleCopyId = useCallback(() => {
-    void navigator.clipboard?.writeText(remoteId);
-  }, [remoteId]);
-
-  return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className={cn(ROW_CLASS, isActive && "bg-sidebar-accent")}>
-            <button
-              type="button"
-              onClick={() => navigate(threadUrl(remoteId, engine))}
-              className="flex min-w-0 flex-1 items-center gap-1.5 outline-none"
-            >
-              <span className="relative shrink-0">
-                <MessageSquare
-                  aria-hidden="true"
-                  className="size-3.5 text-muted-foreground"
-                />
-                <ThreadRunningDot
-                  remoteId={remoteId}
-                  size="xs"
-                  className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
-                />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {initialTitle}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const rect = e.currentTarget.getBoundingClientRect();
-                e.currentTarget.dispatchEvent(
-                  new MouseEvent("contextmenu", {
-                    bubbles: true,
-                    cancelable: true,
-                    button: 2,
-                    clientX: rect.left,
-                    clientY: rect.bottom,
-                  }),
-                );
-              }}
-              title="More options"
-              aria-label="More options"
-              aria-haspopup="menu"
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/90 opacity-0 transition-opacity duration-150 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <MoreVertical className="size-3.5" />
-            </button>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem
-            onSelect={() =>
-              engine === "opencode"
-                ? openAgent(remoteId)
-                : openChat(remoteId)
-            }
-          >
-            <ExternalLink className="size-4" />
-            {copy.openInNewTab}
-          </ContextMenuItem>
-          {historyConfig.renameEnabled && (
-            <ContextMenuItem onSelect={handleOpenRename}>
-              <Pencil className="size-4" />
-              {copy.rename}
-            </ContextMenuItem>
-          )}
-          {historyConfig.archiveEnabled && (
-            <>
-              <ContextMenuSeparator />
-              {status === "regular" ? (
-                <ContextMenuItem onSelect={() => void handleArchiveToggle()}>
-                  <Archive className="size-4" />
-                  {copy.archive}
-                </ContextMenuItem>
-              ) : (
-                <ContextMenuItem onSelect={() => void handleArchiveToggle()}>
-                  <ArchiveRestore className="size-4" />
-                  {copy.unarchive}
-                </ContextMenuItem>
-              )}
-            </>
-          )}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={handleCopyId}>
-            <Copy className="size-4" />
-            {copy.copyId}
-          </ContextMenuItem>
-          {historyConfig.deleteEnabled && (
-            <ContextMenuItem
-              variant="destructive"
-              onSelect={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="size-4" />
-              {copy.delete}
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
-
-      {/* Rename dialog */}
-      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{copy.rename}</DialogTitle>
-            <DialogDescription>
-              Rename this conversation.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              // `isPlainEnter`, not `key === "Enter"`: accepting an IME candidate
-              // also fires a keydown, so a bare check would commit the rename
-              // with the pinyin instead of the kanji.
-              if (isPlainEnter(e)) void handleConfirmRename();
-            }}
-            placeholder={initialTitle}
-            autoFocus
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameOpen(false)}>
-              {copy.cancel}
-            </Button>
-            <Button onClick={() => void handleConfirmRename()}>
-              {copy.save}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete confirmation */}
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(initialTitle)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleDelete()}>
-              {copy.delete}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  );
-});
-

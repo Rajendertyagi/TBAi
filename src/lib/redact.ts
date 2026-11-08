@@ -111,7 +111,11 @@ export function sanitizeStreamError(error: unknown): string {
           "The provider rejected this model. Pick another model or fix the provider's model id.",
         );
       }
-      if (classified.statusCode !== undefined && classified.statusCode >= 400 && classified.statusCode < 500) {
+      if (
+        classified.statusCode !== undefined &&
+        classified.statusCode >= 400 &&
+        classified.statusCode < 500
+      ) {
         return redact(
           "The provider rejected this request (HTTP 4xx) as invalid. Retrying the same message will not help — start a new chat or switch model.",
         );

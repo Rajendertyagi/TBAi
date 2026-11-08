@@ -26,16 +26,10 @@ import type { ToolApprovalOption } from "@assistant-ui/react";
 const PRIMARY_OPTION_KIND = "allow-once";
 
 /** Kinds that allow the request. */
-const ALLOW_OPTION_KINDS: ReadonlySet<string> = new Set([
-  PRIMARY_OPTION_KIND,
-  "allow-always",
-]);
+const ALLOW_OPTION_KINDS: ReadonlySet<string> = new Set([PRIMARY_OPTION_KIND, "allow-always"]);
 
 /** Kinds that refuse the request. */
-const REJECT_OPTION_KINDS: ReadonlySet<string> = new Set([
-  "reject-once",
-  "reject-always",
-]);
+const REJECT_OPTION_KINDS: ReadonlySet<string> = new Set(["reject-once", "reject-always"]);
 
 /** Human labels for the kinds the runtime documents. */
 const OPTION_LABELS: ReadonlyMap<string, string> = new Map([

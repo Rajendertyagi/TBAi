@@ -1,12 +1,7 @@
-/**
- * Scheduler input validation shared by the REST boundary (routes/scheduler.ts)
- * and the AI-tool handlers (services/scheduler/schedulerTools.ts). Keeping these
- * here means a model-driven job and a UI-created job validate through the exact
- * same rules — no drift between the two entry points.
- */
-import { db } from "../../db";
+import path from "node:path";
 import { registry } from "../../config/providers";
 import { conversationService } from "../storage";
+import { resolveConversationWorkspace } from "../workspace";
 import { assertValidTimezone, isValidCron, expandMacro } from "./cron";
 import type { SchedulerJob } from "./schedulerTypes";
 
@@ -47,7 +42,12 @@ export function checkScheduleFields(value: {
 export function checkProvider(value: {
   providerId?: string;
   modelId?: string;
+  engine?: string;
 }): string | null {
+  if (value.engine === "opencode") {
+    // OpenCode jobs resolve their own models or defaults in OpenCode
+    return null;
+  }
   if (value.providerId === undefined) return null;
   if (!registry.get(value.providerId)) {
     return `Provider "${value.providerId}" does not exist`;
@@ -60,20 +60,89 @@ export function checkProvider(value: {
 
 /**
  * When targeting an existing thread, fail fast if the conversation does not
- * resolve (deleted/archived). Returns null when valid, else an error string.
+ * resolve (deleted/archived/engine mismatch/folder mismatch). Returns null when valid, else an error string.
  */
 export async function checkExistingThread(value: {
   conversationPolicy?: string;
   conversationId?: string | null;
+  engine?: string;
+  opencodeSessionStrategy?: string | null;
+  workspaceFolderId?: string | null;
+  workspacePath?: string | null;
 }): Promise<string | null> {
-  if (
-    (value.conversationPolicy ?? "dedicated_thread") === "existing_thread" &&
-    value.conversationId
-  ) {
+  const isExisting =
+    value.engine === "opencode"
+      ? value.opencodeSessionStrategy === "existing_conversation"
+      : (value.conversationPolicy ?? "dedicated_thread") === "existing_thread";
+
+  if (isExisting && value.conversationId) {
     const target = await conversationService.get(value.conversationId);
     if (!target) {
-      return "Target conversation not found. Pick an existing thread.";
+      return value.engine === "opencode"
+        ? "Target OpenCode conversation not found. Pick an existing conversation."
+        : "Target conversation not found. Pick an existing thread.";
     }
+    if (target.status === "archived") {
+      return value.engine === "opencode"
+        ? "Target OpenCode conversation is archived. Pick an active conversation."
+        : "Target conversation is archived. Pick an active thread.";
+    }
+    if (value.engine === "opencode") {
+      if (target.engine !== "opencode") {
+        return "Target conversation does not belong to OpenCode engine. Pick an OpenCode conversation.";
+      }
+      // Resolve the authoritative directory via the existing workspace resolver.
+      // Do not rely on opencodeDirectory being populated; never guess.
+      let resolvedDir: string;
+      try {
+        const resolved = await resolveConversationWorkspace(target.id);
+        resolvedDir = resolved.dir;
+      } catch {
+        return "Target OpenCode conversation's workspace folder is deleted or no longer resolvable.";
+      }
+      if (
+        value.workspaceFolderId &&
+        target.workspaceFolderId &&
+        value.workspaceFolderId !== target.workspaceFolderId
+      ) {
+        return "Target OpenCode conversation belongs to a different workspace folder.";
+      }
+      // Authoritative directory is the resolved one; never prefer stale
+      // opencodeDirectory metadata over it.
+      if (value.workspacePath) {
+        if (path.resolve(value.workspacePath) !== path.resolve(resolvedDir)) {
+          return "Target OpenCode conversation belongs to a different workspace directory.";
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Validate engine-specific OpenCode configuration parameters. Sync. */
+export function checkOpenCodeFields(value: {
+  engine?: string;
+  opencodeSessionStrategy?: string | null;
+  workspaceFolderId?: string | null;
+  workspacePath?: string | null;
+  conversationId?: string | null;
+}): string | null {
+  if (value.engine !== "opencode") return null;
+  if (!value.opencodeSessionStrategy) {
+    return "opencodeSessionStrategy ('fresh' | 'persistent' | 'existing_conversation') is required for OpenCode jobs";
+  }
+  if (!["fresh", "persistent", "existing_conversation"].includes(value.opencodeSessionStrategy)) {
+    return `Invalid opencodeSessionStrategy: "${value.opencodeSessionStrategy}"`;
+  }
+  if (value.opencodeSessionStrategy === "existing_conversation" && !value.conversationId) {
+    return "conversationId is required for existing_conversation strategy";
+  }
+  if (
+    (value.opencodeSessionStrategy === "fresh" || value.opencodeSessionStrategy === "persistent") &&
+    !value.workspaceFolderId &&
+    !value.workspacePath
+  ) {
+    return "workspaceFolderId or workspacePath is required for fresh/persistent OpenCode jobs";
   }
   return null;
 }

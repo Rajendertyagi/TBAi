@@ -7,13 +7,38 @@ name: Verify
 # environment-dependent test can never block a release build, and a build never
 # waits on a suite it cannot act on.
 #
+# Jobs, all independent of each other for the same reason:
+#   verify            typecheck, lint, backend suite, DOM contract suite (fast, hermetic)
+#   opencode-runtime  the required real-binary OpenCode runtime suites (RT-007)
+#   e2e               Playwright history specs (browser + spawned server, slower)
+#   opencode-g3       override-notice evidence against a real managed server
+#   e2e-full          G5: the full non-live suite at two revisions, compared; dispatch-only
+#   e2e-big-pickle    live acceptance spec; dispatch-only, because it needs credentials
+#
 # Runs on every push to main and every PR, so suite feedback arrives on the
 # code push rather than at release time.
 
 on:
   workflow_dispatch:
+    inputs:
+      live_opencode:
+        description: "Run the live Big Pickle Code-mode E2E (OpenCode free tier)"
+        type: boolean
+        default: false
+      e2e_full:
+        description: "Run the G5 two-revision E2E comparison (needs final_sha)"
+        type: boolean
+        default: false
+      final_sha:
+        description: "G5: the revision under test. No default; the baseline is its first parent."
+        type: string
+        required: false
+      harness_sha:
+        description: "G5: the commit holding the pinned harness. Defaults to final_sha."
+        type: string
+        required: false
   push:
-    branches: [main]
+    branches: [main, ci/tauri-e2e-verify]
   pull_request:
     branches: [main]
 
@@ -25,18 +50,27 @@ env:
 
   # OpenCode CLI, for the integration tests that drive the managed server.
   #
-  # 2.0.22 sits inside the range src/config/opencode.ts enforces for the managed
-  # server (>=2.0.15 <2.1.0) and is the version this codebase's behaviour
-  # comments were measured against, so CI matches the developer environment
-  # where these suites were last seen passing.
+  # 2.2.0 is the audited target: it sits inside the range
+  # src/config/opencode.ts enforces for the managed server (>=2.0.15 <2.2.1),
+  # and it is the version both manifests pin for `@opencode/client`. Compared
+  # against 2.1.2, the published 2.2.0 client typings removed no route and no
+  # `V2Event` member, and added only two OPTIONAL fields
+  # (`ModelInfo.type?`, `ServerInfo.hostname?`).
   #
   # The npm package ships the prebuilt Windows binary; there are no GitHub
   # release assets for the 2.x tags, and `opencode-ai` on npm is the unrelated
   # 1.x line. `@opencode/cli-windows-x64` declares os=win32 cpu=x64, which is
   # exactly this runner, and npm's dist.integrity is verified below before the
   # binary is trusted.
-  OPENCODE_VERSION: "2.0.22"
-  OPENCODE_CLI_SHA512: "sha512-n7eg3FwlHtRSZY5SV00XYh5c/TV7V0GIDqgygv9c5UEzPfbBfdk6d9mvGbZqn/Po/gmOPFyxU6SjmjWdGDF3ag=="
+  #
+  # The integrity is the registry's own `dist.integrity` for this exact
+  # tarball. It was checked locally on 2026-10-28: the downloaded tarball has
+  # that sha512, contains `package/bin/opencode.exe` (the path the composite
+  # action requires), and that binary reports `opencode v2.2.0`. That is a
+  # local check of the artifact, not a CI run - the pin has not yet been
+  # exercised on a runner.
+  OPENCODE_VERSION: "2.2.0"
+  OPENCODE_CLI_SHA512: "sha512-S/eVkzMaUqoiBmeLHgEdr4b3yIQjpfDzLo4CFSSB3skB0UH+lduqqjTnmvAvDeli4fEjcNbZmd/8YwkoKnFkBA=="
 
 jobs:
   verify:
@@ -66,7 +100,657 @@ jobs:
 
       # CI-only. Nothing about the application's own dependencies changes: the
       # binary is unpacked into the runner's temp dir and put on PATH for later
-      # steps, and it is never vendored into the repository.
+      # steps, and it is never vendored into the repository. Shared with the
+      # `e2e` job as a composite action so the pinned version, its integrity
+      # hash and the verification cannot drift between the two.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Both run the PINNED `@biomejs/biome` from node_modules (installed above
+      # by `bun install --frozen-lockfile`), not a `bunx` download, so a fresh
+      # runner resolves the same version this branch was written against.
+      #
+      # `--error-on-warnings` lives inside the `lint` script: a rule that reports
+      # a genuine defect must not be able to pass CI by being downgraded to a
+      # warning. `format:check` is its own step so a formatting failure is
+      # attributable alone, the way the DOM suite is.
+      - name: Lint
+        run: bun run lint
+
+      - name: Format check
+        run: bun run format:check
+
+      # `bun run test`, NOT bare `bun test`. The bare form double-collects the
+      # suites and cascades "Database has closed" across the shared test
+      # database, reporting hundreds of phantom failures instead of real ones.
+      # The scoped script in package.json is the only correct invocation.
+      #
+      # The output is teed to a file so the diagnostic step below can republish
+      # the complete failure list. `$LASTEXITCODE` is captured immediately and
+      # re-thrown, so the job's verdict is identical to running `bun run test`
+      # alone - verified locally for exit codes 0, 1 and 3. `2>&1` folds stderr,
+      # where bun writes its results, into the same file.
+      #
+      # With the OpenCode CLI provisioned above, the suites that drive the
+      # managed server now execute instead of self-skipping, so
+      # tests/unit/opencode/codeViewSessionBoundary.test.ts is a real signal
+      # rather than a silent pass.
+      # The test-location policy is a HARD gate, not a lint warning. Every other
+      # step here discovers tests by scoping to `tests/`, so a test file written
+      # outside it is never collected by any of them: `bun run test`, `test:dom`
+      # and Playwright all ignore it, and the suite stays green while quietly
+      # losing coverage. This step is what makes that fail loudly instead.
+      - name: Test location policy
+        run: bun run test:locations
+
+      # The build runs BEFORE the suites, and this ordering is load-bearing.
+      #
+      # `tests/integration/core/e2e-build-integrity.test.ts` asserts against the
+      # real artifact in `dist/`: it proves the E2E server refuses a build whose
+      # provenance stamp does not match the source. With no `dist/` present it
+      # fails 5 tests, and the messages ("REFUSES a missing artifact", "writes a
+      # stamp only after a successful build") read as a broken build-stamp
+      # contract rather than as "you have not built yet".
+      #
+      # It cannot be fixed in the `e2e` job below instead: every GitHub-hosted
+      # job gets a FRESH runner, so an artifact produced by one job does not
+      # exist in the next one's filesystem. This job is where the suites run, so
+      # this job is where the build has to happen.
+      #
+      # The last green run of this job predates the current version of those
+      # tests, which at that time used temporary fake directories rather than the
+      # real `dist/`. That green run therefore does NOT prove the current
+      # version is safe without a build - it is why this step was missing.
+      #
+      # Matches the local `verify` sequence, which was reordered for the same
+      # reason. Pinned by tests/unit/tooling/verify-script.test.ts, which
+      # compares this job's real steps against package.json rather than a
+      # comment.
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: |
+          bun run test 2>&1 | Tee-Object -FilePath test-output.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+
+      # The DOM/contract suite (`tests/dom`). It is a SEPARATE step, not a
+      # suffix on `bun run test`, for two reasons: `bun run test` scopes its own
+      # paths and must keep its exit code intact for the diagnostic step above,
+      # and a DOM failure must be attributable on its own.
+      #
+      # This suite is CI-safe, and that is why it belongs here:
+      #   - hermetic: happy-dom only, no browser, no network, no live server;
+      #   - fast: ~4s for the whole suite;
+      #   - deterministic: no provider credentials and no OpenCode process.
+      #
+      # It carries the history contracts that `bun run test` structurally cannot
+      # reach, because they need a mounted React tree: the real
+      # `useRemoteThreadListRuntime` + `useChatRuntime` integration and the
+      # `loadFailed` snapshot identity contract. Those went unexecuted while a
+      # real empty-history defect shipped, so "not run" is not an acceptable
+      # state for them.
+      #
+      # The Playwright E2E suite runs in the dedicated `e2e` job below, not here.
+      # It needs browser binaries and a spawned server, which would make this
+      # job environment-dependent; keeping it separate means a slow or
+      # environment-dependent suite can never block the fast feedback above.
+      - name: Test (shutdown lifecycle)
+        run: bun run test:shutdown
+
+      - name: Test (startup rollback)
+        run: bun run test:startup-rollback
+
+      - name: Test (lifecycle integration)
+        run: bun run test:lifecycle-integration
+
+      - name: Test (DOM contract)
+        run: bun run test:dom
+
+      # The OpenCode defect-regression quarantine.
+      #
+      # The OpenCode findings are pinned two ways: a baseline test that asserts
+      # today's behaviour (defects included) and a `test.todo` that asserts the
+      # behaviour the finding says the product should have. A todo body is never
+      # executed by an ordinary run, so the quarantine cannot break the build -
+      # which is exactly why it needs its own step.
+      #
+      # This step runs the quarantine WITH `--todo` and fails when an entry has
+      # gone STALE: a todo whose body now PASSES means the underlying defect has
+      # been fixed and the entry must be promoted to a real test in the same
+      # commit that deletes the baseline test. The decision is made on the
+      # MESSAGE bun prints, never on the exit code - a file of only failing todos
+      # exits 0 in both modes, so an exit code cannot distinguish "the
+      # quarantine is healthy" from "something else broke".
+      #
+      # A stale entry is reported by name, so the failure says which finding is
+      # ready to be converted rather than only that something changed.
+      - name: OpenCode quarantine guard
+        run: bun run test:quarantine
+
+      # DIAGNOSTIC ONLY - no test, production, or opencode behaviour changes.
+      #
+      # GitHub caps check-run annotations at 10 per run and downloading the job
+      # log requires authentication, so a failing run could not be triaged from
+      # outside CI. Teeing the output above also drops bun's own per-failure
+      # annotations, which leaves slots free.
+      #
+      # Check-run annotations are the one failure channel readable from the
+      # public API without authentication, so the COMPLETE failure list and the
+      # suite totals are emitted as two annotations - one message each - rather
+      # than one per failure, which would hit the cap again.
+      - name: Publish complete test failure list (diagnostic)
+        if: failure()
+        run: |
+          if (Test-Path test-output.log) {
+            $fails = Select-String -Path test-output.log -Pattern '^\(fail\)' | ForEach-Object { $_.Line }
+            if (-not $fails) { $fails = @('(no (fail) lines captured - inspect the job log)') }
+            $totals = Select-String -Path test-output.log -Pattern '^\s*\d+ (pass|fail|skip|todo)|^Ran ' | ForEach-Object { $_.Line }
+            if (-not $totals) { $totals = @('(no suite totals captured)') }
+          } else {
+            $fails = @('(test-output.log not present - an earlier gate failed before the test suite ran)')
+            $totals = @('(no suite totals captured)')
+          }
+          # Workflow-command escaping: % first, then CR/LF. Order matters.
+          $failBody = (($fails -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
+          $totalBody = (($totals -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
+          Write-Output "::error title=Complete test failure list::$failBody"
+          Write-Output "::error title=Suite totals::$totalBody"
+          # If the suite aborted before printing a summary, the two annotations
+          # above are empty and say nothing. The tail is what explains a hard
+          # stop: a panic, a killed process, or a crash in a spawned child.
+          $exists = Test-Path test-output.log
+          $size = if ($exists) { (Get-Item test-output.log).Length } else { 0 }
+          $tail = if ($exists -and $size -gt 0) { (Get-Content test-output.log -Tail 100) } else { @('(test-output.log missing or empty)') }
+          $head = "test-output.log present=$exists bytes=$size"
+          $tailBody = ((@($head) + $tail) -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A'
+          Write-Output "::error title=Test log tail::$tailBody"
+
+  # RT-007: the real-binary OpenCode runtime suites, REQUIRED on every PR.
+  #
+  # `bun run test` collects these files but the harness self-skips them without
+  # TBAI_OPENCODE_RUNTIME_TESTS, and a skipped suite exits 0 - so before this
+  # job, "the runtime suites ran" was never actually asserted anywhere. This
+  # job runs the required seven against the pinned binary and fails if any
+  # suite is missing, fails, executes nothing, or skips a case. The script
+  # (`scripts/run-opencode-runtime-suites.ts`) owns that rule, including the
+  # classification of every suite file.
+  #
+  # Not in `verify`: ~38 s of real process spawning and ports, measured on
+  # windows-latest 2026-10-24 (run 40126225730). Keeping it separate means a
+  # runtime regression is attributable on its own and never delays the fast
+  # gates. Independent of `verify` and `e2e` - deliberately no `needs:`.
+  opencode-runtime:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Required real-binary runtime suites
+        run: bun run test:opencode-runtime
+
+  # G3: evidence that the override notice is rendered from the REAL managed
+  # OpenCode configuration.
+  #
+  # Separate from `e2e` because it is an EVIDENCE run, not a gate over the
+  # maintainer's own configuration: it starts its own app + managed server
+  # against a fixture supplied through `OPENCODE_CONFIG`, and each case writes a
+  # JSON record of the reported path, the rendered notice, the fixture hashes
+  # and the process-tree termination. It needs the same pinned CLI and browser as
+  # `e2e`, and deliberately no model credentials.
+  opencode-g3:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
+      # Builds the bundle itself, then runs both cases. Exits non-zero when any
+      # case's evidence fails its own assessment — including a cleanup failure,
+      # which is recorded rather than swallowed.
+      - name: Override-notice evidence (G3)
+        run: bun run test:opencode-g3
+
+      # Narrow, and `always()` so a FAILED run still carries the evidence that
+      # explains it. Only the run's own outputs are uploaded.
+      - name: Upload G3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g3-override-evidence
+          path: tests/.artifacts/g3
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The Playwright E2E suite, as its own job.
+  #
+  # It is separate from `verify` for two independent reasons. It needs browser
+  # binaries and a spawned server, which makes it environment-dependent and slow;
+  # and a suite that cannot act on a result should not delay a fast one. There is
+  # deliberately NO `needs:` on `verify` — an E2E failure must not read as a
+  # backend or typecheck failure, and vice versa.
+  #
+  # The command performs the BUILD ITSELF. That is not a convenience: the suite
+  # serves `dist/web`, a build output, so a job that checked out the source and
+  # ran Playwright directly would test whatever bundle happened to be on disk —
+  # and on a fresh runner that is nothing at all. `bun run test:e2e` builds first,
+  # stops on failure before spawning a server, and the server independently
+  # refuses any artifact whose provenance stamp does not match the source
+  # (scripts/web-build-provenance.ts). See tests/integration/core/e2e-build-integrity.test.ts,
+  # which proves a failed build prevents startup.
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The Code-mode spec below drives the REAL managed OpenCode server, so
+      # this job needs the same pinned CLI `verify` installs. Without it the
+      # runtime reports "OpenCode CLI not found", and the spec would assert that
+      # error surface instead of the runtime it exists to cover - a green result
+      # for the wrong behaviour.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      # The one CI-only dependency here, and the reason this suite could not
+      # simply be appended to `verify`. Downloaded explicitly rather than assumed,
+      # because a missing browser surfaces as a confusing per-test timeout rather
+      # than as an obvious setup error.
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
+      - name: Test location policy
+        # Repeated here because this job does NOT depend on the verify job. An
+        # E2E spec added outside `tests/` would not be collected by
+        # `playwright.config.ts` (its `testDir` is `../tests/e2e`), so without
+        # this check the job would pass having run fewer specs than exist.
+        run: bun run test:locations
+
+      # SCOPED, deliberately. These are the conversation-history and
+      # tool-persistence specs, which is where a silent stale-bundle run does
+      # the most damage: a recovery test that passes against last week's
+      # bundle reports the defect as fixed. The remaining specs are
+      # pre-existing work in progress and are not gated on here; widening
+      # this list is a deliberate decision, not an oversight.
+      #
+      # `opencode-v2-code-route.spec.ts` is the Code-mode entry. It drives the
+      # real managed server and the real V2 runtime, and it now asserts that
+      # the runtime reaches READY from a real hydration after a reload. It
+      # needs no model credentials: the prompt is expected to be refused on a
+      # runner that has none, and the spec asserts that refusal surface.
+      #
+      # Every spec file gets its own server and its own database (scripts/run-e2e.ts),
+      # so adding files costs wall-clock time but never cross-test interference.
+      - name: E2E (conversation history, tool persistence and Code mode)
+        run: >
+          bun run test:e2e
+          p2-history-load-recovery.spec.ts
+          p2-direct-history-window.spec.ts
+          p2-paging.spec.ts
+          p2-live-runtime.spec.ts
+          p2-tool-result-persistence.spec.ts
+          phase-8-tabs-navigation.spec.ts
+          opencode-v2-code-route.spec.ts
+          appearance-scaling.spec.ts
+          typography-standardization.spec.ts
+
+  # G5 — the same full, non-live suite at two revisions, compared test identity by
+  # test identity.
+  #
+  # Dispatch-only, and deliberately not a per-push gate: it installs two
+  # worktrees, runs the suite in each, and takes hours. What it buys is the one
+  # thing a single green run cannot show — that nothing was REMOVED. A net count
+  # is never used: a deleted failing test and a fixed one look identical in the
+  # totals, so the comparison works on `spec::title` identities and blocks on
+  # `removedWhileFailing`, `unexplainedRemoval`, a new failure, or a settings
+  # divergence that is not pinned in the reviewed allowlist.
+  #
+  # The harness (runner, reporter config, settings dump, aggregate, compare,
+  # allowlist) is injected with `git show <harness>:<path> > <path>` so the index
+  # is never touched, then verified against `scripts/e2e-harness.manifest.json`
+  # before anything is compared. The baseline is the FINAL COMMIT'S FIRST PARENT,
+  # never a branch name.
+  e2e-full:
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e_full
+    runs-on: windows-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both legs are reported separately. A combined total would let one
+        # project's regression cancel the other's.
+        project: [chromium-headless, edge-headless]
+    env:
+      E2E_OUT: ${{ github.workspace }}/e2e-full/${{ matrix.project }}
+      # A Windows path, consumed by bun scripts that resolve it against the
+      # filesystem. `$PWD` inside Git Bash is a POSIX path (/d/a/...), and
+      # passing that through to a native binary is a conversion this job should
+      # not be relying on.
+      E2E_WORKSPACE: ${{ github.workspace }}
+    steps:
+      - name: Checkout the final revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.final_sha }}
+          path: final
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Resolve final, baseline and harness revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.final_sha }}" ]; then
+            echo "final_sha is required for the G5 comparison; refusing to guess a revision" >&2
+            exit 1
+          fi
+          cd final
+          final=$(git rev-parse HEAD)
+          # The baseline is the first parent, full stop. A merge base or a branch
+          # tip would compare against a tree the change never built on.
+          baseline=$(git rev-parse "${final}^1")
+          harness=$(git rev-parse "${{ inputs.harness_sha || inputs.final_sha }}")
+          {
+            echo "FINAL_SHA=${final}"
+            echo "BASELINE_SHA=${baseline}"
+            echo "HARNESS_SHA=${harness}"
+          } >> "$GITHUB_ENV"
+          git show "${harness}:scripts/e2e-harness.manifest.json" > "$RUNNER_TEMP/harness-manifest.json"
+          MANIFEST="$RUNNER_TEMP/harness-manifest.json" bun -e \
+            'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));for(const f of m.files)console.log(f.path)' \
+            > "$RUNNER_TEMP/harness-files.txt"
+
+      - name: Checkout the baseline revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BASELINE_SHA }}
+          path: baseline
+          fetch-depth: 0
+
+      # `> file` through `git show`, never `git checkout H -- file`: checkout
+      # STAGES the change, and the guard below rejects any staged entry.
+      - name: Inject the pinned harness into both worktrees
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in baseline final; do
+            while IFS= read -r file; do
+              mkdir -p "$(dirname "$dir/$file")"
+              git -C "$dir" show "${HARNESS_SHA}:${file}" > "$dir/$file"
+            done < "$RUNNER_TEMP/harness-files.txt"
+          done
+
+      - name: Verify harness injection (baseline)
+        shell: bash
+        run: |
+          bun baseline/scripts/compare-e2e-reports.ts --verify-injection \
+            --repo=baseline --revision="${BASELINE_SHA}" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/baseline.harness.json"
+
+      - name: Verify harness injection (final)
+        shell: bash
+        run: |
+          bun final/scripts/compare-e2e-reports.ts --verify-injection \
+            --repo=final --revision="${FINAL_SHA}" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/final.harness.json"
+
+      # Each revision installs from ITS OWN lockfile: the baseline must run the
+      # dependencies it shipped with, not the final revision's.
+      - name: Install baseline dependencies
+        working-directory: baseline
+        run: bun install --frozen-lockfile
+
+      - name: Install final dependencies
+        working-directory: final
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in baseline final; do
+            (cd "$dir/web" && bunx playwright install chromium msedge)
+          done
+
+      # The full non-live suite includes Code-mode specs that drive the REAL
+      # managed server. Without this binary they would pass by asserting the
+      # "CLI not found" surface instead of the runtime, in both legs, and the
+      # comparison would report a clean result for the wrong behaviour.
+      #
+      # Duplicated from .github/actions/install-opencode rather than referenced:
+      # this job checks out into `final/` and `baseline/`, so there is no
+      # repository tree at the workspace root for `uses: ./.github/actions/...`
+      # to resolve against.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:OPENCODE_VERSION
+          $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
+          $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
+          Invoke-WebRequest -Uri $url -OutFile $tgz
+          $sha = [System.Security.Cryptography.SHA512]::Create()
+          $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
+          if ($actual -ne $env:OPENCODE_CLI_SHA512) {
+            throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
+          }
+          $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
+          Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $unpack | Out-Null
+          tar -xzf $tgz -C $unpack
+          $exe = Join-Path $unpack 'package/bin/opencode.exe'
+          if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
+          (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $reported = (& $exe --version | Out-String).Trim()
+          Write-Output "opencode --version: $reported"
+          if ($reported -notmatch [regex]::Escape($version)) {
+            throw "expected opencode $version but the binary reported '$reported'"
+          }
+
+      # No positional argument: the full non-live scope is the runner's default
+      # discovery. `tests/e2e` as a positional would become `tests/e2e.spec.ts`
+      # and match nothing while exiting 0.
+      - name: Run the baseline leg
+        id: baseline_leg
+        continue-on-error: true
+        working-directory: baseline
+        env:
+          TBAI_E2E_JSON_DIR: ${{ env.E2E_OUT }}/baseline/${{ matrix.project }}
+        run: bun run test:e2e --project=${{ matrix.project }}
+
+      - name: Run the final leg
+        id: final_leg
+        if: always()
+        continue-on-error: true
+        working-directory: final
+        env:
+          TBAI_E2E_JSON_DIR: ${{ env.E2E_OUT }}/final/${{ matrix.project }}
+        run: bun run test:e2e --project=${{ matrix.project }}
+
+      - name: Record settings, aggregate and compare
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rev in baseline final; do
+            sha="${BASELINE_SHA}"
+            [ "$rev" = "final" ] && sha="${FINAL_SHA}"
+            bun "$rev/scripts/dump-playwright-settings.ts" --project=${{ matrix.project }} \
+              --revision="${sha}" --out="$E2E_OUT/$rev.settings.json"
+            bun "$rev/scripts/aggregate-e2e-reports.ts" \
+              --dir="$E2E_OUT/$rev/${{ matrix.project }}" \
+              --e2e-root="${E2E_WORKSPACE}/$rev/tests/e2e" \
+              --settings="$E2E_OUT/$rev.settings.json" \
+              --revision="${sha}" \
+              --out="$E2E_OUT/$rev.aggregate.json" \
+              || echo "aggregate reported a problem; the comparison will refuse this leg"
+          done
+          bun final/scripts/compare-e2e-reports.ts \
+            --baseline="$E2E_OUT/baseline.aggregate.json" \
+            --final="$E2E_OUT/final.aggregate.json" \
+            --baseline-harness="$E2E_OUT/baseline.harness.json" \
+            --final-harness="$E2E_OUT/final.harness.json" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/comparison.json"
+
+      # Playwright exits non-zero whenever a test fails, and this suite has known
+      # failures on BOTH revisions, so a leg's exit code cannot say whether the
+      # leg RAN. Completion is asserted from the comparison it produced instead:
+      # a leg that crashed leaves no ok comparison and no non-empty inventory.
+      - name: Fail when the final leg did not complete
+        if: always()
+        shell: bash
+        env:
+          REPORT: ${{ env.E2E_OUT }}/comparison.json
+        run: |
+          set -euo pipefail
+          if [ ! -s "$REPORT" ]; then
+            echo "the final leg produced no comparison at $REPORT" >&2
+            exit 1
+          fi
+          bun -e '
+            const report = await Bun.file(process.env.REPORT).json();
+            const final = report.final?.totals ?? {};
+            console.log(
+              `comparison: project=${report.project} ok=${report.ok} ` +
+                `final tests=${final.tests ?? 0} failed=${final.failed ?? "?"} ` +
+                `skipped=${final.skipped ?? "?"} specFiles=${final.specFiles ?? 0}`,
+            );
+            if (report.ok !== true || !((final.tests ?? 0) > 0)) {
+              console.error("the final leg did not complete");
+              process.exit(1);
+            }
+          '
+
+      - name: Upload G5 comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-e2e-full-${{ matrix.project }}
+          path: e2e-full/${{ matrix.project }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  # LIVE, opt-in acceptance for Code mode against the OpenCode free tier.
+  #
+  # Deliberately NOT part of the normal gate: the answer comes from a real
+  # third-party model, so a quota change or an outage would turn a green code
+  # base red for a reason the code cannot fix. It runs only when dispatched with
+  # `live_opencode=true`, and it proves the whole path: managed `opencode serve`,
+  # a real session bound to `opencode/big-pickle`, the composer, the SSE stream,
+  # the rendered transcript, and history after reload.
+  #
+  # The OpenCode CLI install is duplicated from `verify` rather than shared:
+  # GitHub-hosted jobs get fresh runners, so an artifact from another job does
+  # not exist here. The tarball is pinned and integrity-checked for the same
+  # reason as above.
+  e2e-big-pickle:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_opencode
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
       - name: Install OpenCode CLI (pinned, integrity-checked)
         shell: pwsh
         run: |
@@ -93,70 +777,296 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $resolved = (Get-Command opencode -ErrorAction Stop).Source
           $reported = (& opencode --version | Out-String).Trim()
-          Write-Output "opencode resolved to: $resolved"
-          Write-Output "opencode --version:   $reported"
+          Write-Output "opencode --version: $reported"
           if ($reported -notmatch [regex]::Escape($env:OPENCODE_VERSION)) {
             throw "expected opencode $($env:OPENCODE_VERSION) but the binary reported '$reported'"
           }
 
+      - name: Run the live Big Pickle spec
+        env:
+          TBAI_E2E_LIVE: "1"
+        run: bun run test:e2e opencode/opencode-big-pickle-live.spec.ts
+
+      - name: Upload live evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: big-pickle-live
+          path: |
+            tests/.artifacts/playwright
+            tests/.artifacts/e2e-server-logs
+          if-no-files-found: warn
+
+  # Tauri desktop end-to-end verification. Builds the REAL packaged app
+  # (Tauri shell + sidecar + loose web assets) and exercises it on the runner,
+  # not just the Bun backend. Independent of `verify` and `e2e`.
+  tauri:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Rust (1.98.1, x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Lint
-        run: bun run lint
-
-      # `bun run test`, NOT bare `bun test`. The bare form double-collects the
-      # suites and cascades "Database has closed" across the shared test
-      # database, reporting hundreds of phantom failures instead of real ones.
-      # The scoped script in package.json is the only correct invocation.
-      #
-      # The output is teed to a file so the diagnostic step below can republish
-      # the complete failure list. `$LASTEXITCODE` is captured immediately and
-      # re-thrown, so the job's verdict is identical to running `bun run test`
-      # alone - verified locally for exit codes 0, 1 and 3. `2>&1` folds stderr,
-      # where bun writes its results, into the same file.
-      #
-      # With the OpenCode CLI provisioned above, the suites that drive the
-      # managed server now execute instead of self-skipping, so
-      # src/services/opencode/codeViewSessionBoundary.test.ts is a real signal
-      # rather than a silent pass.
-      - name: Test
+      - name: Build assets and stage the sidecar
+        shell: pwsh
         run: |
-          bun run test 2>&1 | Tee-Object -FilePath test-output.log
-          $code = $LASTEXITCODE
-          if ($code -ne 0) { exit $code }
+          $ErrorActionPreference = "Stop"
+          bun run build
+          if ($LASTEXITCODE -ne 0) { throw "bun run build failed" }
+          if (-not (Test-Path "dist/web")) { throw "dist/web not produced" }
+          $src = "dist/tbai-server.exe"
+          if (-not (Test-Path $src)) { throw "$src not produced" }
+          $binDir = "src-tauri/binaries"
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          Copy-Item -Path $src -Destination "$binDir/tbai-server-x86_64-pc-windows-msvc.exe" -Force
 
-      # DIAGNOSTIC ONLY - no test, production, or opencode behaviour changes.
+      - name: Generate icon set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          bunx tauri icon src-tauri/app-icon.png
+          if ($LASTEXITCODE -ne 0) { throw "tauri icon failed" }
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) { throw "icon.ico not produced" }
+
+      - name: Type-check the Rust shell
+        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Run Rust tests (includes the shutdown seam)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Build Tauri (compile, no bundle)
+        run: bunx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Assemble portable app folder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          $app = "$rel/tbai-desktop.exe"
+          if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found" }
+          $out = "TBAi-windows-x64-portable"
+          if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Path $app -Destination "$out/TBAi.exe" -Force
+          Copy-Item -Path "dist/tbai-server.exe" -Destination "$out/tbai-server.exe" -Force
+          New-Item -ItemType Directory -Force -Path "$out/web" | Out-Null
+          Copy-Item -Path "dist/web/*" -Destination "$out/web/" -Recurse -Force
+          $sha = (git rev-parse --short HEAD).Trim()
+          @{ product = "TBAi"; commit = $sha; builtAt = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json | Out-File -FilePath "$out/build-info.json" -Encoding utf8
+          Write-Output "assembled $out (commit $sha)"
+
+      - name: Smoke test the packaged desktop app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $appDir = (Resolve-Path "TBAi-windows-x64-portable").Path
+          $exe = Join-Path $appDir "TBAi.exe"
+          if (-not (Test-Path $exe)) { throw "TBAi.exe missing" }
+          $data = Join-Path $env:RUNNER_TEMP "tauri-smoke-data"
+          Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $env:DATA_DIR = $data
+          $mirror = Join-Path $data "port"
+          $proc = Start-Process -FilePath $exe -PassThru -NoNewWindow
+          try {
+            $ready = $false
+            $port = ""
+            for ($i = 0; $i -lt 120; $i++) {
+              Start-Sleep -Milliseconds 500
+              if ($proc.HasExited) { break }
+              if (-not (Test-Path $mirror)) { continue }
+              $port = (Get-Content $mirror -Raw).Trim()
+              if (-not $port) { continue }
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/server/instance" -TimeoutSec 2
+                if ($r.instanceId) { $ready = $true; break }
+              } catch { }
+            }
+            if (-not $ready) {
+              throw "packaged app did not become ready (exited=$($proc.HasExited))"
+            }
+            Write-Output "packaged app ready on port $port"
+            if (-not (Test-Path (Join-Path $data "chat.db"))) {
+              throw "chat.db not created in DATA_DIR"
+            }
+            $spa = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -TimeoutSec 5
+            if ($spa.StatusCode -ne 200 -or $spa.Content -notmatch '<div id="root"') {
+              throw "SPA not served: GET / -> $($spa.StatusCode)"
+            }
+            Write-Output "SPA served (GET / -> 200 with root element)"
+          } finally {
+            if (-not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+            Get-Process -Name "tbai-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Cache tauri-driver
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: tauri-driver-v1-${{ runner.os }}
+
+      - name: Install tauri-driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $driver = Join-Path $env:USERPROFILE ".cargo\bin\tauri-driver.exe"
+          if (-not (Test-Path $driver)) {
+            cargo install tauri-driver --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed" }
+          }
+          if (-not (Test-Path $driver)) { throw "tauri-driver not installed at $driver" }
+          # tauri-driver has no version flag (it exits 1 on one), so the probe is
+          # --help, which prints its banner and exits 0.
+          Write-Output "tauri-driver: $driver"
+          & $driver --help
+          if ($LASTEXITCODE -ne 0) { throw "tauri-driver --help exited $LASTEXITCODE" }
+
+      # Windows WebDriver must match the WebView2 runtime that is actually
+      # installed on the runner: a mismatched pair fails every session. The
+      # version is therefore read from the runtime's own registry entry (falling
+      # back to the Edge binary), never pinned here.
+      - name: Install msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        env:
+          EDGEDRIVER_DIR: ${{ runner.temp }}\msedgedriver
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtimeKey = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $version = $null
+          if (Test-Path $runtimeKey) {
+            $version = (Get-ItemProperty -Path $runtimeKey -Name pv -ErrorAction SilentlyContinue).pv
+          }
+          if (-not $version) {
+            $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            if (Test-Path $edge) { $version = (Get-Item $edge).VersionInfo.ProductVersion }
+          }
+          if (-not $version) { throw "could not determine the installed WebView2 or Edge version" }
+          Write-Output "WebView2 runtime version: $version"
+          $url = "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip"
+          New-Item -ItemType Directory -Force -Path $env:EDGEDRIVER_DIR | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP "edgedriver.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $env:EDGEDRIVER_DIR -Force
+          $exe = Join-Path $env:EDGEDRIVER_DIR "msedgedriver.exe"
+          if (-not (Test-Path $exe)) { throw "msedgedriver.exe missing after extraction" }
+          $reported = (& $exe --version).Trim()
+          Write-Output "msedgedriver: $reported"
+          if ($reported -notmatch [regex]::Escape(($version -split '\.')[0])) {
+            throw "msedgedriver $reported does not match WebView2 $version"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "EDGEDRIVER=$exe"
+
+      # G1: the origin is read from the running packaged WebView, not assumed.
       #
-      # GitHub caps check-run annotations at 10 per run and downloading the job
-      # log requires authentication, so a failing run could not be triaged from
-      # outside CI. Teeing the output above also drops bun's own per-failure
-      # annotations, which leaves slots free.
+      # The runner's shell is elevated, and WebView2 Runtime 150+ ignores
+      # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an elevated host. That variable is
+      # how msedgedriver hands the app the --remote-debugging-port it attaches to,
+      # so an elevated run leaves the CDP endpoint closed and session creation
+      # times out (wry#1782, WebView2Feedback#5645). Tauri's own Windows e2e job
+      # drives the suite at medium integrity for the same reason.
       #
-      # Check-run annotations are the one failure channel readable from the
-      # public API without authentication, so the COMPLETE failure list and the
-      # suite totals are emitted as two annotations - one message each - rather
-      # than one per failure, which would hit the cap again.
-      - name: Publish complete test failure list (diagnostic)
+      # gsudo is taken from the pinned portable zip, not from winget: the MSI
+      # installs under %ProgramFiles% and appends to the machine PATH, which this
+      # already-running step cannot see. The portable build needs no installer and
+      # no service (an elevated caller drops integrity in-process), so the pinned
+      # archive and its hash are the only inputs. packaged.json records the
+      # integrity level the observation was actually taken at.
+      - name: Observe the packaged WebView origin (G1)
+        shell: pwsh
+        env:
+          G1_OUT: ${{ runner.temp }}\origin-evidence\packaged
+        run: |
+          $ErrorActionPreference = "Stop"
+          $gsudoZip = Join-Path $env:RUNNER_TEMP "gsudo.portable.zip"
+          $gsudoDir = Join-Path $env:RUNNER_TEMP "gsudo"
+          Invoke-WebRequest -Uri "https://github.com/gerardog/gsudo/releases/download/v2.6.1/gsudo.portable.zip" -OutFile $gsudoZip -UseBasicParsing
+          $actual = (Get-FileHash -Path $gsudoZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "21130bf178d7b9891207f00bff56f05b6b363ce9cec7b2d084e45fb12ee51f44"
+          if ($actual -ne $expected) { throw "gsudo archive sha256 $actual does not match the pinned $expected" }
+          Expand-Archive -Path $gsudoZip -DestinationPath $gsudoDir -Force
+          $gsudo = Join-Path $gsudoDir "x64\gsudo.exe"
+          if (-not (Test-Path $gsudo)) { throw "gsudo.exe missing after extraction" }
+          # The de-elevated child needs to execute the portable app from the
+          # workspace and write its evidence, so both are opened up explicitly.
+          icacls "$env:GITHUB_WORKSPACE" /grant "Everyone:(OI)(CI)F" | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:G1_OUT | Out-Null
+          icacls "$env:G1_OUT" /grant "Everyone:(OI)(CI)F" | Out-Null
+          $app = (Resolve-Path "TBAi-windows-x64-portable/TBAi.exe").Path
+          $bun = (Get-Command bun -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          & $gsudo --integrity Medium $bun run verify:packaged-origin --app="$app" --native-driver="$env:EDGEDRIVER" --out="$env:G1_OUT"
+          if ($LASTEXITCODE -ne 0) { throw "G1: the packaged WebView origin was not observed (exit $LASTEXITCODE)" }
+
+      # G2: runs even when G1 failed, because the two observations are
+      # independent and a missing G2 would read as "not applicable".
+      - name: Observe the development WebView origin (G2)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "origin-evidence\dev"
+          bun run observe:dev-origin --out="$out"
+          if ($LASTEXITCODE -ne 0) { throw "G2: the development WebView origin was not observed (exit $LASTEXITCODE)" }
+
+      - name: Upload portable app artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tbai-windows-x64-portable
+          path: TBAi-windows-x64-portable
+          if-no-files-found: warn
+
+      # Narrow on purpose: the data directory contains the app database and the
+      # per-boot instance identity, so only these named files are published.
+      # Both logs are sanitized by the driver that writes them.
+      - name: Upload WebView origin evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tauri-webview-origin
+          path: |
+            ${{ runner.temp }}/origin-evidence/packaged/packaged.json
+            ${{ runner.temp }}/origin-evidence/packaged/tauri-driver.log
+            ${{ runner.temp }}/origin-evidence/packaged/tbai.log
+            ${{ runner.temp }}/origin-evidence/dev/dev.json
+            ${{ runner.temp }}/origin-evidence/dev/tbai.log
+          if-no-files-found: ignore
+
+      - name: Upload smoke logs
         if: failure()
-        run: |
-          $fails = Select-String -Path test-output.log -Pattern '^\(fail\)' | ForEach-Object { $_.Line }
-          if (-not $fails) { $fails = @('(no (fail) lines captured - inspect the job log)') }
-          $totals = Select-String -Path test-output.log -Pattern '^\s*\d+ (pass|fail|skip|todo)|^Ran ' | ForEach-Object { $_.Line }
-          if (-not $totals) { $totals = @('(no suite totals captured)') }
-          # Workflow-command escaping: % first, then CR/LF. Order matters.
-          $failBody = (($fails -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
-          $totalBody = (($totals -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
-          Write-Output "::error title=Complete test failure list::$failBody"
-          Write-Output "::error title=Suite totals::$totalBody"
-          # If the suite aborted before printing a summary, the two annotations
-          # above are empty and say nothing. The tail is what explains a hard
-          # stop: a panic, a killed process, or a crash in a spawned child.
-          $exists = Test-Path test-output.log
-          $size = if ($exists) { (Get-Item test-output.log).Length } else { 0 }
-          $tail = if ($exists -and $size -gt 0) { (Get-Content test-output.log -Tail 100) } else { @('(test-output.log missing or empty)') }
-          $head = "test-output.log present=$exists bytes=$size"
-          $tailBody = ((@($head) + $tail) -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A'
-          Write-Output "::error title=Test log tail::$tailBody"
+        uses: actions/upload-artifact@v6
+        with:
+          name: tauri-smoke-logs
+          path: ${{ runner.temp }}/tauri-smoke-data
+          if-no-files-found: ignore

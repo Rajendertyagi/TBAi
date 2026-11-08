@@ -68,7 +68,7 @@ export function logLossMetricsText(): string {
  * The hono import is type-only (erased at runtime), so this module stays
  * free of runtime cycles with the route tree.
  */
-export async function accountingMiddleware(c: Context, next: Next): Promise<void> {
+export async function accountingMiddleware(_c: Context, next: Next): Promise<void> {
   const start = performance.now();
   metrics.http_requests_total++;
   metrics.http_requests_inflight++;

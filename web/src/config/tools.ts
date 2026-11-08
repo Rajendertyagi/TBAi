@@ -164,8 +164,7 @@ export const toolsConfig = {
       argPreviewTruncated: (dropped: number) =>
         `…${dropped} more character${dropped === 1 ? "" : "s"} not shown`,
       andMoreCount: (count: number) => `…and ${count} more`,
-      approvedWillExecute:
-        "Approved — will execute with your next message in this conversation.",
+      approvedWillExecute: "Approved — will execute with your next message in this conversation.",
       cancelledBeforeCompletion: "Cancelled before completion.",
       failedWithReason: (reason: string) => `Failed: ${reason}`,
       deniedWithReason: (reason: string) => `Denied: ${reason}`,
@@ -203,6 +202,8 @@ export const toolsConfig = {
       trueLabel: "True",
       falseLabel: "False",
       externalField: "This field must be completed in OpenCode.",
+      /** A field type this build does not know how to render or answer. */
+      unsupportedField: "This field type is not supported by this build.",
       /** Marks a required field in its label. */
       requiredMarker: "*",
       /**

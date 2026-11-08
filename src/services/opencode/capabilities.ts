@@ -1,5 +1,6 @@
-import { createOpenCodeClient } from "./client";
+import { createOpenCodeClient, type OpenCodeClient } from "./client";
 import { toOpenCodeError } from "./errors";
+import { resolveOpenCodeRuntimeTarget } from "./runtimeTarget";
 import { openCodeServerManager } from "./serverManager";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
@@ -95,18 +96,25 @@ function toVariantIds(entries: ModelInfo["variants"]): string[] {
 }
 
 /**
- * Lists the models the managed server currently offers. Starts the server on
- * first call (via the server manager). No directory is passed because model
- * discovery is session-independent.
+ * Lists the models a server currently offers.
  *
+ * The optional `client` is the H3/B3 boundary in practice. A conversation bound
+ * to an adopted service must ask THAT service for its catalogue; asking the
+ * manager instead would start TBAi's own managed process (and answer with the
+ * wrong service's models) on behalf of a conversation it does not own. Callers
+ * that already hold a per-service client pass it; the no-client form is the
+ * managed, server-wide catalogue used by the settings surface.
+ *
+ * No directory is passed because model discovery is session-independent.
+ *
+ * @param client - A client already bound to the service that owns the history.
  * @returns The live model list, or an empty list if the server reports none.
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
-async function fetchModels(): Promise<ModelInfo[]> {
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
-  const client = createOpenCodeClient(baseUrl);
+async function fetchModels(client?: OpenCodeClient): Promise<ModelInfo[]> {
+  const active = client ?? (await activeServiceClient());
   try {
-    const result = await client.model.list();
+    const result = await active.model.list();
     return Array.isArray(result.data) ? result.data : [];
   } catch (err) {
     throw toOpenCodeError(err);
@@ -114,7 +122,25 @@ async function fetchModels(): Promise<ModelInfo[]> {
 }
 
 /**
- * Reads the server's advertised default model, or `undefined`.
+ * A client bound to the active service, whoever owns it.
+ *
+ * The transport comes from the installed target, so an adopted service is
+ * asked with its own credential and TBAi's managed password never leaves for
+ * an origin it does not belong to (§1.9.3).
+ */
+async function activeServiceClient(): Promise<OpenCodeClient> {
+  const target = await resolveOpenCodeRuntimeTarget();
+  return createOpenCodeClient(target.baseUrl, { transport: target.transport });
+}
+
+/**
+ * Reads a server's advertised default model, or `undefined`.
+ *
+ * Exported so a caller holding a per-service client (an adopted service, H3/B3)
+ * can ask ITS server for the default instead of the managed one. It is given
+ * the client rather than building one, because building one means
+ * `ensureBaseUrl()` — which starts a managed process and would answer from the
+ * wrong service.
  *
  * Never throws. The three ways this can come back empty are all "no default",
  * not "broken": the server reports `data: null`, the request fails, or the
@@ -124,8 +150,8 @@ async function fetchModels(): Promise<ModelInfo[]> {
  * The returned descriptor deliberately omits `settings` — see
  * {@link OpenCodeDefaultModel}.
  */
-async function fetchDefaultModel(
-  client: ReturnType<typeof createOpenCodeClient>,
+export async function fetchDefaultModel(
+  client: OpenCodeClient,
 ): Promise<OpenCodeDefaultModel | undefined> {
   try {
     const result = await client.model.default();
@@ -133,8 +159,10 @@ async function fetchDefaultModel(
     if (
       model === null ||
       typeof model !== "object" ||
-      typeof model.id !== "string" || model.id.length === 0 ||
-      typeof model.providerID !== "string" || model.providerID.length === 0
+      typeof model.id !== "string" ||
+      model.id.length === 0 ||
+      typeof model.providerID !== "string" ||
+      model.providerID.length === 0
     ) {
       return undefined;
     }
@@ -151,10 +179,10 @@ async function fetchDefaultModel(
 }
 
 /**
- * Discovers the agents and models exposed by the managed OpenCode server.
- * Starts the server on first call (via the server manager) and queries its live
- * capability endpoints. Nothing is hardcoded — every agent/model string comes
- * from the server response.
+ * Discovers the agents and models exposed by the ACTIVE OpenCode service
+ * (managed or adopted, D1/H5). Starts the managed server on first call when
+ * nothing is installed, and queries its live capability endpoints. Nothing is
+ * hardcoded — every agent/model string comes from the server response.
  *
  * @returns The live agent and model lists (empty lists when the server reports none).
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
@@ -181,7 +209,9 @@ const CATALOGUE_LOADING_WINDOW_MS = 10_000;
 const CATALOGUE_LOADING_POLL_MS = 250;
 
 interface RawCapabilities {
-  readonly agents: Awaited<ReturnType<ReturnType<typeof createOpenCodeClient>["agent"]["list"]>>["data"];
+  readonly agents: Awaited<
+    ReturnType<ReturnType<typeof createOpenCodeClient>["agent"]["list"]>
+  >["data"];
   readonly models: ModelInfo[];
 }
 
@@ -212,9 +242,11 @@ async function readCapabilities(
  */
 async function readCatalogueSettled(
   client: ReturnType<typeof createOpenCodeClient>,
+  waitForStartupCatalogue: boolean,
 ): Promise<RawCapabilities> {
   const first = await readCapabilities(client);
   if (first.models.length > 0) return first;
+  if (!waitForStartupCatalogue) return first;
   const sinceReady = openCodeServerManager.msSinceReady();
   if (sinceReady === null || sinceReady > CATALOGUE_LOADING_WINDOW_MS) return first;
 
@@ -239,12 +271,16 @@ async function readCatalogueSettled(
 }
 
 export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
-  const client = createOpenCodeClient(baseUrl);
+  const target = await resolveOpenCodeRuntimeTarget();
+  const client = createOpenCodeClient(target.baseUrl, { transport: target.transport });
 
   let raw: RawCapabilities;
   try {
-    raw = await readCatalogueSettled(client);
+    // The "catalogue still loading" window exists because the MANAGED child
+    // answers `/api/info` before its provider catalogue loads. An adopted
+    // service has been running for its own reasons and is not starting up, so
+    // waiting there would delay the picker for a state that does not apply.
+    raw = await readCatalogueSettled(client, target.mode === "managed");
   } catch (err) {
     throw toOpenCodeError(err);
   }
@@ -265,11 +301,13 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     ) {
       return [];
     }
-    return [{
-      id: agent.id,
-      name: agent.name,
-      description: agent.description,
-    }];
+    return [
+      {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+      },
+    ];
   });
 
   const models = rawModels.map((m) => {
@@ -300,12 +338,15 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
  * it is re-derived here from the server's model list. Returns null when the model
  * is unknown so callers can fall back to server defaults.
  *
+ * @param modelId - The persisted model id to resolve.
+ * @param client - The client for the service that owns the history (H3/B3).
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
 export async function resolveOpenCodeModelRef(
   modelId: string,
+  client?: OpenCodeClient,
 ): Promise<{ providerID: string; modelID: string } | null> {
-  const models = await fetchModels();
+  const models = await fetchModels(client);
   // Stored ids may be `provider/model` qualified or bare. Prefer an exact
   // provider-qualified match, fall back to the bare model id so a stored
   // `hy3` still resolves against `bai/hy3`.
@@ -321,12 +362,15 @@ export async function resolveOpenCodeModelRef(
  * unknown or declares no variants — callers use that to hide the thinking
  * control.
  *
+ * @param modelId - The persisted model id to inspect.
+ * @param client - The client for the service that owns the history (H3/B3).
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
 export async function listOpenCodeModelVariants(
   modelId: string,
+  client?: OpenCodeClient,
 ): Promise<string[]> {
-  const models = await fetchModels();
+  const models = await fetchModels(client);
   const match =
     models.find((m) => `${m.providerID}/${m.id}` === modelId) ??
     models.find((m) => m.id === modelId);
@@ -340,13 +384,17 @@ export async function listOpenCodeModelVariants(
  * variant → caller omits it rather than poison the session with an unknown
  * value).
  *
+ * @param modelId - The persisted model id.
+ * @param variantId - The persisted thinking level.
+ * @param client - The client for the service that owns the history (H3/B3).
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
 export async function resolveOpenCodeVariant(
   modelId: string,
   variantId: string,
+  client?: OpenCodeClient,
 ): Promise<string | null> {
-  const variants = await listOpenCodeModelVariants(modelId);
+  const variants = await listOpenCodeModelVariants(modelId, client);
   if (variants.length === 0) return null;
   return variants.includes(variantId) ? variantId : null;
 }

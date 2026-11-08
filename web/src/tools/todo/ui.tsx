@@ -1,7 +1,4 @@
-import type {
-  ToolCallMessagePartComponent,
-  ToolCallMessagePartProps,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, CircleIcon } from "lucide-react";
 import { BackendToolView } from "../filesystem/ui";
 import { toolsConfig } from "@/config/tools";
@@ -19,7 +16,8 @@ type TodoItem = { id: string; text: string; done: boolean; position: number };
  */
 function todoSummary(result: AnyResult) {
   const items = (result as { items?: TodoItem[] } | undefined)?.items ?? [];
-  if (items.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.noItems}</span>;
+  if (items.length === 0)
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.noItems}</span>;
   return (
     <ul className="space-y-0.5">
       {items.map((item) => (
@@ -41,9 +39,9 @@ function todoSummary(result: AnyResult) {
 export const TodoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
   <BackendToolView
     title={toolsConfig.copy.toolTitle(
-    toolsConfig.copy.tool.todo,
-    typeof p.args.action === "string" ? p.args.action : null,
-  )}
+      toolsConfig.copy.tool.todo,
+      typeof p.args.action === "string" ? p.args.action : null,
+    )}
     args={p.args}
     result={p.result}
     status={p.status}

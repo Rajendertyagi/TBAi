@@ -35,7 +35,6 @@ import type {
   LimitCandidateField,
   LimitCandidateRecord,
   LimitCandidateRejection,
-  LimitSource,
   OutputReservation,
 } from "./types";
 
@@ -135,7 +134,9 @@ export function selectModelOption(
  * decision, not one taken silently here.
  */
 function validTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /**
@@ -146,11 +147,20 @@ function validTokenCount(value: unknown): number | undefined {
  * vanishing — which is the whole defect this replaces, where `Math.floor`
  * turned `1000.9` into an authoritative `1000`.
  */
-function checkLimitCandidate(value: unknown): {
-  readonly ok: boolean;
-  readonly value: number | null;
-  readonly rejectionReason: LimitCandidateRejection | null;
-} {
+/**
+ * The result of validating one candidate limit figure.
+ *
+ * A discriminated union, not `{ok: boolean, value: number | null}`. With the
+ * flat shape a caller that checked `ok` still could not prove `value` was a
+ * number, so every accepted branch had to re-narrow a value the checker had
+ * already proved. Here `value` exists only on the ok branch, which is what
+ * makes `observedCheck.ok` sufficient to use it.
+ */
+type LimitCandidateCheck =
+  | { readonly ok: true; readonly value: number; readonly rejectionReason: null }
+  | { readonly ok: false; readonly value: null; readonly rejectionReason: LimitCandidateRejection };
+
+function checkLimitCandidate(value: unknown): LimitCandidateCheck {
   if (typeof value !== "number") {
     return { ok: false, value: null, rejectionReason: "not_a_number" };
   }
@@ -172,10 +182,17 @@ function checkLimitCandidate(value: unknown): {
 /** A limit candidate together with the stance of whoever asserted it. */
 interface LimitCandidate {
   readonly value: number;
-  readonly source: ContextWindowSource;
+  readonly source: ContextWindowSource | "observed";
   /** Index into the diagnostic record array, so selection can mark it later. */
   readonly recordIndex: number;
 }
+
+const CANDIDATE_RANK: Record<ContextWindowSource | "observed", number> = {
+  configured: 0,
+  provider_reported: 1,
+  observed: 2,
+  model_catalog: 3,
+};
 
 /**
  * One candidate as SUPPLIED, before validation — the shape a reader needs in
@@ -236,7 +253,6 @@ function collectCandidates(input: {
       outcome: present && !check.ok ? "rejected" : "not_compared",
     });
 
-    if (entry.field === "observedContextWindow") return;
     if (!present || !check.ok) return;
 
     // The stored figure is `candidates[0]` and the configured figure follows it
@@ -249,7 +265,7 @@ function collectCandidates(input: {
     // stronger authority for them. Both paths still select the same number.
     candidates.push({
       value: check.value as number,
-      source: entry.source as ContextWindowSource,
+      source: entry.source,
       recordIndex: index,
     });
   });
@@ -341,7 +357,10 @@ export function resolveContextLimit(input: {
    */
   const withDiagnostics = (
     limit: ContextLimit,
-    annotations: ReadonlyMap<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>,
+    annotations: ReadonlyMap<
+      number,
+      { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+    >,
   ): ContextLimit => {
     // ALWAYS attached, including on the fallback path. That path is precisely
     // where the records matter most: it is the only route by which a reader
@@ -374,62 +393,72 @@ export function resolveContextLimit(input: {
   // existing resolution runs completely untouched, and the observation is consulted
   // only on the one path that currently has nothing.
   if (candidates.length === 0) {
-    // `observedContextWindow` is validated with the SAME classifier as every
-    // other candidate, so a fractional observed figure is rejected for the same
-    // reason a fractional stored one is rather than silently floored.
-    const observedCheck = checkLimitCandidate(input.observedContextWindow);
-    const observedIndex = records.findIndex((record) => record.field === "observedContextWindow");
-
-    if (observedCheck.ok) {
-      const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
-      if (observedIndex >= 0) annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
-      return withDiagnostics({ ...base, maxInputTokens: observedCheck.value, source: "observed" }, annotations);
-    }
-
-    // No real figure. Report the conservative ceiling as a stood-in-for value,
-    // never as a reported limit, so diagnostics can show it is a stand-in.
     return withDiagnostics(
       { ...base, maxInputTokens: UNKNOWN_LIMIT_CEILING, source: "conservative_default" },
       new Map(),
     );
   }
 
-  const first = candidates[0] as LimitCandidate;
+  // Precedence order: configured (0) > provider_reported (1) > observed (2) > model_catalog (3)
+  const ranked = [...candidates].sort(
+    (a, b) => CANDIDATE_RANK[a.source] - CANDIDATE_RANK[b.source],
+  );
+  const winner = ranked[0] as LimitCandidate;
 
   if (candidates.length === 1) {
     return withDiagnostics(
-      { ...base, maxInputTokens: first.value, source: first.source },
-      new Map([[first.recordIndex, { selected: true, outcome: "not_compared" }]]),
+      { ...base, maxInputTokens: winner.value, source: winner.source },
+      new Map([[winner.recordIndex, { selected: true, outcome: "not_compared" }]]),
     );
   }
 
-  const second = candidates[1] as LimitCandidate;
+  const disagreeing = ranked.filter((c) => c.value !== winner.value);
 
-  if (first.value === second.value) {
-    // Agreement. Report the stronger authority; nothing is being overridden.
+  if (disagreeing.length === 0) {
+    // All candidates agree on the value.
+    // Preserves R1 agreement behavior: when configured and provider_reported agree,
+    // report provider_reported as the authoritative external source.
+    const hasProviderReported = ranked.some((c) => c.source === "provider_reported");
+    const agreementSource = hasProviderReported ? "provider_reported" : winner.source;
+    const annotations = new Map<
+      number,
+      { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+    >();
+    ranked.forEach((c) => {
+      annotations.set(c.recordIndex, { selected: true, outcome: "agreed" });
+    });
     return withDiagnostics(
-      { ...base, maxInputTokens: first.value, source: "provider_reported" },
-      new Map([
-        [first.recordIndex, { selected: true, outcome: "agreed" }],
-        [second.recordIndex, { selected: true, outcome: "agreed" }],
-      ]),
+      { ...base, maxInputTokens: winner.value, source: agreementSource },
+      annotations,
     );
   }
 
-  // Conflict. Configured wins (rule 3); the provider figure is preserved for
-  // diagnostics so the disagreement is observable rather than lost.
+  // Conflict. The highest ranked candidate wins; highest ranked disagreeing candidate is divergentValue.
+  const loser = disagreeing[0] as LimitCandidate;
+  const annotations = new Map<
+    number,
+    { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+  >();
+  ranked.forEach((c) => {
+    if (c.value === winner.value) {
+      annotations.set(c.recordIndex, {
+        selected: c.recordIndex === winner.recordIndex,
+        outcome: "conflicted",
+      });
+    } else {
+      annotations.set(c.recordIndex, { selected: false, outcome: "lost_precedence" });
+    }
+  });
+
   return withDiagnostics(
     {
       ...base,
-      maxInputTokens: second.value,
-      source: "configured",
+      maxInputTokens: winner.value,
+      source: winner.source,
       divergent: true,
-      divergentValue: { value: first.value, source: first.source },
+      divergentValue: { value: loser.value, source: loser.source },
     },
-    new Map([
-      [first.recordIndex, { selected: false, outcome: "lost_precedence" }],
-      [second.recordIndex, { selected: true, outcome: "conflicted" }],
-    ]),
+    annotations,
   );
 }
 
@@ -457,10 +486,11 @@ export function isPhase3ExperimentEligible(limit: ContextLimit): boolean {
  * Resolve the output reservation — the INPUT BUDGET held back so a generation
  * has room to finish.
  *
- * Independent of any display-side context-ring arithmetic (`web/src/stores/
- * utils/contextUtils.ts`), which computes a percentage and is not a request
- * parameter. This value is NOT available input context: it is the room held back,
- * and the two must never be added together.
+ * Independent of any display-side context-ring arithmetic
+ * (`web/src/components/assistant-ui/elements/context-display.tsx`), which
+ * computes a percentage and is not a request parameter. This value is NOT
+ * available input context: it is the room held back, and the two must never be
+ * added together.
  *
  * This is NOT the generation cap. See `resolveGenerationCap`.
  */
@@ -503,7 +533,8 @@ export function resolveGenerationCap(input: {
 }): GenerationCap {
   const documented = validTokenCount(input.modelOutputTokens);
   const desired = documented ?? DEFAULT_GENERATION_CAP;
-  const source: GenerationCap["source"] = documented !== undefined ? "provider_reported" : "conservative_default";
+  const source: GenerationCap["source"] =
+    documented !== undefined ? "provider_reported" : "conservative_default";
 
   if (input.ceilingTokens === undefined || input.usableInputTokens === undefined) {
     return { tokens: desired, source, boundedByRemainingWindow: false };
@@ -511,11 +542,19 @@ export function resolveGenerationCap(input: {
 
   // Room the window can still give the model after input has been sized.
   const remaining = Math.floor(input.ceilingTokens - input.usableInputTokens);
-  if (remaining <= 0) return { tokens: DEFAULT_GENERATION_CAP, source: "conservative_default", boundedByRemainingWindow: true };
+  if (remaining <= 0)
+    return {
+      tokens: DEFAULT_GENERATION_CAP,
+      source: "conservative_default",
+      boundedByRemainingWindow: true,
+    };
 
   return {
     tokens: Math.min(desired, remaining),
-    source: documented !== undefined && desired <= remaining ? "provider_reported" : "conservative_default",
+    source:
+      documented !== undefined && desired <= remaining
+        ? "provider_reported"
+        : "conservative_default",
     boundedByRemainingWindow: documented !== undefined && desired > remaining,
   };
 }
@@ -564,6 +603,8 @@ export function describeLimitSource(limit: ContextLimit): string {
       return "provider_reported";
     case "configured":
       return "configured";
+    case "model_catalog":
+      return "model_catalog";
     case "observed":
       // Says where it came from: stated by the provider, but read from a rejection
       // rather than declared in a listing.

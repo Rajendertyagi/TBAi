@@ -4,7 +4,13 @@ import {
   limitRuleFor,
   type ExtractedCapabilities,
 } from "./capabilityDiscovery";
-import { providerReportedLimit, type ModelCapabilities, type ModelOption, type ProviderConfig } from "../types";
+import {
+  providerReportedLimit,
+  type ModelCapabilities,
+  type ModelOption,
+  type ProviderConfig,
+} from "../types";
+import { enrichModels } from "./modelCatalog";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
@@ -47,27 +53,33 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs = 15000): Pro
 }
 
 /**
- * Modalities that can never serve as chat models. This is the legitimate half
- * of discovery filtering ("is this usable as a model?").
+ * Modalities that can never serve as chat models. This is the ONLY discovery
+ * filter: a model returned by a provider's model-list API is accepted unless
+ * it is identified here as incompatible with chat.
+ *
+ * The list is deliberately limited to non-chat model types — embedding,
+ * image generation, audio/transcription, reranking, moderation, and legacy
+ * completion models. It must not grow into a capability mechanism or a
+ * family allowlist: capability metadata comes exclusively from truthful
+ * per-model sources via ModelCapabilities, and unfamiliar-but-valid chat
+ * models (o3, gemma, mixtral, qwq, glm, kimi, …) must pass through.
  */
 function isExcludedModality(lowerId: string): boolean {
-  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(lowerId);
+  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-|moderation|transcribe|veo|babbage|davinci|realtime/.test(
+    lowerId,
+  );
 }
 
 /**
- * Legacy family allowlist. This is a discovery-noise filter only — it answers
- * "have we seen this family before", never "what can this model do". It must
- * NOT grow into a capability mechanism: capability metadata comes exclusively
- * from truthful per-model sources via ModelCapabilities. New families must be
- * handled by richer discovery, not by extending this expression.
+ * A model is a chat candidate unless it is identified as a non-chat modality.
+ *
+ * Provider model-list APIs are the authority on what exists; TBAi does not
+ * second-guess them with a family allowlist. Unknown families are accepted —
+ * the cost of a false accept is one unusable entry the user ignores, while
+ * the cost of a false reject is a valid model the user can never select.
  */
-function isKnownChatFamily(lowerId: string, type: string): boolean {
-  return /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(lowerId) || type === "ollama";
-}
-
-function isChatModel(id: string, type: string): boolean {
-  const lower = id.toLowerCase();
-  return !isExcludedModality(lower) && isKnownChatFamily(lower, type);
+function isChatModel(id: string): boolean {
+  return !isExcludedModality(id.toLowerCase());
 }
 
 /** Single owner of the "no source has reported anything yet" capability state. */
@@ -115,7 +127,11 @@ async function fetchOllamaModel(
 /** Bounded parallel fan-out (no dependency, no retries, no sleeps). */
 const OLLAMA_SHOW_CONCURRENCY = 5;
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const out: R[] = new Array<R>(items.length);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -142,15 +158,24 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
  * decision and not discovery's.
  */
 function withExtractedLimits(
-  base: Omit<ModelOption, "contextWindow" | "contextWindowSource" | "maxOutputTokens" | "maxOutputTokensSource">,
+  base: Omit<
+    ModelOption,
+    "contextWindow" | "contextWindowSource" | "maxOutputTokens" | "maxOutputTokensSource"
+  >,
   limits: ExtractedCapabilities,
   discoveredAt: number,
 ): ModelOption {
-  const contextWindow = limits.contextWindow ? providerReportedLimit(limits.contextWindow.value) : undefined;
-  const maxOutputTokens = limits.maxOutputTokens ? providerReportedLimit(limits.maxOutputTokens.value) : undefined;
+  const contextWindow = limits.contextWindow
+    ? providerReportedLimit(limits.contextWindow.value)
+    : undefined;
+  const maxOutputTokens = limits.maxOutputTokens
+    ? providerReportedLimit(limits.maxOutputTokens.value)
+    : undefined;
   return {
     ...base,
-    ...(contextWindow ? { contextWindow: contextWindow.value, contextWindowSource: contextWindow.source } : {}),
+    ...(contextWindow
+      ? { contextWindow: contextWindow.value, contextWindowSource: contextWindow.source }
+      : {}),
     ...(maxOutputTokens
       ? { maxOutputTokens: maxOutputTokens.value, maxOutputTokensSource: maxOutputTokens.source }
       : {}),
@@ -160,20 +185,22 @@ function withExtractedLimits(
 
 function normalizeOpenAI(raw: any, provider: string, discoveredAt: number): ModelOption[] {
   const data = Array.isArray(raw?.data) ? raw.data : [];
-  return data
-    // R2: the entry is read for its LIMITS, not just its id. A listing that omits
-    // them yields no value and no stance — still unknown, never invented.
-    .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m }))
-    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
-    .map(({ id, raw }) =>
-      withExtractedLimits(
-        // OpenAI-compatible listings expose no reasoning metadata, so that half
-        // stays unknown.
-        { id, provider, capabilities: unknownReasoning() },
-        extractCapabilities(raw, limitRuleFor(provider)),
-        discoveredAt,
-      ),
-    );
+  return (
+    data
+      // R2: the entry is read for its LIMITS, not just its id. A listing that omits
+      // them yields no value and no stance — still unknown, never invented.
+      .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m as Record<string, unknown> }))
+      .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id))
+      .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
+        withExtractedLimits(
+          // OpenAI-compatible listings expose no reasoning metadata, so that half
+          // stays unknown.
+          { id, provider, capabilities: unknownReasoning() },
+          extractCapabilities(raw, limitRuleFor(provider)),
+          discoveredAt,
+        ),
+      )
+  );
 }
 
 function normalizeAnthropic(raw: any, provider: string, discoveredAt: number): ModelOption[] {
@@ -181,7 +208,7 @@ function normalizeAnthropic(raw: any, provider: string, discoveredAt: number): M
   return data
     .map((m: any) => {
       const id = String(m?.id ?? "").trim();
-      if (!id || !isChatModel(id, provider)) return null;
+      if (!id || !isChatModel(id)) return null;
       // `max_input_tokens` / `max_output_tokens` are read generically now, by the
       // same extractor every other provider uses — Anthropic is no longer a
       // special case, it is simply the first provider whose field names the
@@ -206,11 +233,13 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
   const data = Array.isArray(raw?.models) ? raw.models : [];
   return data
     .map((m: any) => ({
-      id: String(m?.name ?? "").replace(/^models\//, "").trim(),
-      raw: m,
+      id: String(m?.name ?? "")
+        .replace(/^models\//, "")
+        .trim(),
+      raw: m as Record<string, unknown>,
     }))
-    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
-    .map(({ id, raw }) =>
+    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id))
+    .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
       withExtractedLimits(
         // Google's listing reports no reasoning metadata either.
         { id, provider, capabilities: unknownReasoning() },
@@ -227,7 +256,7 @@ function normalizeOllama(raw: any): string[] {
   const data = Array.isArray(raw?.models) ? raw.models : [];
   return data
     .map((m: any) => String(m?.name ?? "").trim())
-    .filter(Boolean);
+    .filter((id: string) => Boolean(id) && isChatModel(id));
 }
 
 export async function discoverModels(input: DiscoverInput): Promise<ModelOption[]> {
@@ -241,13 +270,15 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
   // and a listing cannot be half fresh and half stale.
   const discoveredAt = input.now?.() ?? Date.now();
 
+  let discovered: ModelOption[];
   switch (type) {
     case "openai":
     case "custom": {
       const headers: Record<string, string> = {};
-      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
       const raw = await fetchJson(joinBase(base, "models"), { headers });
-      return normalizeOpenAI(raw, type, discoveredAt);
+      discovered = normalizeOpenAI(raw, type, discoveredAt);
+      break;
     }
     case "anthropic": {
       if (!apiKey) throw new Error("An API key is required to discover Anthropic models.");
@@ -256,23 +287,28 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
         "anthropic-version": "2023-06-01",
       };
       const raw = await fetchJson(joinBase(base, "v1/models"), { headers });
-      return normalizeAnthropic(raw, type, discoveredAt);
+      discovered = normalizeAnthropic(raw, type, discoveredAt);
+      break;
     }
     case "google": {
       if (!apiKey) throw new Error("An API key is required to discover Google models.");
       const url = `${joinBase(base, "v1beta/models")}?key=${encodeURIComponent(apiKey)}`;
       const raw = await fetchJson(url, {});
-      return normalizeGoogle(raw, type, discoveredAt);
+      discovered = normalizeGoogle(raw, type, discoveredAt);
+      break;
     }
     case "ollama": {
       const raw = await fetchJson(joinBase(base, "api/tags"), {});
       const ids = normalizeOllama(raw);
-      return mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => {
+      discovered = await mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => {
         const { capabilities, limits } = await fetchOllamaModel(base, id);
         return withExtractedLimits({ id, provider: type, capabilities }, limits, discoveredAt);
       });
+      break;
     }
     default:
       throw new Error(`Model discovery is not supported for type: ${type}`);
   }
+
+  return enrichModels(discovered, { type, endpoint });
 }

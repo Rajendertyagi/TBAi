@@ -28,8 +28,7 @@ import {
  * TBAi's own sentence, never provider text (ADR: terminal diagnostics are
  * classification fields only).
  */
-export const INTERRUPTED_STREAM_REPLAY_ERROR =
-  "The app restarted while this reply was streaming.";
+export const INTERRUPTED_STREAM_REPLAY_ERROR = "The app restarted while this reply was streaming.";
 
 /** Classification recorded on every recovered row. */
 export const INTERRUPTED_STREAM_ERROR_CATEGORY = "lifecycle";

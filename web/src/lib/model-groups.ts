@@ -16,20 +16,16 @@ export function buildModelGroups(
     providerId: p.id,
     providerName: p.name,
     isDefault: p.id === activeProviderId,
-    models:
-      p.models?.length
-        ? p.models
-        : p.model
-          ? [{ id: p.model, provider: p.type, label: p.model }]
-          : [],
+    models: p.models?.length
+      ? p.models
+      : p.model
+        ? [{ id: p.model, provider: p.type, label: p.model }]
+        : [],
   }));
 }
 
 /** Filter groups by provider name, model id, or model label (case-insensitive). */
-export function filterModelGroups(
-  groups: ModelGroup[],
-  query: string,
-): ModelGroup[] {
+export function filterModelGroups(groups: ModelGroup[], query: string): ModelGroup[] {
   const q = query.trim().toLowerCase();
   if (!q) return groups;
   const out: ModelGroup[] = [];

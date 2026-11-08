@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useRouteError } from "react-router";
 import { Button } from "@/components/ui/button";
 import { logger } from "@/lib/logger";
+import { ROUTES } from "@/config/routes";
 
 /**
  * Root route error boundary. Catches render crashes anywhere under the app
@@ -20,8 +21,7 @@ export function RouteError() {
   const navigate = useNavigate();
   const error = useRouteError();
 
-  const message =
-    error instanceof Error ? error.message : "Something went wrong.";
+  const message = error instanceof Error ? error.message : "Something went wrong.";
 
   useEffect(() => {
     logger.error("app", "boundary_error", {
@@ -32,14 +32,12 @@ export function RouteError() {
 
   return (
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center">
-      <h1 className="text-lg font-semibold text-foreground">
-        Something went wrong
-      </h1>
+      <h1 className="text-lg font-semibold text-foreground">Something went wrong</h1>
       <p className="max-w-md truncate text-sm text-muted-foreground" title={message}>
         {message}
       </p>
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => navigate("/chat/new")}>
+        <Button variant="outline" onClick={() => navigate(ROUTES.CHAT_NEW)}>
           New chat
         </Button>
         <Button onClick={() => window.location.reload()}>Reload app</Button>

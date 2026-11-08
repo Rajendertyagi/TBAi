@@ -43,7 +43,7 @@ export interface ModelCapabilities {
  * This mirrors `CapabilitySupport` deliberately: a producer must take an
  * explicit stance, and absence of a stance is never a licence to assume one.
  */
-export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured", "model_catalog"] as const;
 export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
 
 /** The numeric half of a limit, always carrying the stance that produced it. */
@@ -73,6 +73,14 @@ export function providerReportedLimit(value: number): SourcedNumber {
  */
 export function configuredLimit(value: number): SourcedNumber {
   return { value, source: "configured" };
+}
+
+/**
+ * Build a `model_catalog` limit. Used by model catalog enrichment — third party
+ * metadata from Models.dev.
+ */
+export function catalogLimit(value: number): SourcedNumber {
+  return { value, source: "model_catalog" };
 }
 
 export interface ModelOption {
@@ -171,6 +179,23 @@ export interface Conversation {
   workspaceFolderId?: string | null;
   /** OpenCode session id bound to this conversation for Code mode; null if unused. */
   opencodeSessionId?: string | null;
+  /**
+   * Which service owns that session's history: `managed` or `adopted:<origin>`.
+   * Null on a bound row means managed (adoption postdates those rows). See
+   * `services/opencode/historyBoundary.ts`.
+   */
+  opencodeServiceOwner?: string | null;
+  /**
+   * The OpenCode session's confirmed working directory (persisted mirror).
+   * For imported sessions, this stores the location.directory from OpenCode.
+   * Null for regular TBAi conversations with default workspaces.
+   */
+  opencodeDirectory?: string | null;
+  /**
+   * True if this conversation was imported from an existing OpenCode session.
+   * Imported sessions must never be silently recreated on remote 404.
+   */
+  opencodeImported?: boolean;
   /** Engine that owns this conversation: Direct chat or OpenCode agent mode. */
   engine?: "direct" | "opencode";
   /** OpenCode agent id chosen at creation (OpenCode engine only). */
@@ -190,6 +215,8 @@ export interface Conversation {
    * resolves to this existing row instead of minting a duplicate.
    */
   clientRequestId?: string | null;
+  lastReadAt?: Date | null;
+  lastMessageAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

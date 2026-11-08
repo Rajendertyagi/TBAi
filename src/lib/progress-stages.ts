@@ -27,25 +27,25 @@ export interface ProgressData {
  */
 export const TOOL_STAGE_MAP: Readonly<Record<string, { id: string; label: string }>> = {
   // Workspace inspection
-  list_dir:    { id: "inspect",   label: "Inspecting workspace" },
-  search_files:{ id: "search",    label: "Finding relevant files" },
-  file_info:   { id: "inspect",   label: "Inspecting workspace" },
+  list_dir: { id: "inspect", label: "Inspecting workspace" },
+  search_files: { id: "search", label: "Finding relevant files" },
+  file_info: { id: "inspect", label: "Inspecting workspace" },
 
   // Reading
-  read_file:   { id: "read",      label: "Reading files" },
+  read_file: { id: "read", label: "Reading files" },
 
   // Modifying
-  write_file:  { id: "modify",    label: "Modifying files" },
-  edit_file:   { id: "modify",    label: "Modifying files" },
-  delete_file: { id: "modify",    label: "Modifying files" },
+  write_file: { id: "modify", label: "Modifying files" },
+  edit_file: { id: "modify", label: "Modifying files" },
+  delete_file: { id: "modify", label: "Modifying files" },
 
   // Execution / verification
-  run_command: { id: "run",       label: "Running commands" },
+  run_command: { id: "run", label: "Running commands" },
 
   // System
-  process_list:     { id: "system", label: "Inspecting system" },
-  process_kill:     { id: "system", label: "Managing processes" },
-  system_info:      { id: "system", label: "Inspecting system" },
+  process_list: { id: "system", label: "Inspecting system" },
+  process_kill: { id: "system", label: "Managing processes" },
+  system_info: { id: "system", label: "Inspecting system" },
 };
 
 const DEFAULT_STAGE = { id: "execute", label: "Executing tools" };

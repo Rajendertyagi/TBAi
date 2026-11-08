@@ -1,10 +1,14 @@
-import { createRoot } from 'react-dom/client'
-import App from './App'
-import './styles/globals.css'
-import { installGlobalLogHooks } from './lib/logger'
-import { installOperationHeaderFetch } from './lib/operation'
-import { ThemeProvider } from './components/theme-provider'
-import { AppToaster } from './components/AppToaster'
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./styles/globals.css";
+import { installGlobalLogHooks } from "./lib/logger";
+import { installOperationHeaderFetch } from "./lib/operation";
+import { ThemeProvider } from "./components/theme-provider";
+import { AppToaster } from "./components/AppToaster";
+import { readTypography } from "./features/appearance/typography";
+
+// Ensure migrated typography is normalized and persisted on startup
+readTypography();
 
 // DEV ONLY compatibility shim for the assistant-ui DevTools chain.
 //
@@ -22,12 +26,12 @@ if (import.meta.env.DEV) {
   scope.process = { ...existing, env: { ...existingEnv, NODE_ENV: "development" } };
 }
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById("root")!).render(
   <ThemeProvider>
     <App />
     <AppToaster />
-  </ThemeProvider>
-)
+  </ThemeProvider>,
+);
 
 // Capture otherwise-silent failures (unhandled rejections, window errors).
 installGlobalLogHooks();

@@ -38,8 +38,7 @@ export function OpenCodeContextRing() {
   const current = extras.model
     ? models.find(
         (model) =>
-          model.id === extras.model?.modelID &&
-          model.providerID === extras.model?.providerID,
+          model.id === extras.model?.modelID && model.providerID === extras.model?.providerID,
       )
     : undefined;
   return (

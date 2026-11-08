@@ -11,8 +11,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { EnginePicker } from "@/components/EnginePicker";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { createConversation } from "@/adapters/remoteThreadListAdapter";
+import { ROUTES } from "@/config/navigation";
 import { threadUrl } from "@/features/chat/state/chatTabs";
 import type { WelcomeEngine } from "@/features/chat/state/welcomeEngine";
 
@@ -75,8 +76,8 @@ export function NewProjectChatDialog({
         <DialogHeader>
           <DialogTitle>New Project Chat</DialogTitle>
           <DialogDescription>
-            Choose a registered folder. The chat will be attached to it and use
-            that folder as its workspace.
+            Choose a registered folder. The chat will be attached to it and use that folder as its
+            workspace.
           </DialogDescription>
         </DialogHeader>
 
@@ -100,11 +101,12 @@ export function NewProjectChatDialog({
                       : "border-border hover:bg-muted"
                   }`}
                 >
-                  <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+                  <FolderOpen
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-muted-foreground"
+                  />
                   <span className="min-w-0 flex-1 truncate">{label}</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {f.path}
-                  </span>
+                  <span className="truncate text-xs text-muted-foreground">{f.path}</span>
                 </button>
               );
             })}
@@ -119,21 +121,15 @@ export function NewProjectChatDialog({
 
         <DialogFooter className="flex-col gap-3 sm:flex-col">
           <EnginePicker value={engine} onChange={setEngine} />
-          <div className="flex w-full justify-between gap-2">          <Button
-            variant="outline"
-            onClick={() => navigate("/folders")}
-            type="button"
-          >
-            <FolderPlus aria-hidden="true" className="size-4" />
-            Manage folders
-          </Button>
-          <Button
-            onClick={handleCreate}
-            disabled={!selectedId || busy}
-            type="button"
-          >
-            Start chat
-          </Button>
+          <div className="flex w-full justify-between gap-2">
+            {" "}
+            <Button variant="outline" onClick={() => navigate(ROUTES.FOLDERS)} type="button">
+              <FolderPlus aria-hidden="true" className="size-4" />
+              Manage folders
+            </Button>
+            <Button onClick={handleCreate} disabled={!selectedId || busy} type="button">
+              Start chat
+            </Button>
           </div>
         </DialogFooter>
       </DialogContent>

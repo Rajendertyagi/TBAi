@@ -117,7 +117,10 @@ const TIPS = [
 
 export const welcomeConfig: WelcomeConfig = {
   layout: {
-    columnMaxWidthClass: "max-w-3xl",
+    // Same column as the transcript and the composer: one width setting moves
+    // all three together, and the inner `px-4` gutter is kept so the empty
+    // state's text sits on the same left edge as a sent message.
+    columnMaxWidthClass: "max-w-[var(--chat-column-width)]",
     columnPaddingClass: "px-4",
     columnGapClass: "gap-6",
     heroTitleClass: "text-2xl font-semibold tracking-tight text-foreground",
@@ -172,8 +175,7 @@ export const welcomeConfig: WelcomeConfig = {
     projectFolderTitle: "With a project folder",
     noFoldersHint: "No folders registered yet. Add one to enable project chats.",
     manageFolders: "Manage folders",
-    folderConversations: (count: number) =>
-      count === 1 ? "1 chat" : `${count} chats`,
+    folderConversations: (count: number) => (count === 1 ? "1 chat" : `${count} chats`),
     invalidScopeFallback: "Saved folder is gone — fell back to a disposable workspace.",
     tips: TIPS,
   },
@@ -288,7 +290,5 @@ export const welcomeConfig: WelcomeConfig = {
 export const DEFAULT_QUICK_ACTION_TAB: QuickActionTabId = "coding";
 
 export function isQuickActionTabId(value: unknown): value is QuickActionTabId {
-  return (
-    value === "coding" || value === "office" || value === "research"
-  );
+  return value === "coding" || value === "office" || value === "research";
 }

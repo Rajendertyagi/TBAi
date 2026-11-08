@@ -129,8 +129,8 @@ Consequence: **no single file covers both engines.** What unifies them is a
 | Shell + `curl` | native tool | model runs `curl` | No | Fallback only — untyped, unreliable |
 | TBAi-side only (Goal N) | — | — | No | **Chosen for Goal N** — no tool needed at all (§9) |
 
-Note: even the MCP route is cheaper than it looks — `@modelcontextprotocol/server@2.0.0`
-is already installed (`package.json:19`). It is rejected on architecture grounds,
+Note: even the MCP route is cheaper than it looks — `@modelcontextprotocol/server@2.3.1`
+is already installed (`package.json`). It is rejected on architecture grounds,
 not availability.
 
 ---

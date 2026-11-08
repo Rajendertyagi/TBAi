@@ -55,7 +55,9 @@ ai-chat-app/
 │  ├─ index.ts               # entry: serve Hono on :3000
 │  ├─ routes/                # one module per concern (see below)
 │  │  ├─ index.ts            # composition root: middleware + mounts + health
-│  │  ├─ chat.ts             # /api/chat + resume + native tool definitions
+│  │  ├─ chat/               # /api/chat: index.ts is the route entry, the rest are
+│  │  │  │                   #   its phase modules (validate, assemble, gate, stream,
+│  │  │  │                   #   settlement, compact-command, overflow-gate, model)
 │  │  ├─ tools.ts            # /api/tools/* manual surface
 │  │  ├─ providers.ts        # provider CRUD + test/discover
 │  │  ├─ conversations.ts    # threads + messages persistence API
@@ -71,6 +73,8 @@ ai-chat-app/
 │  ├─ db/index.ts            # bun:sqlite connection + schema (conversations.status,
 │  │                        #   messages.parent_id/order_seq/status/format/content,
 │  │                        #   mcp_servers)
+│  ├─ db/schema/chat-streams.ts # leaf module owning the chat-stream DDL + TTL
+│  ├─ db/schema/messages.ts  # leaf module owning the messages DDL + its rebuild
 │  ├─ lib/validation.ts      # Zod schemas for all API input
 │  └─ types/index.ts
 ├─ web/                      # frontend (React + Vite)
@@ -86,6 +90,8 @@ ai-chat-app/
 │  │  │  ├─ chat/            # ChatView + TabStrip (chats + pages) + chatTabs store
 │  │  │  ├─ providers/       # ProvidersPage (moved from SettingsPanel)
 │  │  │  ├─ appearance/      # AppearancePage (theme surface)
+│  │  │  ├─ memories/        # components/MemoryPanel.tsx (memory settings page)
+│  │  │  ├─ mcp/             # components/McpPanel.tsx + state/mcpStore.ts (MCP GUI/state)
 │  │  │  └─ workspace/       # WorkspacePage (sandbox policy + sysinfo)
 │  │  ├─ components/shared/  # settings-page grammar (page/section/row)
 │  │  ├─ runtime.ts          # useAppChatRuntime() → useRemoteThreadListRuntime
@@ -96,17 +102,243 @@ ai-chat-app/
 │  │  ├─ config/history.ts    # historyConfig (page size, date grouping, feature flags)
 │  │  ├─ components/
  │  │  │  ├─ ChatWindow.tsx   # assistant-ui Thread/Composer (provider-agnostic)
- │  │  │  ├─ PaseoComposer.tsx  # Paseo-inspired composer (button row, model/thinking chips)
- │  │  │  ├─ SettingsPanel.tsx, MemoryPanel.tsx, Sidebar.tsx, McpPanel.tsx, ui.tsx
+ │  │  │  ├─ Composer.tsx    # Direct composer (button row; model/thinking chips
+│  │  │  │                  #   in composer/DirectChips.tsx)
+ │  │  │  ├─ SettingsPanel.tsx, Sidebar.tsx, ui.tsx
  │  │  │  └─ assistant-ui/elements/
  │  │  │     ├─ markdown-text.tsx, reasoning.aui.tsx, shiki-highlighter.*
  │  │  │     ├─ tool-group.tsx, tooltip-icon-button.tsx
  │  │  │     └─ todo-list.tsx     # tbai-progress data renderer (agent stages)
-│  │  ├─ stores/index.ts      # Zustand: settings / memory / mcp (UI state only)
+│  │  ├─ features/<name>/    # each feature owns its UI, state/ and config:
+│  │  │  │                   #   providers/state/providersStore, memories/state/memoryStore,
+│  │  │  │                   #   folders/state/foldersStore, permissions/state/stalePermissionsStore…
 │  │  └─ styles/globals.css  # design tokens
 │  └─ package.json
 └─ docs/                     # this documentation set
 ```
+
+## File ownership
+
+Ownership follows the dependency direction, not convenience. This section records
+what each directory owns and **why** the split exists. `AGENTS.md` carries the
+same rules as mandatory agent instructions plus the change-workflow checklist;
+this file carries the reasoning.
+
+### Why ownership is explicit
+
+Three failure modes motivated turning ownership into a rule rather than a
+convention:
+
+1. **Shared directories quietly become dumping grounds.** `web/src/stores/`,
+   `web/src/lib/`, and `web/src/config/` each accumulated modules whose subject
+   was a single feature. Nothing broke — typecheck stayed green — but the tree
+   stopped answering "where does this belong?". A feature's config sitting in
+   shared `config/` leaves the next author unable to tell whether it is a shared
+   contract or a private detail, which is exactly how coupling sneaks back in.
+2. **Structural ambiguity produces real collisions.** `src/routes/chat.ts` and a
+   `src/routes/chat/` directory could not coexist on disk. That is not a quirk of
+   the filesystem; it is what happens when no rule says which shape a concern
+   takes. Resolving it by consolidating every chat concern under
+   `src/routes/chat/` was possible only because the ownership intent was stated
+   first.
+3. **Boundary erosion is invisible until it is expensive.** The database layer
+   importing a service, or an OpenCode capability leaking into Direct Chat, both
+   compile cleanly. They surface later as a broken isolation boundary, by which
+   point the fix is a refactor rather than a placement decision.
+
+The rules below are nearly free at creation time and expensive to retrofit.
+
+### Backend ownership
+
+| Directory | Owns |
+|---|---|
+| `src/routes/` | The HTTP boundary — request handling, Zod validation, status codes, response shaping. One module per concern; no domain logic. |
+| `src/services/` | Business logic, orchestration, domain behavior. No HTTP concerns. |
+| `src/db/` | Database connections, schema/DDL, row mappers. |
+| `src/lib/` | Cross-cutting pure helpers — logger, validation schemas, message pruning/conversion. |
+| `src/tools/` | Native AI SDK `tool()` definitions and their Zod schemas. It declares tools; it does not run them. |
+| `src/context/`, `src/config/` | Context-window assembly, and the configuration registries services consume. |
+
+The dependency direction is **`routes → services → database`**, one way. It is
+currently observed:
+
+- `src/db/` imports **only** `config`, `db`, and `lib` — never `routes` or
+  `services`. If a persistence helper needs domain behavior, the behavior moves
+  up into `services/` rather than being reached back down.
+- `src/services/` imports `config`, `context`, `db`, `lib`, and `services` — never
+  `routes`.
+- `src/routes/` reaches `db/` in **five** places. Four are value-level imports
+  of the `db` handle: `routes/index.ts:6`, `routes/providers.ts:2`,
+  `routes/memories.ts:3`, and `routes/scheduler.ts:6`. The fifth,
+  `routes/chat/settlement.ts:17`, is an `import type` of
+  `ChatStreamTerminalKind` from `db/schema/chat-streams` — a compile-time edge
+  with no runtime dependency, and the reason schema types live in a leaf module.
+
+  The four value-level imports are the **current implementation**, not the
+  architectural rule. They are existing exceptions: each needs a stated
+  architectural rationale, which has not been recorded yet. This document does
+  not assert those reasons, because they are not established here. The **rule**
+  remains one-way: `routes → services → database`. Any *new* value-level
+  route → `db/` dependency is a genuine layering exception and requires explicit
+  justification and approval before it lands.
+
+**Tool declaration and tool execution have separate owners.** `src/tools/` holds
+the `tool()` definitions — the single server assembly of every native tool.
+`src/services/tools.ts` executes them, consumes grants, and confines **path
+arguments** to the per-conversation workspace root. `runBash` confines only its
+starting directory; the command body runs with the server's own privileges.
+Nothing here is a sandbox in the security sense, and `src/services/tools.ts`
+says so in its own header. Do not describe shell execution as sandboxed.
+
+**Why `routes/` stays split per concern.** `src/routes/index.ts` is a composition
+root only — middleware, mounts, health. Each concern (`tools`, `providers`,
+`conversations`, `memories`, `mcp`, `logs`, `scheduler`, `folders`, `workspace`,
+`opencode`, `quick-messages`, `server`) owns its own module, and new endpoints go
+into the owning module rather than back into `index.ts`. The `/api/chat` concern
+is the one large enough to warrant a directory: `src/routes/chat/index.ts` is the
+route entry, and the remaining modules are its phases (validate, assemble, gate,
+stream, settlement, compact-command, overflow-gate, model).
+
+**Why aggregates get their own module.** `src/services/storage/index.ts` held
+three unrelated aggregates in roughly a thousand lines (1,069 before the split).
+Splitting it into
+`conversations.ts` / `messages.ts` / `memories.ts` behind a re-exporting barrel
+gave each aggregate an explicit owner **without breaking a single import path** —
+the barrel means every existing consumer is unchanged. That is the shape to
+prefer when a module must be split: preserve the public surface, change the
+internals.
+
+### Frontend ownership
+
+| Directory | Owns |
+|---|---|
+| `web/src/app/` | Application composition — `router.tsx` (surfaces), `layout/AppShell.tsx` (chrome), `TabUrlSync`, the thread-list adapter singleton. Never message or tool state. |
+| `web/src/features/<feature>/` | Everything specific to one feature — UI, `state/` stores, hooks, types, API clients, request logic, feature config. |
+| `web/src/components/` | Genuinely shared UI — `ChatWindow`, `Composer`, `Sidebar`, `StatusBar`, plus `assistant-ui/`, `chat/`, `composer/`, `shared/`, `ui/`. |
+| `web/src/lib/`, `web/src/config/` | Genuinely shared utilities and shared configuration. |
+| `web/src/adapters/` | The HTTP bridge to assistant-ui runtime contracts. |
+| `web/src/tools/` | TBAi-owned tool UI metadata and rendering glue, grouped per tool engine in `tools/<engine>/`. |
+
+There is deliberately **no shared `web/src/stores/`**. Every store's subject is a
+single feature, so each lives in that feature's `state/`:
+
+```
+features/appearance/     features/memories/       features/providers/
+features/availability/   features/opencode/       features/quick-messages/
+features/chat/           features/permissions/    features/scheduler/
+features/desktop/        features/sidebar/        features/workspace/
+features/folders/        features/mcp/
+```
+
+The test is not "is it used by more than one file" — it is "is it about one
+feature". A helper used by three features but owned by none of them belongs in
+`lib/` with a stated justification; a helper used by one feature belongs to that
+feature.
+
+**Why `web/src/tools/<engine>/` is grouped by engine, not left as a shared bin.**
+Tool rendering is keyed by *tool engine*, and the tree reflects that:
+
+```
+tools/browser/  tools/computer/  tools/filesystem/
+tools/opencode/  tools/scheduler/  tools/todo/
+```
+
+Each subdirectory is owned by its engine, so new tool rendering joins the
+matching engine's directory instead of piling into `tools/` root. This grouping
+is deliberately *not* feature ownership: feature UI, stores, hooks, and types
+belong in `web/src/features/<feature>/`. `tools/opencode/` is the frontend's
+OpenCode tool-UI owner, which is why it is the one place outside
+`features/opencode/` that touches `@opencode/client` — and it does so with a
+type-only import.
+
+**Why the Direct/OpenCode split is load-bearing.** It is a runtime boundary, not
+a folder preference. `web/src/features/opencode/` is the only frontend code that
+depends on `@opencode/client` at runtime — verified: 0 runtime importers
+outside it. The single exception is a type-only import of `ToolContent` in
+`web/src/tools/opencode/adapt.ts`, which creates no runtime edge. It owns the
+native V2 client, event reduction, history, permissions, forms, and
+cancellation. `ChatWindow.tsx`, `Composer.tsx`, and `runtime.ts` stay
+engine-neutral and compose through the `mode="chat" | "agent"` prop. Merging the
+runtimes, or letting an OpenCode-only capability (Shield, permissions, forms,
+terminal, diff) leak into Direct Chat, destroys the isolation described under
+**Frontend boundary (shared presentation, isolated execution)** below.
+
+### Shared helpers, and what makes one dead
+
+A shared directory is a promise that a module has more than one owner. Two
+failure modes follow from taking that promise lightly, and both were found in
+this repository rather than hypothesised.
+
+**A module with one consumer does not belong in a shared directory.** It belongs
+to the feature that consumes it. `web/src/lib/utils.ts` existed to hold shared
+utilities; three of its four exports (`getProviderIcon`, `formatDate`,
+`formatRelativeTime`) had zero callers anywhere in the repo, and `getProviderIcon`
+was a hardcoded provider-name switch — a configuration rule in the one layer
+that is not allowed to know provider names. Promote a module to shared when the
+second caller actually arrives, not in anticipation of it.
+
+**A whole file nothing imports costs nothing to keep and everything to
+understand.** It typechecks, it lints, it formats, and no gate notices, because
+an unused *binding* is Biome's business and an unused *file* is nobody's. Three
+accumulated here, each worse than merely dead: `src/db/mappers.ts` read as the
+canonical row→domain mapper layer while `services/storage/conversations.ts` and
+`config/providers.ts` each carried their own live copy — and the dead copy was
+already missing `models`, `thinking` and `apiProtocol`; `web/index.ts` was a
+`console.log("Hello via Bun!")` line from `bun init`; and
+`web/src/features/opencode/index.ts` was a barrel every consumer had already
+bypassed. This is now a gate: `tests/unit/tooling/no-orphan-modules.test.ts`
+fails when a source module in `src/` or `web/src/` has **zero recognized direct
+inbound references**. That is deliberately weaker than "unreachable" — a dead
+module that imports another dead module leaves the second one with a reference,
+so it passes.
+
+The scan reads code from string data (so a commented-out import or fixture text
+is not counted as a reference), resolves aliases from the `paths` maps in the
+tsconfig files, and **resolves them against the importing file's own project
+first**, so `@/` in a web file means `web/src/*` and never a backend module of
+the same name. It **fails loudly, naming the file**, when it cannot read a file
+at all rather than reporting an orphan verdict derived from an incomplete view.
+
+**Scan scope is four trees — `src`, `web/src`, `tests`, `scripts`** — and
+configuration files are outside it. `vite.config.ts`,
+`web/playwright.config.ts`, `biome.jsonc` and `package.json` are never read as
+importers; the tsconfigs are read only for their `paths` maps. A module
+referenced solely from a configuration file would be reported as an orphan. No
+such module exists today, so that is currently true rather than enforced, and
+this gate must not be described as a comprehensive reachability check.
+
+Its one allowed orphan is `components/assistant-ui/elements/approval-card.tsx`,
+which documents its own deadness and is kept because the successor it defers to
+(`components/shared/approval-card.tsx`) is asserted canonical by
+`approval-card-canonical.test.ts` — removing it is an architectural decision
+about the frozen assistant-ui train, not a cleanup. The gate requires that file
+to still carry the sentence explaining why, so the exception cannot outlive its
+reason.
+
+**Dead barrels and dead type surfaces are separate problems.** A barrel is dead
+when every consumer imports the concrete module; delete it rather than keeping
+it as a second entry point. A dead *export* is a much noisier set here —
+several are deliberate test-only drift guards — so it is not gated; see
+`AGENTS.md` §Maintainability protocol for the manual criterion.
+
+### Tests and supporting files
+
+Every test source and test-only asset lives under `tests/`, organized layer first
+and feature second (`tests/<layer>/<feature>/`). This is enforced by
+`bun run test:locations`, because every runner scopes discovery to `tests/` — a
+test written anywhere else is collected by none of them, so the suite stays green
+while silently losing coverage. See `tests/README.md` and the hard rule in
+`AGENTS.md`.
+
+Scripts live in `scripts/`, documentation in `docs/`, and generated or scratch
+artifacts stay outside the repository entirely.
+
+**Why relocation needs an exhaustive consumer list.** A move that updates only
+its obvious importers looks complete and is not. The consumers that get missed
+are: dynamic `import()` calls, source-text guards that assert on a file's
+contents, path strings inside configuration, documentation that names the path,
+and CI or Playwright config that scopes by directory. Enumerate all of them
+before moving a file.
 
 ## Data flow (send a message)
 
@@ -117,7 +349,7 @@ ai-chat-app/
 3. The Hono route validates the transport envelope with Zod, validates message
    internals with AI SDK v7 `safeValidateUIMessages`, preserves the existing
    approval-aware pruning/conversion path, and resolves the effective model +
-   reasoning level via `src/routes/chat-model.ts` (one-shot → conversation default
+   reasoning level via `src/routes/chat/model.ts` (one-shot → conversation default
    → active provider). It rejects client system/tool directives and applies the
    persisted conversation `systemPrompt` as server-owned `instructions`.
 4. The route resolves the provider metadata from the registry, obtains the
@@ -211,8 +443,8 @@ SQLite as the source of truth:
   `threadListItem.custom.{providerId, modelId, reasoningLevel}`; `updateCustom`
   PATCHes composer chip selections back to SQLite. The browser sends only these
   three ids/levels — never secrets or protocol.
-- **Resolution** (`src/routes/chat-model.ts`, single point the chat route calls;
-  mirrored in `web/src/runtime.ts` + `PaseoComposer.tsx`):
+- **Resolution** (`src/routes/chat/model.ts`, single point the chat route calls;
+  mirrored in `web/src/runtime.ts` + `Composer.tsx`):
   `one-shot picker override → conversation persisted default (custom) → global
   active provider default`. An absent request field falls back to the
   conversation row so a missing header never silently drops the user's config.
@@ -254,6 +486,20 @@ Tauri 2 window (no native title bar, decorations:false)
   by `tauri.conf.json`; the `sidecar("tbai-server")` string in `main.rs` must match it
   exactly, because a mismatch fails at RUNTIME, not build time. The release workflow's
   smoke test is what catches that.
+- **Development owns no backend process; packaging does.** `tauri::is_dev()` decides one
+  thing at startup (`custom-protocol` is a build-only CLI feature, so `tauri dev` is dev and
+  both release and `--debug` builds are not): in development the shell attaches to the
+  backend `beforeDevCommand` already started at `build.devUrl`
+  (`main.rs::attach_dev_backend`) and spawns **no** sidecar; a packaged build spawns and
+  owns the sidecar exactly as before, with its named shell job, crash recovery and stdin
+  shutdown handshake. Two backends can no longer exist in one launch. Before this split,
+  `tauri dev` waited for the `beforeDevCommand` backend on :3000 and then spawned the
+  sidecar as well; the sidecar inherited the same `PORT`, `DATA_DIR` and `TBAI_LOG_FILE`,
+  failed with `EADDRINUSE` and logged `startup_failed` into the application's own log while
+  the window kept loading the first backend — a failure the window never exhibited, written
+  where a reader could not tell which process it belonged to. In development `PORT` is not
+  consulted: `build.devUrl` is the address the window loads and therefore the address that
+  must answer.
 - **The SPA ships as loose files, not embedded.** `build.frontendDist` points at
   `src-tauri/frontend-placeholder` (a ~1 KB stub), NOT `web/dist`. Tauri requires the key, but
   embedding 12 MB there was pure dead weight: the window is `visible: false` and the
@@ -368,7 +614,7 @@ MessagePrimitive.GroupedParts (official groupPartByType)
   (`web/src/tools/toolkit.ts`, one `defineToolkit` registration via
   `AssistantRuntimeProvider config`). All entries are render-only
   `type: "backend"`: execution lives server-side (native AI SDK `tool()`
-  defs in `src/tools/index.ts`, sandboxed `services/tools.ts`, request
+  defs in `src/tools/index.ts`, executed by `services/tools.ts`, request
   context via per-tool `contextSchema` + the chat route's `toolsContext`).
   Privileged tools
   pause at a server `toolApproval` gate answered with `respondToApproval()`.
@@ -645,6 +891,11 @@ In desktop mode (Tauri v2 on Windows):
    - If the Bun sidecar crashes, Rust allows up to 3 restarts within a 30-second window before entering `failed` status.
    - Rust emits `backend-status` and `backend-ready` events. Frontend displays an inline recovery banner with a manual Retry button (`retry_startup`), without reloading the WebView.
 7. **Cross-Origin Security & Transport:**
-   - Hono backend binds explicitly to `127.0.0.1` and enables CORS for `http://app.localhost` and loopback origins, allowing necessary headers (`Content-Type`, `Accept`, `X-TBAI-Operation-ID`, `x-opencode-directory`, `x-request-id`) and exposing response headers (`x-resumable-stream-id`, `x-request-id`, `Content-Type`).
+   - Hono backend binds explicitly to `127.0.0.1` and enables CORS for **the packaged Tauri origin and TBAi's own pages** — nothing else. The origins are *derived*, not listed: `http://app.localhost` (the packaged webview — Windows WebView2's origin for the custom `app` protocol Tauri registers) plus the loopback origins on the port the listener is on **and the port it just replaced** (the page that triggered a restart is still on the old origin when it probes the new one, and that probe is cross-origin). The list and the evidence are in `src/config/cors.ts`; the ports come from `services/server-listener.ts`, which owns the single listener.
+   - Every other `localhost` / `127.0.0.1` port, a public origin, an opaque origin, and a request with no `Origin` header get no `Access-Control-Allow-Origin` at all. There is no wildcard and no fixed port: the port is the user's choice (Settings → Web server), so a policy that named one would break the first time it moved.
+   - Allowed headers: `Content-Type`, `Accept`, `X-TBAI-Operation-ID`, `x-tbai-session`, `x-request-id`. `x-opencode-directory` is **not** allowed — the browser names a session, and the backend resolves the workspace.
+   - Allowed methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` — the methods the app calls. `PATCH` was missing until A3 and silently blocked fifteen call sites in the packaged app, where every request is cross-origin.
+   - Exposed response headers: `x-resumable-stream-id`, `x-request-id`, `Content-Type`.
+   - CORS is a **browser** control, not authorization: a refused origin's request is still executed by the server. The OpenCode proxy's route allowlist and its server-side workspace authorization are the controls that decide what a request may do.
    - Minimal functional CSP Level 3 allows `connect-src 'self' http://127.0.0.1:* http://localhost:*`.
 

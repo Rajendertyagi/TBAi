@@ -131,7 +131,15 @@ function schemaSkeleton(schema: unknown, depth = 0): unknown {
   // JSON Schema structure is safe (no user data): keep keys + scalar types.
   if (s.type === "string" || s.type === "number" || s.type === "integer" || s.type === "boolean") {
     const keep: Record<string, unknown> = { type: s.type };
-    for (const k of ["enum", "format", "minLength", "maxLength", "minimum", "maximum", "required"]) {
+    for (const k of [
+      "enum",
+      "format",
+      "minLength",
+      "maxLength",
+      "minimum",
+      "maximum",
+      "required",
+    ]) {
       if (s[k] !== undefined) keep[k] = s[k];
     }
     return keep;

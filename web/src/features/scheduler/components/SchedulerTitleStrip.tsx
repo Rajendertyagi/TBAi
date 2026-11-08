@@ -7,5 +7,6 @@ import { PageTitleStrip } from "@/components/PageTitleStrip";
  */
 export function SchedulerTitleStrip() {
   const label = getNavItem("scheduler")?.label ?? "Scheduler";
-  return <PageTitleStrip title={label} />;
+  // The Scheduler page has no other heading: the strip IS its page title.
+  return <PageTitleStrip title={label} titleAs="h1" />;
 }

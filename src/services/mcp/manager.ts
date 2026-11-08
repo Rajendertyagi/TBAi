@@ -1,24 +1,41 @@
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { Client, StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
-import type { Root, ElicitRequest, CreateMessageRequest, ElicitResult, Transport } from "@modelcontextprotocol/client";
-import { tool, jsonSchema, generateText } from "ai";
+import { Client } from "@modelcontextprotocol/client";
+import type {
+  Root,
+  ElicitRequest,
+  CreateMessageRequest,
+  ElicitResult,
+  Transport,
+} from "@modelcontextprotocol/client";
+import { tool, jsonSchema, generateText, type JSONSchema7 } from "ai";
 import { db } from "../../db";
-import type { SQLQueryBindings } from "bun:sqlite";
-import { generateId } from "../../lib/utils";
 import { logger, normalizeError } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import { classifySseFailure, safeEndpointMeta } from "./classify";
 import type { SseProbeOutcome } from "./classify";
-import { encryptSecret, decryptSecret } from "../../services/credentials";
-import { credentialStore } from "../../services/credentials";
-import { getModel } from "../../services/ai";
+import {
+  getConfig as getStoredConfig,
+  insertConfig as insertStoredConfig,
+  loadConfigs as loadStoredConfigs,
+  readRow as readStoredRow,
+  rowToConfig as storedRowToConfig,
+  updateConfigRow as updateStoredConfigRow,
+} from "./store";
+import {
+  authHintFor,
+  buildHeaders,
+  buildTransport,
+  classifyLocation,
+  errMsg,
+  probeSseEndpoint,
+  sseFailureMessage,
+} from "./transport";
+import { extractMessageText, mcpContentToText } from "./tool-content";
+import { buildProviderModel, resolveProviderApiKey } from "../../services/providerModel";
 import { instrumentedExecute } from "../../lib/tool-funnel";
 import { registry } from "../../config/providers";
 import type { McpServerCreate } from "../../lib/validation";
 import type {
   McpServerConfig,
-  McpTransport,
-  McpAuthType,
   McpConnectionStatus,
   McpFailureReason,
   McpToolInfo,
@@ -32,25 +49,6 @@ import type {
   McpResourceReadResult,
   McpPromptGetResult,
 } from "./types";
-
-interface McpServerRow {
-  id: string;
-  name: string;
-  transport: McpTransport;
-  command: string | null;
-  args: string | null;
-  url: string | null;
-  env: string | null;
-  headers: string | null;
-  auth_type: string;
-  auth_token: string | null;
-  enabled: number;
-  auto_connect: number;
-  notes: string | null;
-  roots: string | null;
-  created_at: number;
-  updated_at: number;
-}
 
 interface McpConnection {
   config: McpServerConfig;
@@ -82,36 +80,50 @@ interface McpConnection {
 const MAX_EVENTS = 50;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
-/** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
-const SSE_PROBE_TIMEOUT_MS = 3000;
+/** Bound for awaiting in-flight connect attempts during disconnectAll/rollback. */
+const INFLIGHT_SETTLE_TIMEOUT_MS = 5000;
 
-function jsonParseSafe<T>(value: string | null, fallback: T): T {
-  if (!value) return fallback;
+/**
+ * Report the installed MCP SDK version at runtime.
+ *
+ * Reads from package.json rather than hardcoding, so the log cannot silently
+ * drift when the dependency is upgraded.
+ */
+export function getMcpSdkVersion(): string {
   try {
-    return JSON.parse(value) as T;
+    const pkg = require("@modelcontextprotocol/core/package.json") as { version?: string };
+    return pkg.version ?? "unknown";
   } catch {
-    return fallback;
+    return "unknown";
   }
 }
 
-function rowToConfig(row: McpServerRow): McpServerConfig {
-  return {
-    id: row.id,
-    name: row.name,
-    transport: row.transport,
-    command: row.command ?? undefined,
-    args: row.args ? jsonParseSafe<string[]>(row.args, []) : undefined,
-    url: row.url ?? undefined,
-    env: row.env ? jsonParseSafe<Record<string, string>>(row.env, {}) : undefined,
-    headers: row.headers ? jsonParseSafe<Record<string, string>>(row.headers, {}) : undefined,
-    authType: (row.auth_type as McpAuthType) || "none",
-    enabled: row.enabled === 1,
-    autoConnect: row.auto_connect === 1,
-    notes: row.notes ?? undefined,
-    roots: row.roots ? jsonParseSafe<string[]>(row.roots, []) : undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+/**
+ * True when an update changes a field the live transport was built from.
+ *
+ * Presence is not change. The settings form re-sends the whole draft on every
+ * save, so a tool-filter toggle arrives alongside an unchanged `command`; only
+ * a value that actually differs may force a reconnect. `authToken` is the
+ * exception: the stored token is never read back, so any supplied token — a
+ * replacement string, or the `""` that clears it — counts as a change.
+ */
+function connectionFieldsChanged(
+  before: McpServerConfig | undefined,
+  input: Partial<McpServerCreate>,
+): boolean {
+  if (!before) return true;
+  const sameJson = (a: unknown, b: unknown) =>
+    JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return (
+    (input.transport !== undefined && input.transport !== before.transport) ||
+    (input.command !== undefined && (input.command ?? undefined) !== before.command) ||
+    (input.args !== undefined && !sameJson(input.args, before.args)) ||
+    (input.url !== undefined && (input.url ?? undefined) !== before.url) ||
+    (input.env !== undefined && !sameJson(input.env, before.env)) ||
+    (input.headers !== undefined && !sameJson(input.headers, before.headers)) ||
+    (input.authType !== undefined && input.authType !== before.authType) ||
+    (input.authToken !== undefined && input.authToken !== null)
+  );
 }
 
 /**
@@ -128,6 +140,22 @@ function rowToConfig(row: McpServerRow): McpServerConfig {
 export class McpManager {
   private static instance: McpManager;
   private connections = new Map<string, McpConnection>();
+  /**
+   * Per-server lifecycle generation; see {@link nextGeneration}.
+   *
+   * An attempt captures the generation when it starts and must still hold it in
+   * order to register or to touch shared state. Every invalidating operation
+   * advances it, so "was this attempt invalidated before it got its turn?"
+   * becomes a fact the attempt can actually observe.
+   */
+  private lifecycleGen = new Map<string, number>();
+  /**
+   * In-flight connect attempt promises per server id, tracked from generation
+   * claim until the attempt settles (registered or abandoned). An attempt
+   * parked before registration has no `connections` entry, so this is the only
+   * record that a startup rollback or disconnectAll can await.
+   */
+  private inflightConnects = new Map<string, Set<Promise<void>>>();
   private initialized = false;
 
   static getInstance(): McpManager {
@@ -141,6 +169,7 @@ export class McpManager {
   async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
+    logger.info("mcp", "mcp.sdk_version", { version: getMcpSdkVersion() });
     const configs = this.loadConfigs();
     for (const cfg of configs) {
       if (cfg.enabled && cfg.autoConnect) {
@@ -151,141 +180,55 @@ export class McpManager {
   }
 
   // ---- Configuration persistence ----
+  // Thin delegates: the SQL lives in `store.ts`, but these remain public
+  // methods because callers outside this module use them.
 
   loadConfigs(): McpServerConfig[] {
-    const rows = db
-      .query<McpServerRow, []>("SELECT * FROM mcp_servers ORDER BY created_at ASC")
-      .all();
-    return rows.map(rowToConfig);
+    return loadStoredConfigs();
   }
 
   getConfig(id: string): McpServerConfig | undefined {
-    const row = db
-      .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-      .get(id);
-    return row ? rowToConfig(row) : undefined;
+    return getStoredConfig(id);
   }
 
   /** Read a row including the (decrypted) auth token. Internal use only. */
-  private readRow(id: string): { row: McpServerRow; authToken?: string } | undefined {
-    const row = db
-      .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-      .get(id);
-    if (!row) return undefined;
-    let authToken: string | undefined;
-    if (row.auth_token) {
-      try {
-        authToken = decryptSecret(row.auth_token);
-      } catch {
-        authToken = undefined;
-      }
-    }
-    return { row, authToken };
-  }
-
-  private insertConfig(input: McpServerCreate): McpServerConfig {
-    const id = generateId();
-    const now = Date.now();
-    const enabled = input.enabled ?? true;
-    const autoConnect = input.autoConnect ?? true;
-    const authTokenEnv = input.authToken ? encryptSecret(input.authToken) : null;
-    db.run(
-      `INSERT INTO mcp_servers
-        (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.name,
-        input.transport,
-        input.command ?? null,
-        input.args ? JSON.stringify(input.args) : null,
-        input.url ?? null,
-        input.env ? JSON.stringify(input.env) : null,
-        input.headers ? JSON.stringify(input.headers) : null,
-        input.authType ?? "none",
-        authTokenEnv,
-        enabled ? 1 : 0,
-        autoConnect ? 1 : 0,
-        input.notes ?? null,
-        input.roots ? JSON.stringify(input.roots) : null,
-        now,
-        now,
-      ],
-    );
-    return this.getConfig(id)!;
-  }
-
-  private updateConfigRow(id: string, input: Partial<McpServerCreate>): McpServerConfig | undefined {
-    const existing = this.getConfig(id);
-    if (!existing) return undefined;
-    const now = Date.now();
-    const sets: string[] = [];
-    const values: SQLQueryBindings[] = [];
-    const set = (col: string, value: SQLQueryBindings) => {
-      sets.push(`${col} = ?`);
-      values.push(value);
-    };
-    if (input.name !== undefined) set("name", input.name);
-    if (input.transport !== undefined) set("transport", input.transport);
-    if (input.command !== undefined) set("command", input.command ?? null);
-    if (input.args !== undefined) set("args", input.args ? JSON.stringify(input.args) : null);
-    if (input.url !== undefined) set("url", input.url ?? null);
-    if (input.env !== undefined) set("env", input.env ? JSON.stringify(input.env) : null);
-    if (input.headers !== undefined) set("headers", input.headers ? JSON.stringify(input.headers) : null);
-    if (input.authType !== undefined) set("auth_type", input.authType);
-    // Auth token trichotomy: omitted (undefined/null) preserves the stored
-    // credential; a non-empty string replaces it; an explicit empty string
-    // clears it (persists NULL). The UI sends "" from its "Remove auth" action.
-    if (input.authToken !== undefined && input.authToken !== null) {
-      if (input.authToken === "") {
-        set("auth_token", null);
-      } else {
-        set("auth_token", encryptSecret(input.authToken));
-      }
-    }
-    if (input.roots !== undefined) set("roots", input.roots ? JSON.stringify(input.roots) : null);
-    if (input.enabled !== undefined) set("enabled", input.enabled ? 1 : 0);
-    if (input.autoConnect !== undefined) set("auto_connect", input.autoConnect ? 1 : 0);
-    if (input.notes !== undefined) set("notes", input.notes ?? null);
-    set("updated_at", now);
-    db.run(`UPDATE mcp_servers SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
-    return this.getConfig(id);
-  }
 
   createConfig(input: McpServerCreate): McpServerConfig {
-    return this.insertConfig(input);
+    return insertStoredConfig(input);
   }
 
   updateConfig(id: string, input: Partial<McpServerCreate>): McpServerConfig | undefined {
     const conn = this.connections.get(id);
     const wasConnected = conn?.status === "connected";
-    const updated = this.updateConfigRow(id, input);
+    const before = this.getConfig(id);
+    const updated = updateStoredConfigRow(id, input);
     if (!updated) return undefined;
     if (!updated.enabled) {
       return updated;
     }
-    // Roots-only (or notes-only) edits must NOT tear down the transport: push
-    // the official roots/list_changed notification on the live connection so
-    // the server re-lists. Connection-affecting edits still reconnect.
-    const connectionAffecting =
-      input.transport !== undefined ||
-      input.command !== undefined ||
-      input.args !== undefined ||
-      input.url !== undefined ||
-      input.env !== undefined ||
-      input.headers !== undefined ||
-      input.authType !== undefined ||
-      input.authToken !== undefined;
-    if (input.roots !== undefined && !connectionAffecting) {
+    // Only a connection-affecting field that actually CHANGED forces a
+    // reconnect. The settings form re-sends the whole draft on every save, so
+    // "present" is not "changed": a tool-filter toggle arrives alongside an
+    // unchanged `command`, and reconnecting for it would tear down a healthy
+    // transport for nothing.
+    if (connectionFieldsChanged(before, input)) {
+      void this.reconnect(id);
+      return updated;
+    }
+    // Non-connection-affecting edits (disabledTools, roots, notes, name) apply
+    // to the live connection in place. `getAiTools()` reads
+    // `conn.config.disabledTools` on every call, so a filter change takes effect
+    // immediately, with no reconnect.
+    if (conn) conn.config = updated;
+    // Roots-only edits additionally push the official roots/list_changed
+    // notification on the live connection so the server re-lists.
+    if (input.roots !== undefined) {
       if (wasConnected) {
         void this.notifyRootsChanged(id);
       } else {
         void this.connect(id);
       }
-      return updated;
     }
-    // Reconnect to apply connection-affecting changes if the server is enabled.
-    void this.reconnect(id);
     return updated;
   }
 
@@ -295,7 +238,7 @@ export class McpManager {
    */
   async notifyRootsChanged(id: string): Promise<boolean> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") return false;
+    if (conn?.status !== "connected") return false;
     try {
       await conn.client.sendRootsListChanged();
       this.pushEvent(id, "log", "Roots list changed notification sent");
@@ -313,6 +256,9 @@ export class McpManager {
   }
 
   deleteConfig(id: string): void {
+    // Synchronous invalidation, before the row goes away: an attempt parked on
+    // an await must not be able to re-register a server that no longer exists.
+    this.invalidate(id);
     const conn = this.connections.get(id);
     if (conn?.reconnectTimer) clearTimeout(conn.reconnectTimer);
     void this.disconnect(id);
@@ -321,6 +267,9 @@ export class McpManager {
   }
 
   setEnabled(id: string, enabled: boolean): void {
+    // Turning a server OFF is an invalidation for the same reason a disconnect
+    // is: a replacement attempt already in flight must not bring it back.
+    if (!enabled) this.invalidate(id);
     db.run("UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?", [
       enabled ? 1 : 0,
       Date.now(),
@@ -335,53 +284,85 @@ export class McpManager {
 
   // ---- Transport construction ----
 
-  private buildHeaders(config: McpServerConfig, authToken?: string): Record<string, string> {
-    const headers: Record<string, string> = { ...(config.headers ?? {}) };
-    if (authToken && config.authType !== "none") {
-      if (config.authType === "bearer" || config.authType === "oauth") {
-        headers["Authorization"] = `Bearer ${authToken}`;
-      } else if (config.authType === "basic") {
-        headers["Authorization"] = `Basic ${Buffer.from(authToken).toString("base64")}`;
-      }
-    }
-    return headers;
-  }
-
-  private buildTransport(config: McpServerConfig, authToken?: string): Transport {
-    if (config.transport === "stdio") {
-      if (!config.command) {
-        throw new Error("STDIO transport requires a command");
-      }
-      return new StdioClientTransport({
-        command: config.command,
-        args: config.args ?? [],
-        env: { ...process.env, ...(config.env ?? {}) },
-        cwd: process.cwd(),
-        stderr: "ignore",
-      }) as unknown as Transport;
-    }
-    if (!config.url) {
-      throw new Error(`${config.transport.toUpperCase()} transport requires a URL`);
-    }
-    const url = new URL(config.url);
-    if (config.transport === "http") {
-      return new StreamableHTTPClientTransport(url, {
-        requestInit: { headers: this.buildHeaders(config, authToken) },
-      }) as unknown as Transport;
-    }
-    // sse
-    return new SSEClientTransport(url, {
-      requestInit: { headers: this.buildHeaders(config, authToken) },
-    }) as unknown as Transport;
-  }
-
   // ---- Connection lifecycle ----
 
-  async connect(id: string): Promise<void> {
-    const loaded = this.readRow(id);
+  /**
+   * Connect to one server. The attempt is tracked from creation until it
+   * settles so a startup rollback or disconnectAll can await attempts that
+   * have not registered a `connections` entry yet.
+   */
+  connect(id: string): Promise<void> {
+    const attempt = this.runConnect(id);
+    this.trackInflightConnect(id, attempt);
+    return attempt;
+  }
+
+  /** Whether any connect attempt is still in flight (for rollback/shutdown). */
+  hasInflightConnects(): boolean {
+    return this.inflightConnects.size > 0;
+  }
+
+  /**
+   * In-memory connection status for one server, without touching the database.
+   * Returns "missing" when no entry is registered. Used to observe teardown
+   * after the database has closed, where getStatuses() cannot run.
+   */
+  getConnectionStatus(id: string): string {
+    return this.connections.get(id)?.status ?? "missing";
+  }
+
+  private trackInflightConnect(id: string, attempt: Promise<void>): void {
+    let set = this.inflightConnects.get(id);
+    if (!set) {
+      set = new Set();
+      this.inflightConnects.set(id, set);
+    }
+    set.add(attempt);
+    void attempt
+      .finally(() => {
+        set.delete(attempt);
+        if (set.size === 0) this.inflightConnects.delete(id);
+      })
+      .catch(() => {
+        /* connect logs its own failures; the tracker never rejects */
+      });
+  }
+
+  /** Await in-flight connect attempts, bounded so rollback cannot hang. */
+  private async awaitInflightSettled(timeoutMs: number): Promise<void> {
+    const pending = [...this.inflightConnects.values()].flatMap((set) => [...set]);
+    if (pending.length === 0) return;
+    let boundTimer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<void>((resolve) => {
+      boundTimer = setTimeout(resolve, timeoutMs);
+    });
+    // Referenced while the race is pending, so this bound is the handle that
+    // holds the process open until a slow attempt settles or the bound expires.
+    // Cleared the moment the race resolves — including the early-settlement and
+    // rejection paths — so a disconnect whose attempts finished quickly does not
+    // keep the process alive for the full bound (see chat-runs.awaitSettled and
+    // scheduler.abortAllRuns, which clear theirs the same way).
+    try {
+      await Promise.race([Promise.allSettled(pending), bound]);
+    } finally {
+      if (boundTimer !== undefined) clearTimeout(boundTimer);
+    }
+  }
+
+  private async runConnect(id: string): Promise<void> {
+    const loaded = readStoredRow(id);
     if (!loaded) return;
-    const { row, authToken } = loaded;
-    const config = rowToConfig(row);
+    // Named only for the abandon report below. The connection this attempt ends up
+    // building is configured from a FRESH row read after the teardown await, so
+    // nothing here may be carried forward from this snapshot.
+    const config = storedRowToConfig(loaded.row);
+
+    // Claim a lifecycle generation BEFORE the first await, so ownership is
+    // decided by when this attempt STARTED rather than by when it happens to
+    // register. Everything below - disconnect, delete, disable, or a newer
+    // connect - advances the generation, and an attempt that still holds its own
+    // is the only one allowed to register or to write shared state.
+    const gen = this.nextGeneration(id);
 
     // Tear down any prior connection for this id first.
     const prior = this.connections.get(id);
@@ -399,6 +380,28 @@ export class McpManager {
       }
     }
 
+    // The registration gate. `connections.set` used to run unconditionally here,
+    // so a disconnect, a delete or a disable landing during the close above was
+    // silently undone: the attempt registered a fresh connection anyway, built
+    // from the config it read BEFORE that close.
+    //
+    // Two things are established here. First, that this attempt still owns the
+    // lifecycle - the check that a generation bump makes possible. Second, that
+    // it is registering from the CURRENT row, not a pre-close snapshot: an
+    // attempt must never resurrect a server that has since been disabled, or
+    // bring back one that has been deleted.
+    const current = readStoredRow(id);
+    if (!current || !this.ownsLifecycle(id, gen)) {
+      this.reportAbandoned(config, current ? "superseded-before-registration" : "config-deleted");
+      return;
+    }
+    const liveConfig = storedRowToConfig(current.row);
+    if (!liveConfig.enabled) {
+      this.reportAbandoned(liveConfig, "disabled-before-registration");
+      return;
+    }
+    const liveAuthToken = current.authToken;
+
     const client = new Client(
       { name: "TBAi", version: "0.1.0" },
       {
@@ -410,7 +413,7 @@ export class McpManager {
     );
 
     const conn: McpConnection = {
-      config,
+      config: liveConfig,
       client,
       transport: null as unknown as Transport,
       status: "connecting",
@@ -426,23 +429,69 @@ export class McpManager {
       // SSE-only diagnostic probe: a short read-only GET against the endpoint
       // classifies unreachable / auth / non-SSE responses BEFORE the SDK opens
       // its EventSource. The probe is diagnostic, never the transport itself.
-      if (config.transport === "sse" && config.url) {
-        const probe = await this.probeSseEndpoint(
-          config.url,
-          this.buildHeaders(config, authToken),
+      if (liveConfig.transport === "sse" && liveConfig.url) {
+        const probe = await probeSseEndpoint(
+          liveConfig.url,
+          buildHeaders(liveConfig, liveAuthToken),
         );
-        const reason = classifySseFailure(probe, undefined, authToken !== undefined);
-        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
-          this.failConnect(id, conn, config, probe, reason);
+        // First await boundary. `disconnect()` may have run while the probe was
+        // open, and a newer connect() may have taken the id.
+        if (!this.ownsAttempt(id, conn, gen)) {
+          await this.abandonAttempt(conn, "superseded-during-sse-probe");
+          return;
+        }
+        const reason = classifySseFailure(probe, undefined, liveAuthToken !== undefined);
+        if (
+          probe.kind === "unreachable" ||
+          probe.kind === "timeout" ||
+          reason === "auth_required" ||
+          reason === "auth_failed" ||
+          reason === "incompatible_response"
+        ) {
+          this.failConnect(id, conn, liveConfig, probe, reason);
           return;
         }
       }
-      const transport = this.buildTransport(config, authToken);
+      const transport = buildTransport(liveConfig, liveAuthToken);
       conn.transport = transport;
+      // F3: Handle unexpected transport/session loss. The `onclose` callback
+      // fires when the transport closes for any reason (server-initiated session
+      // drop, network failure, etc.). We must not leave the manager reporting a
+      // healthy connection indefinitely.
+      //
+      // The handler checks `ownsConnection` to distinguish intentional closes
+      // (disconnect, delete, disable, replacement) from unexpected ones. Only
+      // unexpected closes trigger a reconnect.
+      transport.onclose = () => {
+        if (!this.ownsConnection(id, conn, gen)) return;
+        if (conn.status !== "connected" && conn.status !== "connecting") return;
+        const msg = "Transport closed unexpectedly";
+        conn.status = "error";
+        conn.error = msg;
+        conn.lastErrorAt = Date.now();
+        this.pushEvent(id, "error", msg);
+        logger.warn("mcp", "mcp.operation", {
+          op: "connect",
+          outcome: "error",
+          mcpServer: liveConfig.name,
+          transport: liveConfig.transport,
+          message: msg,
+        });
+        this.scheduleReconnect(id);
+      };
       this.registerNotificationHandlers(id);
       this.registerRequestHandlers(id);
 
       await client.connect(transport);
+
+      // Second await boundary, and the one that produced the reported
+      // resurrection: `disconnect()` closes the client underneath this attempt,
+      // and for a stdio child the process can still finish starting afterwards,
+      // so `client.connect()` resolves on a transport that is already closed.
+      if (!this.ownsAttempt(id, conn, gen)) {
+        await this.abandonAttempt(conn, "superseded-during-connect");
+        return;
+      }
 
       conn.status = "connected";
       conn.error = undefined;
@@ -454,30 +503,51 @@ export class McpManager {
       } catch {
         conn.protocolEra = undefined;
       }
-      this.pushEvent(id, "connected", `Connected to ${config.name} (era: ${conn.protocolEra ?? "unknown"})`);
+      this.pushEvent(
+        id,
+        "connected",
+        `Connected to ${liveConfig.name} (era: ${conn.protocolEra ?? "unknown"})`,
+      );
 
-      await this.discoverCapabilities(id);
+      await this.discoverCapabilities(id, conn, gen);
+      // Terminal success. Re-checked because discovery is an await boundary: a
+      // disconnect or a replacement landing inside it means this attempt no
+      // longer describes anything live, and reporting success for it would be
+      // the same resurrection one level further down.
+      if (!this.ownsConnection(id, conn, gen)) {
+        await this.abandonAttempt(conn, "superseded-during-discovery");
+        return;
+      }
       logger.info("mcp", "mcp.operation", {
         op: "connect",
         outcome: "ok",
-        mcpServer: config.name,
-        transport: config.transport,
+        mcpServer: liveConfig.name,
+        transport: liveConfig.transport,
         message: `tools=${conn.tools.length} resources=${conn.resources.length} prompts=${conn.prompts.length} era=${conn.protocolEra ?? "unknown"}`,
       });
     } catch (err) {
+      // A rejection here is not always a server problem. `disconnect()` closes
+      // this very client, which is the most common cause of a failure at these
+      // boundaries, and `scheduleReconnect()` below would then undo the caller's
+      // explicit teardown. An attempt that no longer owns the id reports
+      // nothing and reconnects to nothing.
+      if (!this.ownsAttempt(id, conn, gen)) {
+        await this.abandonAttempt(conn, "superseded-during-connect");
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       // SSE endpoints get a post-hoc classification too: the probe was
       // inconclusive, so map the SDK error shape onto a failure reason.
       // Other transports stay on the coarse error status.
-      if (config.transport === "sse" && config.url) {
-        const reason = classifySseFailure({ kind: "error" }, err, authToken !== undefined);
+      if (liveConfig.transport === "sse" && liveConfig.url) {
+        const reason = classifySseFailure({ kind: "error" }, err, liveAuthToken !== undefined);
         const probe: SseProbeOutcome = { kind: "error" };
         if (reason === "auth_failed") {
-          this.failConnect(id, conn, config, probe, reason, message);
+          this.failConnect(id, conn, liveConfig, probe, reason, message);
           return;
         }
         if (reason === "timeout") {
-          this.failConnect(id, conn, config, probe, reason, message);
+          this.failConnect(id, conn, liveConfig, probe, reason, message);
           return;
         }
       }
@@ -489,8 +559,8 @@ export class McpManager {
       logger.error("mcp", "mcp.operation", {
         op: "connect",
         outcome: "error",
-        mcpServer: config.name,
-        transport: config.transport,
+        mcpServer: liveConfig.name,
+        transport: liveConfig.transport,
         category: classifyError(err).category,
         ...normalizeError(err),
       });
@@ -504,30 +574,6 @@ export class McpManager {
    * only, consumes and discards the body, never streams. Same auth headers as
    * the real connection. Timeout: 3s. Never logs headers or the URL query.
    */
-  private async probeSseEndpoint(url: string, headers: Record<string, string>): Promise<SseProbeOutcome> {
-    try {
-      const res = await fetch(url, {
-        headers: { ...headers, Accept: "text/event-stream" },
-        signal: AbortSignal.timeout(SSE_PROBE_TIMEOUT_MS),
-      });
-      const contentType = res.headers.get("content-type");
-      try {
-        await res.arrayBuffer();
-      } catch {
-        /* body discard is best-effort */
-      }
-      return { kind: "ok", status: res.status, contentType };
-    } catch (err) {
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        return { kind: "timeout" };
-      }
-      const text = err instanceof Error ? err.message : String(err);
-      if (/timed out|timeout|aborted/i.test(text)) return { kind: "timeout" };
-      // DNS refusal / connection refused / no listener: the fetch layer
-      // cannot establish the connection at all.
-      return { kind: "unreachable" };
-    }
-  }
 
   /**
    * Record a classified SSE connection failure: truthful status
@@ -569,7 +615,113 @@ export class McpManager {
     this.scheduleReconnect(id);
   }
 
+  /**
+   * Allocate the next attempt number for `id`.
+   *
+   * Monotonic, and advanced SYNCHRONOUSLY by every invalidating operation, so
+   * that "was I invalidated before I got my turn?" is a question an attempt can
+   * answer rather than one it has to infer from state that has not been written
+   * yet.
+   *
+   * Advancing it is deliberately NOT the same as closing anything. `disconnect()`
+   * marks and closes asynchronously; the generation bump happens before its
+   * first `await`, so an attempt parked on an await cannot slip a registration
+   * in between the intent to tear down and the teardown finishing.
+   */
+  private nextGeneration(id: string): number {
+    const gen = (this.lifecycleGen.get(id) ?? 0) + 1;
+    this.lifecycleGen.set(id, gen);
+    return gen;
+  }
+
+  /**
+   * Invalidate every in-flight attempt for `id`.
+   *
+   * Called from `disconnect()`, `deleteConfig()` and a disable, each BEFORE its
+   * first `await`. That ordering is the fix: an attempt between registering and
+   * opening its transport has no connection object yet, so the only way to tell
+   * it the world moved on is a counter it captured before it started.
+   */
+  private invalidate(id: string): void {
+    this.nextGeneration(id);
+  }
+
+  /** Whether `gen` is still the live generation for `id`. */
+  private ownsLifecycle(id: string, gen: number): boolean {
+    return this.lifecycleGen.get(id) === gen;
+  }
+
+  /**
+   * Whether `conn` is still the registered connection for `id`, under a
+   * generation this attempt still holds.
+   *
+   * Deliberately does NOT consult status. Once `connect()` has promoted an entry
+   * to `"connected"` it runs capability discovery, and a check that required
+   * `"connecting"` would be false there by construction - which is exactly the
+   * window discovery runs in. Identity plus generation is what still holds.
+   */
+  private ownsConnection(id: string, conn: McpConnection, gen: number): boolean {
+    return this.connections.get(id) === conn && this.ownsLifecycle(id, gen);
+  }
+
+  /**
+   * Whether this connect attempt still owns `id` and may write shared state.
+   *
+   * Three independent ways to lose ownership, all of which used to be invisible:
+   *
+   *  - a NEWER `connect()` replaced the entry (identity);
+   *  - `disconnect()`, a delete or a disable landed while this attempt sat on an
+   *    await, including the one BEFORE it registered (generation);
+   *  - the entry it was tearing down was deliberately disconnected underneath it
+   *    (status).
+   *
+   * The status half is not redundant with the identity half, and it is the half
+   * that stops the reported resurrection: after `disconnect()` a single in-flight
+   * attempt is STILL the registered entry, so identity alone would wave it
+   * straight through.
+   */
+  private ownsAttempt(id: string, conn: McpConnection, gen: number): boolean {
+    return this.ownsConnection(id, conn, gen) && conn.status === "connecting";
+  }
+
+  /**
+   * Report that an attempt gave up without touching shared state.
+   *
+   * An abandoned attempt writes no status and pushes no event, so without this
+   * line there is no trace that one ever existed.
+   */
+  private reportAbandoned(config: McpServerConfig, why: string): void {
+    logger.info("mcp", "mcp.operation", {
+      op: "connect",
+      outcome: "abandoned",
+      mcpServer: config.name,
+      transport: config.transport,
+      message: why,
+    });
+  }
+
+  /**
+   * Abandon a superseded attempt: close the resources THIS attempt opened and
+   * leave every shared field alone.
+   *
+   * `conn.client` is this attempt's own client, so closing it cannot disturb a
+   * newer connection that has since taken the id.
+   */
+  private async abandonAttempt(conn: McpConnection, why: string): Promise<void> {
+    try {
+      await conn.client.close();
+    } catch {
+      /* the transport is already gone; nothing to release */
+    }
+    this.reportAbandoned(conn.config, why);
+  }
+
   async disconnect(id: string): Promise<void> {
+    // Synchronous, and before anything that can await: this is what invalidates
+    // an attempt that is parked between tearing down the prior connection and
+    // registering its own. Marking the entry below is not enough on its own,
+    // because an attempt in that window has not registered an entry to mark.
+    this.invalidate(id);
     const conn = this.connections.get(id);
     if (!conn) return;
     if (conn.reconnectTimer) {
@@ -590,13 +742,27 @@ export class McpManager {
       /* ignore */
     }
     this.pushEvent(id, "disconnected", `Disconnected from ${conn.config.name}`);
-    logger.info("mcp", "mcp.operation", { op: "disconnect", outcome: "ok", mcpServer: conn.config.name });
+    logger.info("mcp", "mcp.operation", {
+      op: "disconnect",
+      outcome: "ok",
+      mcpServer: conn.config.name,
+    });
   }
 
   /** Disconnect every connection; never throws (used at shutdown). */
   async disconnectAll(): Promise<void> {
+    // Invalidate FIRST: an attempt parked before registration (between claiming
+    // its generation and calling connections.set) has no entry to mark, so the
+    // generation bump is the only signal that can reach it. Awaiting before
+    // invalidating could deadlock if the attempt is waiting on a close that only
+    // invalidation-triggered teardown performs.
+    for (const id of this.inflightConnects.keys()) this.invalidate(id);
+    // Disconnect registered entries BEFORE awaiting in-flight attempts: closing
+    // a client rejects the connect parked on it, which is what lets that
+    // attempt settle. Awaiting first would wait on work only this step ends.
     const ids = [...this.connections.keys()];
     await Promise.allSettled(ids.map((id) => this.disconnect(id)));
+    await this.awaitInflightSettled(INFLIGHT_SETTLE_TIMEOUT_MS);
   }
 
   /** Resolve a pending elicitation as cancelled, if one exists. */
@@ -614,7 +780,7 @@ export class McpManager {
 
   async refresh(id: string): Promise<void> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") {
+    if (conn?.status !== "connected") {
       await this.connect(id);
       return;
     }
@@ -625,12 +791,17 @@ export class McpManager {
     const conn = this.connections.get(id);
     if (!conn) return;
     if (!conn.config.enabled) return;
+    // Never arm a retry for a connection someone deliberately closed.
+    if (conn.status === "disconnected") return;
     if (conn.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return;
     conn.reconnectAttempts += 1;
     const attempt = conn.reconnectAttempts;
     conn.reconnectTimer = setTimeout(() => {
       const c = this.connections.get(id);
-      if (!c || !c.config.enabled || c.status === "connected") return;
+      if (!c?.config.enabled || c.status === "connected") return;
+      // Re-check at fire time: the id may have been disconnected, or replaced,
+      // between arming the timer and this callback running.
+      if (c.status === "disconnected") return;
       logger.info("mcp", "mcp.operation", {
         op: "reconnect",
         outcome: "started",
@@ -644,13 +815,42 @@ export class McpManager {
 
   // ---- Capability discovery ----
 
-  private async discoverCapabilities(id: string): Promise<void> {
-    const conn = this.connections.get(id);
+  /**
+   * Discover tools, resources and prompts for a connection.
+   *
+   * Every one of those three calls is an await boundary, and each is followed by
+   * a write. When `expected` is supplied the caller is a `connect()` attempt
+   * that owns `id`, and two guards apply after each await:
+   *
+   *  - **ownership**: identity plus generation. Not status - by the time
+   *    discovery runs the entry is already `"connected"`, so a status check
+   *    would be false by construction and would silently skip every guard.
+   *  - **reporting target**: failures are recorded against `conn`, the
+   *    connection the discovery was actually running for. They used to go
+   *    through `pushEvent(id, ...)`, which resolves whatever connection is live
+   *    NOW - so a discovery that resumed after a disconnect or a replacement
+   *    appended its error to somebody else's event history.
+   *
+   * A superseded discovery therefore writes nothing at all: no stale tool list,
+   * no stale event. `refresh()` omits `expected`, which preserves the
+   * refresh-on-the-live-connection behaviour.
+   */
+  private async discoverCapabilities(
+    id: string,
+    expected?: McpConnection,
+    gen?: number,
+  ): Promise<void> {
+    const conn = expected ?? this.connections.get(id);
     if (!conn) return;
+    const owns = () =>
+      expected === undefined
+        ? this.connections.get(id) === conn
+        : this.ownsConnection(id, conn, gen as number);
     const caps = conn.serverCapabilities ?? {};
     try {
       if (caps.tools !== undefined) {
         const res = await conn.client.listTools();
+        if (!owns()) return;
         conn.tools = (res.tools ?? []).map((t) => ({
           name: t.name,
           description: t.description,
@@ -658,11 +858,13 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Tool discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Tool discovery failed: ${errMsg(err)}`);
     }
     try {
       if (caps.resources !== undefined) {
         const res = await conn.client.listResources();
+        if (!owns()) return;
         conn.resources = (res.resources ?? []).map((r) => ({
           uri: r.uri,
           name: r.name,
@@ -671,11 +873,13 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Resource discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Resource discovery failed: ${errMsg(err)}`);
     }
     try {
       if (caps.prompts !== undefined) {
         const res = await conn.client.listPrompts();
+        if (!owns()) return;
         conn.prompts = (res.prompts ?? []).map((p) => ({
           name: p.name,
           description: p.description,
@@ -683,7 +887,8 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Prompt discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Prompt discovery failed: ${errMsg(err)}`);
     }
   }
 
@@ -694,33 +899,37 @@ export class McpManager {
     if (!conn) return;
     const { client } = conn;
 
-    client.setNotificationHandler('notifications/progress', (notification) => {
-      const p = notification.params as { progress?: number; total?: number; progressToken?: unknown };
+    client.setNotificationHandler("notifications/progress", (notification) => {
+      const p = notification.params as {
+        progress?: number;
+        total?: number;
+        progressToken?: unknown;
+      };
       const msg = `Progress ${p.progress ?? "?"}"${p.total ? `/${p.total}` : ""}`;
       this.pushEvent(id, "progress", msg, notification.params);
     });
 
-    client.setNotificationHandler('notifications/tools/list_changed', () => {
+    client.setNotificationHandler("notifications/tools/list_changed", () => {
       this.pushEvent(id, "tool_list_changed", "Tool list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/resources/list_changed', () => {
+    client.setNotificationHandler("notifications/resources/list_changed", () => {
       this.pushEvent(id, "resource_list_changed", "Resource list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/prompts/list_changed', () => {
+    client.setNotificationHandler("notifications/prompts/list_changed", () => {
       this.pushEvent(id, "prompt_list_changed", "Prompt list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/resources/updated', (notification) => {
+    client.setNotificationHandler("notifications/resources/updated", (notification) => {
       const uri = (notification.params as { uri?: string })?.uri ?? "";
       this.pushEvent(id, "resource_updated", `Resource updated: ${uri}`, notification.params);
     });
 
-    client.setNotificationHandler('notifications/message', (notification) => {
+    client.setNotificationHandler("notifications/message", (notification) => {
       const params = notification.params as { level?: string; logger?: string; data?: unknown };
       const text = typeof params.data === "string" ? params.data : JSON.stringify(params.data);
       this.pushEvent(id, "log", `[${params.level ?? "info"}] ${text}`, notification.params);
@@ -730,6 +939,23 @@ export class McpManager {
   private pushEvent(id: string, kind: McpEventKind, message: string, data?: unknown): void {
     const conn = this.connections.get(id);
     if (!conn) return;
+    this.pushEventTo(conn, kind, message, data);
+  }
+
+  /**
+   * Record an event against a SPECIFIC connection rather than whatever is
+   * currently registered for that id.
+   *
+   * The distinction is the whole point: work belonging to a superseded
+   * connection must land on that connection, not on whichever one took the id
+   * while the work was suspended.
+   */
+  private pushEventTo(
+    conn: McpConnection,
+    kind: McpEventKind,
+    message: string,
+    data?: unknown,
+  ): void {
     conn.events.push({ kind, message, at: Date.now(), data });
     if (conn.events.length > MAX_EVENTS) {
       conn.events = conn.events.slice(conn.events.length - MAX_EVENTS);
@@ -744,7 +970,7 @@ export class McpManager {
     const { client } = conn;
 
     // Roots: advertise which filesystem locations the server may access.
-    client.setRequestHandler('roots/list', () => {
+    client.setRequestHandler("roots/list", () => {
       const roots: Root[] = (conn.config.roots ?? []).map((uri) => ({ uri }));
       logger.debug("mcp", "mcp.operation", {
         op: "roots",
@@ -756,12 +982,12 @@ export class McpManager {
     });
 
     // Sampling: the server asks the model to generate text; route it to the active provider.
-    client.setRequestHandler('sampling/createMessage', (request: CreateMessageRequest) =>
+    client.setRequestHandler("sampling/createMessage", (request: CreateMessageRequest) =>
       this.handleSampling(id, request),
     );
 
     // Elicitation: the server asks the *user* a question mid-tool-call; surface it to the UI.
-    client.setRequestHandler('elicitation/create', (request: ElicitRequest) =>
+    client.setRequestHandler("elicitation/create", (request: ElicitRequest) =>
       this.handleElicitation(id, request),
     );
   }
@@ -774,20 +1000,17 @@ export class McpManager {
     if (!provider) {
       throw new Error("No active provider configured; cannot fulfill MCP sampling request");
     }
+    // A credential failure is tolerated here: proceed keyless and let the
+    // provider reject, exactly as before. The full provider config (including
+    // apiProtocol) is passed through, so a Chat Completions provider is built
+    // the same way as in the chat route.
     let apiKey: string | undefined;
-    if (provider.type !== "ollama") {
-      try {
-        apiKey = credentialStore.has(provider.id) ? credentialStore.get(provider.id) : undefined;
-      } catch {
-        apiKey = undefined;
-      }
+    try {
+      apiKey = resolveProviderApiKey(provider);
+    } catch {
+      apiKey = undefined;
     }
-    const model = getModel({
-      type: provider.type,
-      endpoint: provider.endpoint,
-      model: provider.model,
-      apiKey,
-    });
+    const model = buildProviderModel(provider, { apiKey });
     const params = request.params as {
       messages?: { role: "user" | "assistant"; content?: unknown }[];
       systemPrompt?: string;
@@ -815,7 +1038,11 @@ export class McpManager {
       provider: provider.type,
       model: provider.model,
     });
-    return { role: "assistant", content: { type: "text", text: result.text }, model: provider.model };
+    return {
+      role: "assistant",
+      content: { type: "text", text: result.text },
+      model: provider.model,
+    };
   }
 
   private handleElicitation(id: string, request: ElicitRequest): Promise<ElicitResult> {
@@ -886,7 +1113,10 @@ export class McpManager {
     if (conn.pendingElicitation.elicitationId !== elicitationId) return false;
     const result: ElicitResult =
       action === "accept"
-        ? { action: "accept", content: (content ?? {}) as Record<string, string | number | boolean | string[]> }
+        ? {
+            action: "accept",
+            content: (content ?? {}) as Record<string, string | number | boolean | string[]>,
+          }
         : { action };
     conn.pendingElicitation.resolve(result);
     conn.pendingElicitation = undefined;
@@ -903,16 +1133,18 @@ export class McpManager {
 
   async readResource(id: string, uri: string): Promise<McpResourceReadResult> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") throw new Error("Server not connected");
+    if (conn?.status !== "connected") throw new Error("Server not connected");
     const started = Date.now();
     try {
       const res = await conn.client.readResource({ uri });
-      const contents = (res.contents ?? []).map((c: { uri: string; mimeType?: string; text?: string; blob?: string }) => ({
-        uri: c.uri,
-        mimeType: c.mimeType,
-        text: c.text,
-        blob: c.blob,
-      }));
+      const contents = (res.contents ?? []).map(
+        (c: { uri: string; mimeType?: string; text?: string; blob?: string }) => ({
+          uri: c.uri,
+          mimeType: c.mimeType,
+          text: c.text,
+          blob: c.blob,
+        }),
+      );
       logger.debug("mcp", "mcp.operation", {
         op: "resource_read",
         outcome: "ok",
@@ -926,7 +1158,10 @@ export class McpManager {
         op: "resource_read",
         outcome: "error",
         mcpServer: conn.config.name,
-        message: `uri=${uri}`,
+        // `target`, not `message`: `normalizeError` also emits `message`, and a
+        // same-named key before the spread is silently overwritten, which lost
+        // the URI on every resource_read failure. The error's own text wins.
+        target: `uri=${uri}`,
         durationMs: Date.now() - started,
         ...normalizeError(err),
       });
@@ -934,16 +1169,22 @@ export class McpManager {
     }
   }
 
-  async getPrompt(id: string, name: string, args?: Record<string, string>): Promise<McpPromptGetResult> {
+  async getPrompt(
+    id: string,
+    name: string,
+    args?: Record<string, string>,
+  ): Promise<McpPromptGetResult> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") throw new Error("Server not connected");
+    if (conn?.status !== "connected") throw new Error("Server not connected");
     const started = Date.now();
     try {
       const res = await conn.client.getPrompt({ name, arguments: args });
-      const messages = (res.messages ?? []).map((m: { role: "user" | "assistant"; content?: unknown }) => ({
-        role: m.role,
-        content: { type: "text", text: extractMessageText(m.content) },
-      }));
+      const messages = (res.messages ?? []).map(
+        (m: { role: "user" | "assistant"; content?: unknown }) => ({
+          role: m.role,
+          content: { type: "text", text: extractMessageText(m.content) },
+        }),
+      );
       logger.debug("mcp", "mcp.operation", {
         op: "prompt",
         outcome: "ok",
@@ -957,7 +1198,8 @@ export class McpManager {
         op: "prompt",
         outcome: "error",
         mcpServer: conn.config.name,
-        message: `name=${name}`,
+        // `target`, not `message` - see the note in readResource above.
+        target: `name=${name}`,
         durationMs: Date.now() - started,
         ...normalizeError(err),
       });
@@ -973,9 +1215,11 @@ export class McpManager {
     // the UI needs to render configured-vs-unconfigured auth.
     const presence = new Map<string, boolean>();
     try {
-      const rows = db.query<{ id: string; auth_token: string | null }, []>(
-        "SELECT id, auth_token FROM mcp_servers",
-      ).all();
+      const rows = db
+        .query<{ id: string; auth_token: string | null }, []>(
+          "SELECT id, auth_token FROM mcp_servers",
+        )
+        .all();
       for (const r of rows) presence.set(r.id, r.auth_token !== null);
     } catch {
       /* presence unknown — defaults to false below */
@@ -1016,6 +1260,8 @@ export class McpManager {
         autoConnect: config.autoConnect,
         notes: config.notes,
         roots: config.roots,
+        disabledTools: config.disabledTools,
+        location: classifyLocation(config),
         pendingElicitation: conn?.pendingElicitation?.info,
       } satisfies McpStatus;
     });
@@ -1028,15 +1274,33 @@ export class McpManager {
     const tools: Record<string, any> = {};
     for (const conn of this.connections.values()) {
       if (conn.status !== "connected") continue;
-      for (const t of conn.tools) {
+      const disabled = new Set(conn.config.disabledTools ?? []);
+      const exposedTools = conn.tools.filter((t) => !disabled.has(t.name));
+      // Log unknown entries (stale disabled entries that don't match any discovered tool).
+      for (const entry of disabled) {
+        if (!conn.tools.some((t) => t.name === entry)) {
+          logger.warn("mcp", "mcp.filter_unknown_entry", {
+            mcpServer: conn.config.name,
+            entry,
+          });
+        }
+      }
+      if (exposedTools.length === 0 && conn.tools.length > 0) {
+        logger.warn("mcp", "mcp.filter_empty", {
+          mcpServer: conn.config.name,
+          totalTools: conn.tools.length,
+          disabledCount: disabled.size,
+        });
+      }
+      for (const t of exposedTools) {
         const toolName = `mcp__${conn.config.id}__${t.name}`;
-        const schema = (t.inputSchema as Record<string, unknown>) ?? {
+        const schema = (t.inputSchema as JSONSchema7) ?? {
           type: "object",
           properties: {},
         };
         tools[toolName] = tool({
           description: `[${conn.config.name}] ${t.description ?? t.name}`,
-          inputSchema: jsonSchema(schema as never),
+          inputSchema: jsonSchema(schema),
           execute: instrumentedExecute(
             toolName,
             async (args: unknown, options?: { abortSignal?: AbortSignal }) => {
@@ -1055,7 +1319,28 @@ export class McpManager {
             { mcpServer: conn.config.name },
           ),
         });
+        logger.debug("mcp", "mcp.tool_filtered", {
+          mcpServer: conn.config.name,
+          toolName: t.name,
+          reason: "exposed",
+        });
       }
+      // Log filtered (disabled) tools.
+      for (const t of conn.tools) {
+        if (disabled.has(t.name)) {
+          logger.debug("mcp", "mcp.tool_filtered", {
+            mcpServer: conn.config.name,
+            toolName: t.name,
+            reason: "disabled",
+          });
+        }
+      }
+      logger.debug("mcp", "mcp.filter_applied", {
+        mcpServer: conn.config.name,
+        totalTools: conn.tools.length,
+        exposedTools: exposedTools.length,
+        disabledCount: disabled.size,
+      });
     }
     return tools;
   }
@@ -1089,16 +1374,22 @@ export class McpManager {
       // SSE-only diagnostic probe first (same rules as connect()): definitive
       // probe failures short-circuit with a classified failureReason.
       if (config.transport === "sse" && config.url) {
-        const probe = await this.probeSseEndpoint(
+        const probe = await probeSseEndpoint(
           config.url,
-          this.buildHeaders(config, input.authToken ?? undefined),
+          buildHeaders(config, input.authToken ?? undefined),
         );
         const reason = classifySseFailure(
           probe,
           undefined,
           (input.authToken ?? undefined) !== undefined,
         );
-        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
+        if (
+          probe.kind === "unreachable" ||
+          probe.kind === "timeout" ||
+          reason === "auth_required" ||
+          reason === "auth_failed" ||
+          reason === "incompatible_response"
+        ) {
           const meta = safeEndpointMeta(config.url);
           const probeDetail =
             probe.kind === "ok"
@@ -1133,7 +1424,7 @@ export class McpManager {
           };
         }
       }
-      const transport = this.buildTransport(config, input.authToken ?? undefined);
+      const transport = buildTransport(config, input.authToken ?? undefined);
       await client.connect(transport);
       const caps = (client.getServerCapabilities() as Record<string, unknown>) ?? {};
       const tools: McpToolInfo[] = [];
@@ -1148,7 +1439,12 @@ export class McpManager {
       if (caps.resources !== undefined) {
         const res = await client.listResources();
         for (const r of res.resources ?? []) {
-          resources.push({ uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType });
+          resources.push({
+            uri: r.uri,
+            name: r.name,
+            description: r.description,
+            mimeType: r.mimeType,
+          });
         }
       }
       if (caps.prompts !== undefined) {
@@ -1216,82 +1512,12 @@ export class McpManager {
  * Masked, non-secret auth hint for the UI (type + mask). Never the credential.
  * Returns undefined when no credential is stored or auth is "none".
  */
-function authHintFor(authType: McpAuthType, authConfigured: boolean): string | undefined {
-  if (!authConfigured || authType === "none") return undefined;
-  const label = authType === "bearer" ? "Bearer" : authType === "basic" ? "Basic" : "OAuth";
-  return `${label} ••••••`;
-}
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Human-readable, non-secret detail for a classified SSE failure. Carries
  * host/port/path only — never query strings, headers, or credentials.
  */
-function sseFailureMessage(
-  reason: McpFailureReason,
-  meta: { host: string; port: string; path: string },
-  detail?: string,
-): string {
-  const where = meta.host ? `${meta.host}:${meta.port}${meta.path}` : "endpoint";
-  switch (reason) {
-    case "unreachable":
-      return `Cannot reach ${where} — is the service running?`;
-    case "auth_required":
-      return `Authentication required for ${where} — no credential is stored`;
-    case "auth_failed":
-      return `Authentication failed for ${where} — check the stored credential`;
-    case "incompatible_response":
-      return `Endpoint ${where} did not return an SSE stream — confirm the URL points at an MCP SSE endpoint`;
-    case "timeout":
-      return `Connection to ${where} timed out`;
-    case "protocol_error":
-      return detail ? `MCP protocol error: ${detail}` : `MCP protocol error with ${where}`;
-    default:
-      return detail ? `Connection failed: ${detail}` : `Connection to ${where} failed`;
-  }
-}
 
 /** Best-effort text extraction from a v2 sampling/prompt message content block. */
-function extractMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === "string") return c;
-        if (c && typeof c === "object") {
-          const item = c as { type?: string; text?: string };
-          if (item.type === "text") return item.text ?? "";
-          return "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (content && typeof content === "object") {
-    const item = content as { type?: string; text?: string };
-    if (typeof item.text === "string") return item.text;
-  }
-  return "";
-}
-
-function mcpContentToText(res: unknown): string {
-  const content = (res as { content?: unknown })?.content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c: unknown) => {
-        const item = c as { type?: string; text?: string; resource?: unknown; [k: string]: unknown };
-        if (item.type === "text") return item.text ?? "";
-        if (item.type === "resource") return JSON.stringify(item.resource ?? item);
-        return JSON.stringify(item);
-      })
-      .join("\n");
-  }
-  if (res && typeof res === "object") return JSON.stringify(res);
-  return String(res ?? "");
-}
 
 export const mcpManager = McpManager.getInstance();

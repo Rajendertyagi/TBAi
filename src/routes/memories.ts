@@ -4,11 +4,7 @@ import { db } from "../db";
 import { generateId } from "../lib/utils";
 import { evaluateMemorySafety } from "../context/memory/safety";
 import type { MemorySafetyReason } from "../context/memory/safety";
-import {
-  memoryCreateSchema,
-  memoryIdSchema,
-  memoryUpdateSchema,
-} from "../lib/validation";
+import { memoryCreateSchema, memoryIdSchema, memoryUpdateSchema } from "../lib/validation";
 import { storageError } from "./shared";
 
 /** Longest stored memory accepted by the provider read. Mirrors the storage bound. */
@@ -28,7 +24,9 @@ const MAX_STORED_MEMORY_CHARS = 20_000;
  */
 function safetyFor(content: string): { safetyFlag: true; safetyReason: MemorySafetyReason } | null {
   const verdict = evaluateMemorySafety(content);
-  return verdict.unsafe && verdict.reason ? { safetyFlag: true, safetyReason: verdict.reason } : null;
+  return verdict.unsafe && verdict.reason
+    ? { safetyFlag: true, safetyReason: verdict.reason }
+    : null;
 }
 
 /**
@@ -82,12 +80,10 @@ export function createMemoriesRoutes(database: Database = db) {
     try {
       const now = Date.now();
       const id = generateId();
-      database.run("INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)", [
-        id,
-        parsed.data.content,
-        now,
-        now,
-      ]);
+      database.run(
+        "INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        [id, parsed.data.content, now, now],
+      );
       return c.json(
         {
           id,

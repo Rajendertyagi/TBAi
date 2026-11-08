@@ -1,14 +1,8 @@
 import { useAuiState } from "@assistant-ui/react";
 import type { FormInfo, SessionFormReplyInput, SessionInfo } from "@opencode/client";
 import type { V2PermissionView } from "./v2Permissions";
-import type {
-  V2DesiredSelection,
-  V2ThreadState,
-} from "./v2Types";
-import type {
-  V2PromptAdmissionResult,
-  V2ThreadController,
-} from "./v2ThreadController";
+import type { V2DesiredSelection, V2ThreadState } from "./v2Types";
+import type { V2PromptAdmissionResult, V2ThreadController } from "./v2ThreadController";
 
 /** The typed native runtime surface exposed through assistant-ui extras. */
 export interface V2RuntimeExtras {
@@ -25,6 +19,14 @@ export interface V2RuntimeExtras {
   setDesiredSelection(selection: V2DesiredSelection): void;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
+  /**
+   * Explicit manual recovery: starts a fresh attempt even after the automatic
+   * retry budget is spent.
+   *
+   * The automatic budget limits retries the runtime schedules by itself, not a
+   * person asking again. The failed attempt is replaced, never revived.
+   */
+  retry(): Promise<void>;
   reconcileStagedRevert(): Promise<void>;
   reconcilePendingPrompt(messageId: string): Promise<"admitted" | "absent" | "unresolved">;
   awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult>;
@@ -57,6 +59,7 @@ export function createV2RuntimeExtras(
     setDesiredSelection: (selection) => controller.setDesiredSelection(selection),
     awaitReady: () => controller.awaitReady(),
     refresh: () => controller.refresh(),
+    retry: () => controller.retry(),
     reconcileStagedRevert: () => controller.reconcileStagedRevert(),
     reconcilePendingPrompt: (messageId) => controller.reconcilePendingPrompt(messageId),
     awaitPromptAdmission: (messageId) => controller.awaitPromptAdmission(messageId),

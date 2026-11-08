@@ -100,6 +100,8 @@ export type LimitSource =
   | "provider_reported"
   /** A figure a human configured for this installation. */
   | "configured"
+  /** A figure from a third-party model catalogue (Models.dev). */
+  | "model_catalog"
   /**
    * A figure the provider stated while rejecting an over-long request.
    *
@@ -183,12 +185,7 @@ export interface LimitCandidateRecord {
    * `not_compared` when fewer than two candidates were valid, which is the
    * only state in which "agreed" and "conflicted" cannot be claims.
    */
-  readonly outcome:
-    | "not_compared"
-    | "agreed"
-    | "conflicted"
-    | "lost_precedence"
-    | "rejected";
+  readonly outcome: "not_compared" | "agreed" | "conflicted" | "lost_precedence" | "rejected";
 }
 
 export interface ContextLimit {
@@ -697,7 +694,7 @@ export interface CompactionPhaseInput {
   readonly conversationId: string | undefined;
   readonly messages: UIMessage[];
   readonly seam: CompactionSeam | undefined;
-/**
+  /**
    * Compact on request even when usage is under the trigger.
    *
    * Set only by an explicit user action (the Direct `/compact` command). It removes
@@ -785,4 +782,11 @@ export interface AssembleContextInput {
    * opted in must not silently start sending persisted context to a provider.
    */
   readonly memory?: MemorySeam;
+  /**
+   * Disable P1′ server-authoritative prefix reconstruction.
+   *
+   * Used only for differential testing: the OLD path (full submitted history)
+   * vs the P1′ path (server-reconstructed prefix + client suffix).
+   */
+  readonly disableP1p?: boolean;
 }

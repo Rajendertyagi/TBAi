@@ -29,7 +29,7 @@ import { db } from "../src/db/index";
 import { registry } from "../src/config/providers";
 import { credentialStore } from "../src/services/credentials";
 import { getModel } from "../src/services/ai";
-import { buildReasoningProviderOptions } from "../src/routes/chat-provider-options";
+import { buildReasoningProviderOptions } from "../src/routes/chat/provider-options";
 import type { ProviderConfig } from "../src/types";
 
 const argv = process.argv.slice(2);
@@ -171,22 +171,45 @@ function printOptionMatrix(): void {
     level: string;
     why: string;
   }> = [
-    { type: "google", model: "gemini-3.1-flash-lite", level: "low", why: "Gemini 3 → thinkingLevel" },
+    {
+      type: "google",
+      model: "gemini-3.1-flash-lite",
+      level: "low",
+      why: "Gemini 3 → thinkingLevel",
+    },
     { type: "google", model: "gemini-2.5-flash", level: "low", why: "Gemini 2.5 → thinkingBudget" },
-    { type: "google", model: "gemini-2.5-flash-lite", level: "low", why: "2.5 lite rejects a budget" },
-    { type: "google", model: "gemini-3.1-flash-lite", level: "off", why: "off → no options at all" },
+    {
+      type: "google",
+      model: "gemini-2.5-flash-lite",
+      level: "low",
+      why: "2.5 lite rejects a budget",
+    },
+    {
+      type: "google",
+      model: "gemini-3.1-flash-lite",
+      level: "off",
+      why: "off → no options at all",
+    },
     { type: "anthropic", model: "claude-sonnet-4-5", level: "low", why: "extended thinking" },
     { type: "openai", model: "gpt-5", level: "low", why: "Responses API namespace" },
-    { type: "custom", apiProtocol: "chat-completions", model: "agnes-2.0-flash", level: "low", why: "gateway namespace" },
-    { type: "ollama", apiProtocol: "chat-completions", model: "llama3", level: "low", why: "effort not applicable" },
+    {
+      type: "custom",
+      apiProtocol: "chat-completions",
+      model: "agnes-2.0-flash",
+      level: "low",
+      why: "gateway namespace",
+    },
+    {
+      type: "ollama",
+      apiProtocol: "chat-completions",
+      model: "llama3",
+      level: "low",
+      why: "effort not applicable",
+    },
   ];
   console.log("\n=== option matrix (offline, no provider or key needed) ===");
   for (const c of cases) {
-    const options = buildReasoningProviderOptions(
-      { type: c.type, apiProtocol: c.apiProtocol },
-      c.model,
-      c.level,
-    );
+    const options = buildReasoningProviderOptions({ type: c.type }, c.level);
     const built = JSON.stringify(options);
     console.log(
       `  ${c.type.padEnd(9)} ${c.model.padEnd(22)} ${c.level.padEnd(4)} -> ${built === "{}" ? "(none)" : built}  [${c.why}]`,
@@ -211,16 +234,15 @@ async function main(): Promise<void> {
 
   for (const { config, label } of providers) {
     const level = config.thinking ?? "off";
-    const providerOptions = buildReasoningProviderOptions(
-      { type: config.type, apiProtocol: config.apiProtocol },
-      config.model,
-      level,
-    );
+    const providerOptions = buildReasoningProviderOptions({ type: config.type }, level);
 
     const body = await captureRequestBody(() =>
       streamText({
         model: getModel(config as never),
         messages: [{ role: "user", content: "hi" }],
+        ...(level !== "off" && (level === "low" || level === "medium" || level === "high")
+          ? { reasoning: level }
+          : {}),
         providerOptions: providerOptions as never,
       }).consumeStream(),
     );
@@ -230,7 +252,9 @@ async function main(): Promise<void> {
     console.log(`  options built    : ${JSON.stringify(providerOptions)}`);
     console.log(`  request carries  : ${findReasoningInBody(body)}`);
     if (level === "off") {
-      console.log(`  NOTE             : level is "off" — no reasoning will ever appear`);
+      console.log(
+        `  NOTE             : level is "off" — no explicit reasoning override sent; provider-default behavior applies`,
+      );
     }
     if (live) {
       console.log(`  live             : ${await probeLive(config, providerOptions)}`);

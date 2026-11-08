@@ -8,7 +8,7 @@
 // registry per file, with this preload re-run per file and `process.argv[1]`
 // pointing at that file). Given that, the sandbox is resolved per file.
 // See tests/test-sandbox.ts for the identity contract and the fallback.
-import fs from "fs";
+import fs from "node:fs";
 
 import { collectStaleSandboxes, resolveTestSandbox } from "./test-sandbox";
 

@@ -34,7 +34,7 @@ Kept intentionally small. Update continuously.
   restores messages, multiple threads are isolated, search filters, and the `⋯` menu archives/
   renames/deletes. `bun run build` (backend + web) passes.
 - **Generic MCP client — implemented (2026-09-08):** standards-based MCP support via the official
-  `@modelcontextprotocol/sdk`. A `McpManager` singleton (`src/services/mcp/manager.ts`) connects to any
+  `@modelcontextprotocol/*` packages (v2.3.1). A `McpManager` singleton (`src/services/mcp/manager.ts`) connects to any
   MCP server over **STDIO**, **Streamable HTTP**, or **legacy SSE**, discovers tools/resources/prompts
   + server capabilities, handles notifications (progress, list-changed, logging) and bounded
   reconnect, and exposes discovered tools to the model as AI SDK v7 `tool()` wrappers merged into the

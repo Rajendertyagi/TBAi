@@ -1,6 +1,6 @@
 import { invalidateHistoryCache } from "../../adapters/threadHistoryAdapter";
 import { invalidateThreadListCache } from "../../adapters/remoteThreadListAdapter";
-import { useSettingsStore } from "../../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "../../lib/logger";
 import { useAvailabilityStore } from "./availabilityStore";
 import { reconcileTabMirror } from "../chat/state/tabReconciliation";
@@ -40,6 +40,7 @@ async function safeLoadProviders(): Promise<void> {
 }
 
 async function runRecoverySequence(): Promise<void> {
+  logger.info("availability", "recovery.sequence_start", {});
   invalidateThreadListCache();
   invalidateHistoryCache();
   await safeLoadProviders();

@@ -105,7 +105,7 @@ export function toCodeContextUsage(raw: unknown): CodeContextUsage | undefined {
   const reportedTotal = positive((raw as { total?: unknown }).total);
   return {
     usage: toTokenUsage(raw),
-    contextTokens: reportedTotal ?? (positive(sumTokenBreakdown(raw)) ?? undefined),
+    contextTokens: reportedTotal ?? positive(sumTokenBreakdown(raw)) ?? undefined,
     numeratorSource: reportedTotal !== undefined ? "server_total" : "derived_input_output",
     cachedInputTokens: raw.cache.read,
   };
@@ -121,11 +121,5 @@ export function toCodeContextUsage(raw: unknown): CodeContextUsage | undefined {
  * precisely why the reported total is preferred above.
  */
 function sumTokenBreakdown(raw: TokenUsageInfo): number {
-  return (
-    raw.input +
-    raw.output +
-    raw.reasoning +
-    (raw.cache?.read ?? 0) +
-    (raw.cache?.write ?? 0)
-  );
+  return raw.input + raw.output + raw.reasoning + (raw.cache?.read ?? 0) + (raw.cache?.write ?? 0);
 }

@@ -1,6 +1,7 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "../db";
+import { DATA_DIR } from "../config/data-dir";
 
 export const DEFAULT_WEB_PORT = 3000;
 const PORT_SETTING_KEY = "server.port";
@@ -8,7 +9,7 @@ const PORT_FILE_NAME = "port";
 
 /** Data dir shared with db/index.ts (DATA_DIR env or ./data). Single place. */
 export function resolveDataDir(): string {
-  return process.env.DATA_DIR || path.join(process.cwd(), "data");
+  return DATA_DIR;
 }
 
 /** True when the environment owns the port (UI locks editing, like log env locks). */
@@ -26,9 +27,9 @@ function parsePortText(raw: string): number | null {
 /** Port persisted in app_settings, or null when never saved (or corrupt). */
 export function getPersistedPort(): number | null {
   try {
-    const row = db
-      .query("SELECT value FROM app_settings WHERE key = ?")
-      .get(PORT_SETTING_KEY) as { value: string } | undefined;
+    const row = db.query("SELECT value FROM app_settings WHERE key = ?").get(PORT_SETTING_KEY) as
+      | { value: string }
+      | undefined;
     if (!row) return null;
     const parsed: unknown = JSON.parse(row.value);
     if (typeof parsed === "number") return parsePortText(String(parsed));

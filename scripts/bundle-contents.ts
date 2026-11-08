@@ -62,11 +62,15 @@ for (const file of maps) {
 
   const total = [...byPkg.values()].reduce((a, r) => a + r.bytes, 0);
   rows.push(...byPkg.values());
-  console.log(`\n=== ${file}  (${sources.length} modules, ${(total / 1024 / 1024).toFixed(2)} MB of source) ===`);
+  console.log(
+    `\n=== ${file}  (${sources.length} modules, ${(total / 1024 / 1024).toFixed(2)} MB of source) ===`,
+  );
   for (const r of [...byPkg.values()].sort((a, b) => b.bytes - a.bytes).slice(0, 22)) {
     const mb = (r.bytes / 1024 / 1024).toFixed(2).padStart(6);
     const pct = ((r.bytes / total) * 100).toFixed(1).padStart(5);
-    console.log(`  ${mb} MB  ${pct.padStart(5)}%  ${r.files.toString().padStart(4)} files  ${r.pkg}`);
+    console.log(
+      `  ${mb} MB  ${pct.padStart(5)}%  ${r.files.toString().padStart(4)} files  ${r.pkg}`,
+    );
   }
 }
 
@@ -97,7 +101,9 @@ if (rows.length > 0) {
   for (const r of [...merged.values()].sort((a, b) => b.bytes - a.bytes).slice(0, 28)) {
     const mb = (r.bytes / 1024 / 1024).toFixed(2).padStart(6);
     const pct = ((r.bytes / total) * 100).toFixed(1).padStart(5);
-    console.log(`  ${mb} MB  ${pct.padStart(5)}%  ${r.files.toString().padStart(4)} files  ${r.pkg}`);
+    console.log(
+      `  ${mb} MB  ${pct.padStart(5)}%  ${r.files.toString().padStart(4)} files  ${r.pkg}`,
+    );
   }
 }
 

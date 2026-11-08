@@ -55,10 +55,7 @@ export interface ShieldToggleDeps {
  * @returns The new shield position.
  * @throws When a bound conversation has no session id, or the write fails.
  */
-export async function runShieldToggle(
-  current: boolean,
-  deps: ShieldToggleDeps,
-): Promise<boolean> {
+export async function runShieldToggle(current: boolean, deps: ShieldToggleDeps): Promise<boolean> {
   const target = !current;
   if (deps.draft) {
     deps.setDraftAutoApprove(target);

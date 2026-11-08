@@ -56,6 +56,7 @@ export function useOpenCodeConversationConfig(
   // backend returns. Failure retains the previous config (catch below).
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` is a store counter that is never read in the body - it is the reload trigger. A recovered server invalidates the stored conversation config, and nothing else this effect observes changes when that happens.
   useEffect(() => {
     if (!conversationId) {
       setConfig(null);
@@ -86,6 +87,7 @@ export function useOpenCodeConversationConfig(
     };
   }, [conversationId, recoveryEpoch]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is a ref counter that is never read in the body - it is the invalidation trigger. Bumping it is how a write to the store announces that the stored config changed, without replacing the object identity the store already hands out.
   return useMemo(() => {
     if (!config || !conversationId) return config;
     const override = configOverrides.get(conversationId);
@@ -123,10 +125,7 @@ function subscribeOverrides(notify: () => void): () => void {
  * for a reload. Call ONLY after the PATCH succeeded — a failed write must
  * leave the visible state untouched.
  */
-export function updateConversationConfig(
-  conversationId: string,
-  patch: ConfigPatch,
-): void {
+export function updateConversationConfig(conversationId: string, patch: ConfigPatch): void {
   const prev = configOverrides.get(conversationId) ?? {};
   configOverrides.set(conversationId, { ...prev, ...patch });
   overrideVersion++;

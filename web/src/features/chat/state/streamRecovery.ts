@@ -91,6 +91,26 @@ const recheckAttempts = new Map<string, number>();
 const RECHECK_DELAYS_MS = [1_500, 3_000, 6_000, 12_000, 25_000] as const;
 
 /**
+ * How soon after a run finalizes its reply may be judged missing.
+ *
+ * MEASURED 2026-10-26 on the E2E build: a status read taken **4 ms** after a
+ * `completed` run reported `endsWithReply: false`, while the same conversation
+ * answered `true` at **96 ms** and the assistant message was already in SQLite.
+ * The reply is written by the BROWSER (see `messageService.endsWithReply`), so
+ * immediately after finalization an absent reply means "not written yet", not
+ * "lost" — and publishing on it put "This reply could not be recovered." over a
+ * healthy conversation. That is not a cosmetic bug: the strip changes the
+ * composer's layout (the sanity check that caught it was a Send/Stop geometry
+ * assertion in `composer-bar.spec.ts`).
+ *
+ * This window delays the verdict, it never suppresses one: a genuinely lost reply
+ * is reported by the re-read chain that starts inside it, so the strip appears a
+ * few seconds later instead of never. It is far longer than the measured write
+ * (5 s ≈ 50×) so a slow disk or a busy event loop cannot re-open the race.
+ */
+const REPLY_SETTLEMENT_MS = 5_000;
+
+/**
  * Cadence override. Exists so the convergence loop is testable without waiting
  * ~48 real seconds, and so the backoff is stated in one obvious place.
  */
@@ -145,6 +165,39 @@ function cancelTimerOnly(threadId: string): void {
     clearTimeout(timer);
     recheckTimers.delete(threadId);
   }
+}
+
+/**
+ * A completed run whose reply is still being written by this client.
+ *
+ * Only `completed` is withheld. `failed`, `cancelled` and `interrupted` are
+ * incidents the user must hear about at once, and none of them expects a
+ * browser-written reply — their absence IS the event.
+ */
+function isAwaitingReplyWrite(status: StreamStatus): boolean {
+  return (
+    status.terminalKind === "completed" &&
+    status.finalizedAgeMs !== null &&
+    status.finalizedAgeMs < REPLY_SETTLEMENT_MS
+  );
+}
+
+/**
+ * Remove whatever is displayed for this thread WITHOUT spending its re-read
+ * attempts.
+ *
+ * `clear` is the "this thread is settled" action — it cancels the chain and
+ * resets its budget. A withheld verdict is the opposite: it must stay silent
+ * now and keep asking, so it hides the notice and leaves the chain alone.
+ */
+function withdrawNotice(threadId: string): void {
+  cancelTimerOnly(threadId);
+  useStreamRecoveryStore.setState((state) => {
+    if (state.byThread[threadId] === undefined) return state;
+    const next = { ...state.byThread };
+    delete next[threadId];
+    return { byThread: next };
+  });
 }
 
 export const useStreamRecoveryStore = create<StreamRecoveryStore>((set) => ({
@@ -342,6 +395,13 @@ export async function resolveStreamRecovery(
     // misleading reconnect message.
     if (status.endsWithReply === true) {
       useStreamRecoveryStore.getState().clear(threadId);
+    } else if (isAwaitingReplyWrite(status)) {
+      // Too early to answer "is the reply in this conversation?" honestly. The
+      // write that puts it there belongs to this client and has not landed yet
+      // (measured 4 ms after finalization, present 96 ms later), so the verdict
+      // says nothing and is re-taken instead of being published as a loss.
+      withdrawNotice(threadId);
+      scheduleRecheck(threadId, prompt, fetchImpl);
     } else {
       useStreamRecoveryStore.getState().report(state);
     }

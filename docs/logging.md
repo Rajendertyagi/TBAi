@@ -188,6 +188,20 @@ Established one-off diagnostic events (`server.started`, `db.*`, `workspace.gc_*
 with any funnel, and renaming them buys nothing. Success audit lines live only
 where the taxonomy allows (`scheduler.admin`); routine success is not logged.
 
+### Lifecycle records carry the instance that wrote them
+
+`server.started` (fields `port`, `instanceId`) and `server.startup_failed` (field
+`instanceId`) name the process they describe. This is not decoration: several
+launches can write to one `TBAI_LOG_FILE` — `beforeDevCommand`'s child inherits
+it, and before the desktop shell stopped spawning a second backend in development
+so did that one — so "a `startup_failed` line exists" was silently read as "the
+backend this run is observing failed". Attribution is by `instanceId` (the same
+value `GET /api/server/instance` returns), and the G2 driver
+(`scripts/observe-dev-webview-origin.ts#attributeBackendLog`) will not accept an
+observation unless the instance that answered the in-page API is the instance the
+log records as having started on the configured port. A failure entry with no
+instance id stays visible as unattributed rather than being credited to somebody.
+
 ## 4. Error classification (shared, once)
 
 `src/lib/errors.ts#classifyError` is the single classifier. It produces

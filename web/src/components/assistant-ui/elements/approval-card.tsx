@@ -18,7 +18,13 @@
  * NOTE ON THE BUTTONS — this is the mechanism TBAi's adapter relies on: each
  * button renders **only when its callback is supplied**. So "hide the option the
  * host did not offer" is expressed by *not passing* that callback, with no fork
- * and no prop added. See `features/permissions/approvalOptionMapping.ts`.
+ * and no prop added.
+ *
+ * (The id-mapping adapter that once bridged these ids,
+ * `features/permissions/approvalOptionMapping.ts`, was DELETED on 2026-10-22
+ * with `bindV2PermissionOptions`: it had no consumer, and its inner loop
+ * discarded the return value of the validation it appeared to perform. The
+ * app-owned card below does the mapping itself.)
  *
  * ## THIS FILE IS CURRENTLY UNUSED — the app-owned card is canonical
  *
@@ -88,11 +94,7 @@ export function ApprovalCard({
   return (
     <div
       data-slot="approval-card"
-      className={cn(
-        paper,
-        "flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4",
-        className,
-      )}
+      className={cn(paper, "flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4", className)}
       {...props}
     >
       <div className="flex items-center gap-3">
@@ -100,17 +102,12 @@ export function ApprovalCard({
           <TerminalIcon className="size-4" />
         </span>
         <div className="flex flex-col">
-          <p className="text-[13.5px] font-medium">{title}</p>
+          <p className="text-[calc(var(--interface-font-size)*0.84375)] font-medium">{title}</p>
           <p className="text-foreground/45 text-xs">{subtitle}</p>
         </div>
       </div>
 
-      <div
-        className={cn(
-          field,
-          "text-foreground/70 rounded-xl px-3.5 py-2.5 font-mono text-xs",
-        )}
-      >
+      <div className={cn(field, "text-foreground/70 rounded-xl px-3.5 py-2.5 font-mono text-xs")}>
         {command}
       </div>
 

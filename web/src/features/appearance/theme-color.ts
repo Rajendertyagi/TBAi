@@ -49,12 +49,12 @@ const clamp01 = (n: number) => clamp(n, 0, 1);
 /** sRGB channel (0–255) to linear-light (0–1). */
 function srgbToLinear(channel: number): number {
   const c = channel / 255;
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
 /** Linear-light (0–1) to sRGB channel (0–255). */
 function linearToSrgb(linear: number): number {
-  const c = linear <= 0.0031308 ? 12.92 * linear : 1.055 * Math.pow(linear, 1 / 2.4) - 0.055;
+  const c = linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
   return c * 255;
 }
 
@@ -93,7 +93,10 @@ const FN_OKLAB = /^oklab\(([^)]*)\)$/i;
 /** Split `1 2 3 / 50%` into three components and an alpha. */
 function components(body: string): { parts: string[]; alpha: number } | null {
   const [head, tail] = body.includes("/") ? body.split("/") : [body, null];
-  const parts = head.trim().split(/[\s,]+/).filter(Boolean);
+  const parts = head
+    .trim()
+    .split(/[\s,]+/)
+    .filter(Boolean);
   if (parts.length < 3) return null;
   let alpha = 1;
   if (tail !== null) {
@@ -145,7 +148,11 @@ export function parseColor(input: string | undefined | null): Rgb | null {
   const hex = HEX.exec(value);
   if (hex) {
     const h = hex[1];
-    const expand = (s: string) => s.split("").map((c) => c + c).join("");
+    const expand = (s: string) =>
+      s
+        .split("")
+        .map((c) => c + c)
+        .join("");
     if (h.length === 3 || h.length === 4) {
       const e = expand(h);
       return {
@@ -197,7 +204,12 @@ export function parseColor(input: string | undefined | null): Rgb | null {
       [chromaValue, 0, x],
     ];
     const [r1, g1, b1] = table[Math.floor(h) % 6];
-    return { r: clamp255((r1 + m) * 255), g: clamp255((g1 + m) * 255), b: clamp255((b1 + m) * 255), a: c.alpha };
+    return {
+      r: clamp255((r1 + m) * 255),
+      g: clamp255((g1 + m) * 255),
+      b: clamp255((b1 + m) * 255),
+      a: c.alpha,
+    };
   }
 
   const oklch = FN_OKLCH.exec(value);
@@ -226,17 +238,18 @@ function oklabToRgb(L: number, a: number, b: number, alpha: number): Rgb {
   // display gamut. Clamping matches what the browser will do with the same
   // declaration, which is the behaviour we want: the generator predicts the
   // rendered result rather than a mathematical ideal the screen cannot show.
-  return { r: clamp255(linearToSrgb(r)), g: clamp255(linearToSrgb(g)), b: clamp255(linearToSrgb(bl)), a: alpha };
+  return {
+    r: clamp255(linearToSrgb(r)),
+    g: clamp255(linearToSrgb(g)),
+    b: clamp255(linearToSrgb(bl)),
+    a: alpha,
+  };
 }
 
 // --- formatting ------------------------------------------------------------
 
 function rgbToOklab(c: Rgb): Oklab {
-  const { L, a, b } = linearToOklab(
-    srgbToLinear(c.r),
-    srgbToLinear(c.g),
-    srgbToLinear(c.b),
-  );
+  const { L, a, b } = linearToOklab(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b));
   return { L, a, b, alpha: c.a };
 }
 
@@ -271,9 +284,7 @@ export function formatColor(color: string | Rgb): string {
 /** WCAG relative luminance. Linear sRGB, because that is what WCAG defines. */
 export function relativeLuminance(color: Rgb): number {
   return (
-    0.2126 * srgbToLinear(color.r) +
-    0.7152 * srgbToLinear(color.g) +
-    0.0722 * srgbToLinear(color.b)
+    0.2126 * srgbToLinear(color.r) + 0.7152 * srgbToLinear(color.g) + 0.0722 * srgbToLinear(color.b)
   );
 }
 

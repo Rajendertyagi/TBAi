@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import { mcpManager } from "../services/mcp/manager";
 import { sanitizeStreamError } from "../lib/redact";
 import { logger } from "../lib/logger";
@@ -8,6 +7,7 @@ import {
   mcpServerCreateSchema,
   mcpServerUpdateSchema,
   mcpServerTestSchema,
+  mcpServerEnableSchema,
   mcpResourceReadSchema,
   mcpPromptGetSchema,
   mcpElicitResolveSchema,
@@ -53,7 +53,7 @@ app.delete("/servers/:id", async (c) => {
 
 // Enable/disable a server.
 app.post("/servers/:id/enable", async (c) => {
-  const parsed = z.object({ enabled: z.boolean() }).safeParse(await c.req.json().catch(() => ({})));
+  const parsed = mcpServerEnableSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "enabled boolean required" }, 400);
   mcpManager.setEnabled(c.req.param("id"), parsed.data.enabled);
   return c.json({ success: true });
@@ -100,7 +100,17 @@ app.post("/servers/test", async (c) => {
       transport: parsed.data.transport,
       ...errorLogFields(e),
     });
-    return c.json({ ok: false, error: sanitizeStreamError(e), toolCount: 0, resourceCount: 0, promptCount: 0, tools: [], resources: [], prompts: [], transport: parsed.data.transport });
+    return c.json({
+      ok: false,
+      error: sanitizeStreamError(e),
+      toolCount: 0,
+      resourceCount: 0,
+      promptCount: 0,
+      tools: [],
+      resources: [],
+      prompts: [],
+      transport: parsed.data.transport,
+    });
   }
 });
 
@@ -121,7 +131,11 @@ app.post("/servers/:id/prompt/get", async (c) => {
   const parsed = mcpPromptGetSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "name required" }, 400);
   try {
-    const result = await mcpManager.getPrompt(c.req.param("id"), parsed.data.name, parsed.data.arguments ?? undefined);
+    const result = await mcpManager.getPrompt(
+      c.req.param("id"),
+      parsed.data.name,
+      parsed.data.arguments ?? undefined,
+    );
     return c.json(result);
   } catch (e) {
     return c.json({ error: sanitizeStreamError(e) }, 400);
@@ -136,7 +150,8 @@ app.get("/elicit/pending", (c) => {
 // Resolve (answer) a pending elicitation from the UI.
 app.post("/elicit/resolve", async (c) => {
   const parsed = mcpElicitResolveSchema.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) return c.json({ error: "Invalid elicitation resolution", issues: parsed.error.issues }, 400);
+  if (!parsed.success)
+    return c.json({ error: "Invalid elicitation resolution", issues: parsed.error.issues }, 400);
   const ok = mcpManager.resolveElicitation(
     parsed.data.serverId,
     parsed.data.elicitationId,

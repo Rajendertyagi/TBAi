@@ -2,10 +2,8 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { isTauri } from "../lib/platform";
 import { isComposing } from "../lib/ime";
-import {
-  urlForTab,
-  useChatTabsStore,
-} from "../features/chat/state/chatTabs";
+import { urlForTab, useChatTabsStore } from "../features/chat/state/chatTabs";
+import { ROUTES } from "../config/navigation";
 
 /**
  * Desktop keyboard shortcut controller (mounted only in the Tauri shell):
@@ -38,7 +36,7 @@ export function ChromeShortcuts() {
 
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
-        navigate("/chat/new");
+        navigate(ROUTES.CHAT_NEW);
       } else if (e.key === "w" || e.key === "W") {
         e.preventDefault();
         if (store.activeKey) store.close(store.activeKey);

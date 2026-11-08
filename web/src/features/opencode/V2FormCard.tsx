@@ -9,11 +9,7 @@ import { toolsConfig } from "@/config/tools";
 import { writeClipboardText } from "@/lib/clipboard";
 import { logger } from "@/lib/logger";
 import { isIMECompositionEvent, isPlainEscape } from "@/lib/ime";
-import {
-  focusComposerInput,
-  isDecisionSurfaceOwner,
-  registerDecisionSurface,
-} from "@/lib/focus";
+import { focusComposerInput, isDecisionSurfaceOwner, registerDecisionSurface } from "@/lib/focus";
 import {
   isV2FormFieldVisible,
   projectV2Form,
@@ -75,8 +71,18 @@ interface CopyAction {
  * confirmation cannot end up naming the wrong format.
  */
 const COPY_ACTIONS: readonly CopyAction[] = [
-  { label: toolsConfig.copy.form.copyMarkdown, done: toolsConfig.copy.form.copiedMarkdown, serialize: questionAsMarkdown, icon: <FileTextIcon aria-hidden="true" /> },
-  { label: toolsConfig.copy.form.copyJson, done: toolsConfig.copy.form.copiedJson, serialize: questionAsJson, icon: <BracesIcon aria-hidden="true" /> },
+  {
+    label: toolsConfig.copy.form.copyMarkdown,
+    done: toolsConfig.copy.form.copiedMarkdown,
+    serialize: questionAsMarkdown,
+    icon: <FileTextIcon aria-hidden="true" />,
+  },
+  {
+    label: toolsConfig.copy.form.copyJson,
+    done: toolsConfig.copy.form.copiedJson,
+    serialize: questionAsJson,
+    icon: <BracesIcon aria-hidden="true" />,
+  },
 ];
 
 /** Writes text to the clipboard, and reports which of the three outcomes it had. */
@@ -119,19 +125,31 @@ function defaultAnswer(form: FormInfo): V2FormAnswer {
  * Carries the tabpanel wiring so the dots and the body they switch are one
  * relationship rather than two places that must agree.
  */
-function StepDot({ index, current, done, onJump }: { index: number; current: boolean; done: boolean; onJump: () => void }) {
-  return <button
-    type="button"
-    role="tab"
-    aria-selected={current}
-    aria-controls={DOCK_TABPANEL_ID}
-    aria-label={toolsConfig.copy.form.stepAria(index)}
-    onClick={onJump}
-    className={cn(
-      "size-2 shrink-0 rounded-full transition-colors",
-      current ? "bg-primary" : done ? "bg-muted-foreground/50" : "bg-border",
-    )}
-  />;
+function StepDot({
+  index,
+  current,
+  done,
+  onJump,
+}: {
+  index: number;
+  current: boolean;
+  done: boolean;
+  onJump: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={current}
+      aria-controls={DOCK_TABPANEL_ID}
+      aria-label={toolsConfig.copy.form.stepAria(index)}
+      onClick={onJump}
+      className={cn(
+        "size-2 shrink-0 rounded-full transition-colors",
+        current ? "bg-primary" : done ? "bg-muted-foreground/50" : "bg-border",
+      )}
+    />
+  );
 }
 
 /**
@@ -194,8 +212,33 @@ export function V2FormCard({
   // the top of the conversation. `collapsed` is the `enabled` flag, so a
   // collapsed dock measures nothing and keeps its CSS cap.
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  /** Whether the dock has been seen at least once expanded. Gates the focus guard. */
-  const dockSeen = useRef(false);
+  /**
+   * The visible field's key, as of the last time the dock moved focus onto a
+   * field.
+   *
+   * `null` means "no field has been seen yet".
+   *
+   * This is what separates the dock's ARRIVAL from a STEP CHANGE. The arrival
+   * belongs to the registry (`registerDecisionSurface` -> `scheduleFocusPick`),
+   * which focuses the dock BODY - the body is the element it registered. A step
+   * change is the reader's own doing and must move focus to the new step's
+   * first CONTROL.
+   *
+   * So the step-change effect moves focus when the visible key DIFFERS from
+   * the one it last saw - and its FIRST run is the arrival, which the registry
+   * owns, so it records the key without moving focus. Every later step change
+   * is a focus move, including the second and third, which a one-shot flag
+   * would silently skip.
+   *
+   * The comparison is on the key rather than on a one-shot flag, because a
+   * one-shot flag fires on the FIRST step change only: the second and third
+   * steps would leave focus behind on the step the reader had left.
+   *
+   * M18: the flag used to be `dockSeen`, and it was only ever set to `false`,
+   * so the step-change focus move was DEAD CODE - and a source-text guard
+   * kept it green.
+   */
+  const seenFieldKey = useRef<string | null>(null);
   /** Whether the dock took focus itself, and so has to give it back on unmount. */
   const bodyMaxHeight = useFormDockMaxHeight(bodyRef, !collapsed);
 
@@ -225,20 +268,28 @@ export function V2FormCard({
 
   const submit = async () => {
     const effective: { [key: string]: FormValue } = { ...answer };
-    for (const item of view.fields) if (!isV2FormFieldVisible(item, effective)) delete effective[item.key];
+    for (const item of view.fields)
+      if (!isV2FormFieldVisible(item, effective)) delete effective[item.key];
     const result = validateV2FormAnswer(view, effective);
-    if (!result.ok) {
-      setError(result.formError ?? Object.values(result.fieldErrors)[0] ?? toolsConfig.copy.form.invalidForm);
+    if (result.ok === false) {
+      setError(
+        result.formError ??
+          Object.values(result.fieldErrors)[0] ??
+          toolsConfig.copy.form.invalidForm,
+      );
       // Take the reader TO the question that is blocking, rather than leaving
       // them on the last step with a message about a step they cannot see. The
       // key is mapped through the VISIBLE fields, because a conditional field
       // that has gone away must not become a jump target.
-      const firstBad = Object.keys(result.fieldErrors).find((key) => visible.some((item) => item.key === key));
+      const firstBad = Object.keys(result.fieldErrors).find((key) =>
+        visible.some((item) => item.key === key),
+      );
       const target = visible.findIndex((item) => item.key === firstBad);
       if (target >= 0) setStep(target);
       return;
     }
-    setBusy(true); setError(null);
+    setBusy(true);
+    setError(null);
     // The question lifecycle, on the card the reader actually uses.
     //
     // These four events used to be logged only by `shared/QuestionFormCard`,
@@ -248,7 +299,8 @@ export function V2FormCard({
     // now points here, where the behaviour is.
     logger.info("approval", "question.submitted", {
       fieldCount: visible.length,
-      answeredCount: Object.values(effective).filter((value) => String(value ?? "").length > 0).length,
+      answeredCount: Object.values(effective).filter((value) => String(value ?? "").length > 0)
+        .length,
     });
     try {
       await onSubmit(result.answer);
@@ -264,11 +316,17 @@ export function V2FormCard({
 
   /** Cancels the form, surfacing a refusal instead of failing silently. */
   const cancel = async () => {
-    setBusy(true); setError(null);
+    setBusy(true);
+    setError(null);
     // A dismissal is a decision too: the reader chose not to answer, and that is
     // the outcome an operator most often needs to tell apart from a failure.
     logger.info("approval", "question.dismissed", { fieldCount: visible.length });
-    try { await onCancel(); } catch (cause) { setError(cause instanceof Error ? cause.message : toolsConfig.copy.form.cancelFailed); setBusy(false); }
+    try {
+      await onCancel();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : toolsConfig.copy.form.cancelFailed);
+      setBusy(false);
+    }
   };
 
   /**
@@ -292,7 +350,10 @@ export function V2FormCard({
       return;
     }
     setCopyStatus({
-      text: outcome === "refused" ? toolsConfig.copy.form.copyRefused : toolsConfig.copy.form.copyUnavailable,
+      text:
+        outcome === "refused"
+          ? toolsConfig.copy.form.copyRefused
+          : toolsConfig.copy.form.copyUnavailable,
       tone: "failed",
     });
   };
@@ -303,7 +364,7 @@ export function V2FormCard({
    * Two guards before either: an IME composition (accepting a candidate would
    * otherwise answer a half-typed question) and the reader's own Shift key.
    */
-const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     // Escape declines, mirroring Escape on a permission card. The agent is
     // blocked waiting, so there is no "leave it and carry on": the question is
     // either answered or dropped. It is not a hidden shortcut either -- the
@@ -318,7 +379,10 @@ const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Enter" || isIMECompositionEvent(event)) return;
     if (event.shiftKey) return;
     event.preventDefault();
-    if (event.metaKey || event.ctrlKey) { void submit(); return; }
+    if (event.metaKey || event.ctrlKey) {
+      void submit();
+      return;
+    }
     if (last) void submit();
     else setStep(current + 1);
   };
@@ -352,9 +416,6 @@ const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (collapsed) return;
     const element = bodyRef.current;
     const release = registerDecisionSurface(element);
-    // The next step change is the reader's own doing and must move focus; the
-    // arrival above was the registry's job.
-    dockSeen.current = false;
     return () => {
       // Asked of the registry, not of a ref captured when the effect ran: by
       // cleanup time that value is stale, and it decides whether focus is the
@@ -365,89 +426,135 @@ const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     };
   }, [collapsed]);
 
+  // The dependency is the visible field's KEY, never the field object itself:
+  // `field` is rebuilt on every render, so depending on it would re-run this
+  // effect while the reader types in the custom-answer box and throw their
+  // caret back to the start of what they wrote. The key is what says which
+  // field is visible, and it changes exactly when the visible field does.
   useEffect(() => {
     if (collapsed) return;
-    if (!dockSeen.current) return;
+    const key = field?.key;
+    if (key === undefined) return;
     const host = bodyRef.current;
     if (!host) return;
-    dockSeen.current = false;
+    // M18: a step CHANGE moves focus; the dock's ARRIVAL does not.
+    //
+    // The ARRIVAL is this effect's FIRST run - the registry focuses the dock
+    // BODY then, and the body is the element it registered. So the first run
+    // records the key and moves nothing. Every later run has a DIFFERENT key
+    // - the reader moved to another question - and that is a step change, and
+    // it moves focus to that step's first control.
+    //
+    // Before this, the flag was only ever set to `false`, so the guard below
+    // short-circuited on EVERY run: the focus move was dead code, and a
+    // source-text guard kept it green. The reader pressed Enter, the dock
+    // advanced, and focus stayed behind on the step they had left - which is
+    // how one Enter press ends up answering two different questions.
+    if (seenFieldKey.current === key) return;
+    const arrival = seenFieldKey.current === null;
+    seenFieldKey.current = key;
+    if (arrival) return;
     const first = host.querySelector<HTMLElement>(FOCUSABLE_IN_DOCK);
     (first ?? host).focus({ preventScroll: true });
     // Keyed on the key of the visible field, never on the field object itself:
     // `field` is rebuilt on every render, so depending on it would re-run this
     // effect while the reader types in the custom-answer box and throw their
     // caret back to the start of what they wrote.
-  }, [field?.key]);
+  }, [field?.key, collapsed]);
 
   // The dock unmounts once answered or cancelled, taking focus with it. The
   // hand-back lives in the registration effect above, which is the only place
   // that knows whether focus was the dock's to give.
 
-
-  return <section aria-label={view.title} className={cn(CARD_SURFACE, "p-5 text-sm")}>
-    {/* A fixed-shape header row. The title is the only part that gives ground
+  return (
+    <section aria-label={view.title} className={cn(CARD_SURFACE, "p-5 text-sm")}>
+      {/* A fixed-shape header row. The title is the only part that gives ground
         (it truncates) and the actions are ONE `shrink-0` group, so a narrow dock
         shortens the question's name instead of wrapping three buttons onto a
         second line. That is also why the copy result is reported on its own row
         below: a long failure must never be able to widen the row it is
         reported in. */}
-    <div className="flex items-start gap-3">
-      <div className="min-w-0 flex-1">
-        <h2 className="truncate font-medium text-foreground">{view.title}</h2>
-        <p className="text-xs text-muted-foreground">{toolsConfig.copy.form.progress(current + 1, visible.length)}</p>
-      </div>
-      {queuedBehind > 0 ? <p className="shrink-0 text-xs text-muted-foreground">{toolsConfig.copy.form.queued(queuedBehind)}</p> : null}
-      <div className="flex shrink-0 items-center gap-1">
-        {/* Offered whether or not the question is expanded: a reader who has
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-medium text-foreground">{view.title}</h2>
+          <p className="text-xs text-muted-foreground">
+            {toolsConfig.copy.form.progress(current + 1, visible.length)}
+          </p>
+        </div>
+        {queuedBehind > 0 ? (
+          <p className="shrink-0 text-xs text-muted-foreground">
+            {toolsConfig.copy.form.queued(queuedBehind)}
+          </p>
+        ) : null}
+        <div className="flex shrink-0 items-center gap-1">
+          {/* Offered whether or not the question is expanded: a reader who has
             collapsed the dock can still need to take the question elsewhere. */}
-        {COPY_ACTIONS.map((action) => <Button
-          key={action.label}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={action.label}
-          onClick={() => void copyQuestion(action)}
-        >
-          {action.icon}
-        </Button>)}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? toolsConfig.copy.form.expand : toolsConfig.copy.form.collapse}
-          onClick={() => setCollapsed((value) => !value)}
-        >
-          <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
-        </Button>
+          {COPY_ACTIONS.map((action) => (
+            <Button
+              key={action.label}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={action.label}
+              onClick={() => void copyQuestion(action)}
+            >
+              {action.icon}
+            </Button>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? toolsConfig.copy.form.expand : toolsConfig.copy.form.collapse}
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
+          </Button>
+        </div>
       </div>
-    </div>
 
-    {/* `status` is announced politely for a confirmation, `alert` immediately
+      {/* `status` is announced politely for a confirmation, `alert` immediately
         for a failure — a copy the reader believes in and did not happen must
         not wait its turn. */}
-    {copyStatus ? <p
-      role={copyStatus.tone === "failed" ? "alert" : "status"}
-      className={cn("mt-2 text-xs", COPY_TONE_CLASS[copyStatus.tone])}
-    >
-      {copyStatus.text}
-    </p> : null}
+      {copyStatus ? (
+        <p
+          role={copyStatus.tone === "failed" ? "alert" : "status"}
+          className={cn("mt-2 text-xs", COPY_TONE_CLASS[copyStatus.tone])}
+        >
+          {copyStatus.text}
+        </p>
+      ) : null}
 
-    {!collapsed && visible.length > 1 ? <div role="tablist" aria-label={toolsConfig.copy.form.stepsLabel} className="mt-3 flex items-center gap-1.5">
-      {visible.map((item, index) => <StepDot
-        key={item.key}
-        index={index}
-        current={index === current}
-        done={answer[item.key] !== undefined}
-        onJump={() => setStep(index)}
-      />)}
-    </div> : null}
+      {!collapsed && visible.length > 1 ? (
+        <div
+          role="tablist"
+          aria-label={toolsConfig.copy.form.stepsLabel}
+          className="mt-3 flex items-center gap-1.5"
+        >
+          {visible.map((item, index) => (
+            <StepDot
+              key={item.key}
+              index={index}
+              current={index === current}
+              done={answer[item.key] !== undefined}
+              onJump={() => setStep(index)}
+            />
+          ))}
+        </div>
+      ) : null}
 
-    {view.unsupportedReason ? <p role="alert" className="mt-3 text-destructive">{view.unsupportedReason}</p> : null}
+      {view.unsupportedReason ? (
+        <p role="alert" className="mt-3 text-destructive">
+          {view.unsupportedReason}
+        </p>
+      ) : null}
 
-    {!collapsed && !field ? <p className="mt-3 text-sm text-muted-foreground">{toolsConfig.copy.form.nothingToAsk}</p> : null}
+      {!collapsed && !field ? (
+        <p className="mt-3 text-sm text-muted-foreground">{toolsConfig.copy.form.nothingToAsk}</p>
+      ) : null}
 
-    {/*
+      {/*
       The body grows with its content and is only ever capped, never given a
       fixed height. Two options in a tall window want a short card; twelve
       options with a paragraph of text want a tall one. A fixed height is what
@@ -463,57 +570,105 @@ const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
       step dots and the Back/Next/Submit row all stay put while a long list of
       options scrolls underneath them.
     */}
-    {!collapsed && field ? <div
-      ref={bodyRef}
-      role="tabpanel"
-      id={DOCK_TABPANEL_ID}
-      onKeyDown={onKeyDown}
-      // Focusable but out of the tab order: the fallback target when the
-      // field renders no control of its own, so focus lands here rather than
-      // dropping to <body>. `-1` keeps Tab walking into the field controls
-      // exactly as it always did.
-      tabIndex={-1}
-      className={cn(
-        "mt-3 overflow-y-auto overscroll-contain",
-        FORM_DOCK_CSS_MAX_HEIGHT_CLASS,
-        // Token ring rather than the UA default: the body is `tabIndex={-1}`,
-        // so `:focus` here means exactly "the dock took the keyboard".
-        "focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring",
-      )}
-      style={bodyMaxHeight === undefined ? undefined : { maxHeight: bodyMaxHeight }}
-    >
-      <label htmlFor={`${field.key}-custom`} className="block font-medium text-foreground">
-        {v2FormFieldLabel(field)}
-        {field.required ? <span className="text-muted-foreground"> {toolsConfig.copy.form.requiredMarker}</span> : null}
-      </label>
-      {field.description ? <p className="mt-0.5 text-xs text-muted-foreground">{field.description}</p> : null}
-      <div className="mt-2">
-        <V2OptionControl
-          field={field}
-          value={answer[field.key]}
-          onChange={setFieldValue}
+      {!collapsed && field ? (
+        <div
+          ref={bodyRef}
+          role="tabpanel"
+          id={DOCK_TABPANEL_ID}
           onKeyDown={onKeyDown}
-          disabled={busy}
-        />
-      </div>
-    </div> : null}
+          // Focusable but out of the tab order: the fallback target when the
+          // field renders no control of its own, so focus lands here rather than
+          // dropping to <body>. `-1` keeps Tab walking into the field controls
+          // exactly as it always did.
+          tabIndex={-1}
+          className={cn(
+            "mt-3 overflow-y-auto overscroll-contain",
+            FORM_DOCK_CSS_MAX_HEIGHT_CLASS,
+            // Token ring rather than the UA default: the body is `tabIndex={-1}`,
+            // so `:focus` here means exactly "the dock took the keyboard".
+            "focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring",
+          )}
+          style={bodyMaxHeight === undefined ? undefined : { maxHeight: bodyMaxHeight }}
+        >
+          <label htmlFor={`${field.key}-custom`} className="block font-medium text-foreground">
+            {v2FormFieldLabel(field)}
+            {field.required ? (
+              <span className="text-muted-foreground"> {toolsConfig.copy.form.requiredMarker}</span>
+            ) : null}
+          </label>
+          {field.description ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">{field.description}</p>
+          ) : null}
+          <div className="mt-2">
+            {/* M14: the KEY is what makes the control's per-field state
+                PER-FIELD. Without it, React reuses the same instance when the
+                dock advances to the next question, and the state inside it -
+                the "Other" row's open/closed mode and the free-text draft -
+                survives the change: a half-typed custom entry leaks into the
+                next question, and `commitDraft` appends the PREVIOUS
+                question's text to the CURRENT field's answer. Keying by the
+                field's key gives every field its own instance. */}
+            <V2OptionControl
+              key={field.key}
+              field={field}
+              value={answer[field.key]}
+              onChange={setFieldValue}
+              onKeyDown={onKeyDown}
+              disabled={busy}
+            />
+          </div>
+        </div>
+      ) : null}
 
-    {error ? <p role="alert" className="mt-3 text-destructive">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="mt-3 text-destructive">
+          {error}
+        </p>
+      ) : null}
 
-    {!collapsed ? <div className="mt-4 flex items-center gap-2">
-      {/* Advancing or submitting is offered only when there is something to
+      {!collapsed ? (
+        <div className="mt-4 flex items-center gap-2">
+          {/* Advancing or submitting is offered only when there is something to
           answer and the server will accept a reply. A form whose fields are all
           hidden, or one `projectV2Form` refused outright, can only be dismissed
           — offering Submit there is offering an action guaranteed to be
           rejected, with the reason arriving after the click. */}
-      {canAnswer && current > 0 ? <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => setStep(current - 1)}>{toolsConfig.copy.form.back}</Button> : null}
-      {/* A visible way forward on every step but the last. Enter also advances,
+          {canAnswer && current > 0 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => setStep(current - 1)}
+            >
+              {toolsConfig.copy.form.back}
+            </Button>
+          ) : null}
+          {/* A visible way forward on every step but the last. Enter also advances,
           but a reader using the mouse must never be stranded on a step with no
           forward action. Submit appears only once there is nothing left to step
           through, so the two are never both offered for the same step. */}
-      {canAnswer && last ? <Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>{busy ? toolsConfig.copy.form.submitting : toolsConfig.copy.form.submit}</Button> : null}
-      {canAnswer && !last ? <Button type="button" size="sm" disabled={busy} onClick={() => setStep(current + 1)}>{toolsConfig.copy.form.next}</Button> : null}
-      <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void cancel()}>{toolsConfig.copy.form.cancel}</Button>
-    </div> : null}
-  </section>;
+          {canAnswer && last ? (
+            <Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>
+              {busy ? toolsConfig.copy.form.submitting : toolsConfig.copy.form.submit}
+            </Button>
+          ) : null}
+          {canAnswer && !last ? (
+            <Button type="button" size="sm" disabled={busy} onClick={() => setStep(current + 1)}>
+              {toolsConfig.copy.form.next}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => void cancel()}
+          >
+            {toolsConfig.copy.form.cancel}
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
 }

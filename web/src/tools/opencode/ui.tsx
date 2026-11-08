@@ -102,7 +102,10 @@ function ResultBody({ result }: { result: unknown }) {
     return <span className="text-muted-foreground">{toolsConfig.copy.status.noOutput}</span>;
   }
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/90">
+    <pre
+      data-slot="code-payload"
+      className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-foreground/90"
+    >
       {textPreview(body.text)}
     </pre>
   );
@@ -114,7 +117,10 @@ function TextBody({ text }: { text: string }) {
     return <span className="text-muted-foreground">{toolsConfig.copy.status.noOutput}</span>;
   }
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/90">
+    <pre
+      data-slot="code-payload"
+      className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-foreground/90"
+    >
       {textPreview(text)}
     </pre>
   );
@@ -226,7 +232,10 @@ export const OpenCodeGrepToolUI = openCodeView({
 
 /** Preview of a whole-file write, mirroring the native writer's shape. */
 const contentPreview = (args: AnyArgs) => (
-  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+  <pre
+    data-slot="code-payload"
+    className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+  >
     {typeof args.content === "string" ? textPreview(args.content) : ""}
   </pre>
 );
@@ -235,18 +244,34 @@ const contentPreview = (args: AnyArgs) => (
 const editPreview = (args: AnyArgs) => (
   <div className="space-y-1 text-xs">
     <div className="text-muted-foreground">Find:</div>
-    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-      {typeof args.oldText === "string" ? textPreview(args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
+    <pre
+      data-slot="code-payload"
+      className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+    >
+      {typeof args.oldText === "string"
+        ? textPreview(args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars)
+        : ""}
     </pre>
     <div className="text-muted-foreground">Replace with:</div>
-    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-      {typeof args.newText === "string" ? textPreview(args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
+    <pre
+      data-slot="code-payload"
+      className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+    >
+      {typeof args.newText === "string"
+        ? textPreview(args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars)
+        : ""}
     </pre>
   </div>
 );
 
 /** The parsed files of a usable patch, rendered with the card's diff element. */
-function PatchFiles({ files, fallbackName }: { files: readonly CodeDiffFile[]; fallbackName: string }) {
+function PatchFiles({
+  files,
+  fallbackName,
+}: {
+  files: readonly CodeDiffFile[];
+  fallbackName: string;
+}) {
   if (files.length === 0) return null;
   return (
     <div data-slot="opencode-pending-diff" className="w-full space-y-2">
@@ -382,11 +407,8 @@ OpenCodeEditView.displayName = "OpenCodeEditView";
 function useOpenCodeRawParts(): unknown {
   return useAuiState(
     (s) =>
-      (
-        s.message.metadata?.custom as
-          | { opencode?: { parts?: unknown } }
-          | undefined
-      )?.opencode?.parts,
+      (s.message.metadata?.custom as { opencode?: { parts?: unknown } } | undefined)?.opencode
+        ?.parts,
   );
 }
 
@@ -446,9 +468,7 @@ function useOpenCodePendingPatch(callId: string | undefined): string | null {
 }
 
 /** `edit` — OpenCode args are `{ filePath, oldString, newString, replaceAll }`. */
-export const OpenCodeEditToolUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => {
+export const OpenCodeEditToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   const diffPatch = useOpenCodeEditPatch(p.toolCallId);
   const pendingPatch = useOpenCodePendingPatch(p.toolCallId);
   return <OpenCodeEditView {...p} diffPatch={diffPatch} pendingPatch={pendingPatch} />;
@@ -513,9 +533,9 @@ export const OpenCodeWriteView = ({
   );
 };
 
-export const OpenCodeWriteToolUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => <OpenCodeWriteView {...p} pendingPatch={useOpenCodePendingPatch(p.toolCallId)} />;
+export const OpenCodeWriteToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
+  <OpenCodeWriteView {...p} pendingPatch={useOpenCodePendingPatch(p.toolCallId)} />
+);
 OpenCodeWriteToolUI.displayName = "OpenCodeToolUI(write)";
 
 /**
@@ -544,9 +564,7 @@ OpenCodeWriteToolUI.displayName = "OpenCodeToolUI(write)";
  * gate has to show the change under decision, and a hook cannot be added to the
  * factory conditionally because eleven other renderers use it.
  */
-export const OpenCodePatchView = ({
-  ...p
-}: AnyProps) => {
+export const OpenCodePatchView = ({ ...p }: AnyProps) => {
   const args = normalizeOpenCodeArgs("patch", p.args) ?? {};
   const patchText = str(args.patchText);
   // The completed result string is OpenCode's own confirmation; the change is
@@ -567,7 +585,10 @@ export const OpenCodePatchView = ({
         files.length > 0 ? (
           <PatchFiles files={files} fallbackName={paths[0] ?? ""} />
         ) : (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <pre
+            data-slot="code-payload"
+            className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+          >
             {patchText}
           </pre>
         )
@@ -677,9 +698,7 @@ function executeToolCallsFor(args: AnyArgs | undefined): { tool: string; count: 
  * title to `run_command`, which would mislabel an OpenCode `bash` call in the
  * very card the user reads to decide whether to allow it.
  */
-export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => {
+export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   const tool = p.toolName === "shell" ? "shell" : "bash";
   const args = normalizeOpenCodeArgs(tool, p.args) ?? {};
   const command = str(args.command);
@@ -885,9 +904,7 @@ export const OpenCodeWebFetchToolUI = openCodeView({
  * reference material rather than the summary. It renders only when the payload
  * states a provider.
  */
-export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => {
+export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   // Unconditional, as hook order requires. `propStatus.query` is
   // `"streaming" | "complete" | undefined`, and `undefined` is the ordinary
   // "already complete" case — so only an explicit `"streaming"` holds the
@@ -896,23 +913,19 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
   const { propStatus } = useToolArgsStatus<{ query: string }>();
   const args = normalizeOpenCodeArgs("websearch", p.args) ?? {};
   const result = normalizeOpenCodeResult("websearch", p.result);
-  const query = propStatus.query === "streaming" ? toolsConfig.copy.running.searching : str(args.query);
+  const query =
+    propStatus.query === "streaming" ? toolsConfig.copy.running.searching : str(args.query);
   const hits = parseOpenCodeWebSearchHits(result);
   const raw = openCodeResultText(result) ?? "";
   const running = p.status?.type === "running";
   // Which search provider answered. `null` when the payload does not say — the
   // element branch then simply has no caption rather than an empty label, so a
   // search whose provider is unknown reads as "not stated", never as "unknown".
-  const provider = openCodeWebSearchProviderFromParts(
-    useOpenCodeRawParts(),
-    p.toolCallId,
-  );
+  const provider = openCodeWebSearchProviderFromParts(useOpenCodeRawParts(), p.toolCallId);
 
   const gateUndecided = p.approval != null && p.approval.approved === undefined;
   const awaitingContinuation =
-    p.approval?.approved === true &&
-    result === undefined &&
-    p.status?.type !== "running";
+    p.approval?.approved === true && result === undefined && p.status?.type !== "running";
   const failed = p.status?.type === "incomplete" || p.isError === true;
   const denied = denialOf(result, p.approval) != null;
   // `null` means "not the verified document" — see the header comment.
@@ -1034,8 +1047,8 @@ function questionBody(
         // answer holds the option's LABEL, not its value, on a `question` call.
         const chosen = settled
           ? (Array.isArray(q.options) ? q.options : [])
-            .map(asQuestion)
-            .find((option) => option !== undefined && answer.includes(str(option.label)))
+              .map(asQuestion)
+              .find((option) => option !== undefined && answer.includes(str(option.label)))
           : undefined;
         return (
           <div key={key}>
@@ -1046,7 +1059,9 @@ function questionBody(
             {settled ? (
               <div className="mt-1 text-xs">
                 <p>
-                  <span className="text-muted-foreground">{toolsConfig.copy.status.yourAnswer}: </span>
+                  <span className="text-muted-foreground">
+                    {toolsConfig.copy.status.yourAnswer}:{" "}
+                  </span>
                   <span className="font-medium text-foreground">{answer.join(", ")}</span>
                 </p>
                 {chosen?.description ? (
@@ -1055,7 +1070,9 @@ function questionBody(
               </div>
             ) : null}
             {state === "closed" ? (
-              <p className="mt-1 text-xs text-muted-foreground">{toolsConfig.copy.status.questionClosedNoAnswer}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {toolsConfig.copy.status.questionClosedNoAnswer}
+              </p>
             ) : null}
           </div>
         );
@@ -1073,9 +1090,9 @@ function questionBody(
 function questionTitle(args: AnyArgs): string {
   const first = questionList(args)[0];
   return toolsConfig.copy.toolTitle(
-      toolsConfig.copy.tool.question,
-      str(first?.header) || str(first?.question) || toolsConfig.copy.tool.asked,
-    );
+    toolsConfig.copy.tool.question,
+    str(first?.header) || str(first?.question) || toolsConfig.copy.tool.asked,
+  );
 }
 
 /**
