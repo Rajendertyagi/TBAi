@@ -8908,9 +8908,12 @@ the audit's D-1/D-2/D-3 are dispositioned by outcome 7 below, the audit's D-5 by
 outcome 6, and the audit's D-6 by outcome 2. The remaining Revision 5 dispositions
 (D-0, D-4, D-7, D-8 and D-9 through D-13) are recorded in the Revision 5
 specification itself, which is not in this repository; they are not restated here
-and must not be inferred from the audit's numbering. Revision 5 governed those dispositions at approval time; it does not override the later V7 reconciliation documented below.
+and must not be inferred from the audit's numbering. Revision 5 governed those
+ dispositions at approval time; it does not override the later V7 reconciliation
+ documented below.
 
-Seven visible outcomes and architectural dispositions recorded from Revision 5 (with later V7 reconciliations called out):
+Seven visible outcomes and architectural dispositions recorded from Revision 5
+(with later V7 reconciliations called out):
 
 - **1. Interface font-size range — V7 reconciliation:**
   The current contract is 12–24px inclusive, with a 15px default. Every integer

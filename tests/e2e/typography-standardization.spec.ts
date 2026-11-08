@@ -101,7 +101,8 @@ test.describe("page-title convention", () => {
     await page.goto("/#/providers");
     await page.locator('[data-slot="page-title-strip"] button').first().click();
     await expect(page).toHaveURL(/#\/chat/);
-  });
+    },
+  );
 });
 
 test.describe("compact tiers and the 9px floor", () => {
@@ -857,10 +858,12 @@ test.describe("Dialog viewport constraints", () => {
       await expect(dialogContent).not.toBeVisible();
     });
   }
-
+});
 
 test.describe("Typography settings previews", () => {
-  test("Interface and Reading previews follow independent typography settings", async ({ page }) => {
+  test(
+    "Interface and Reading previews follow independent typography settings",
+    async ({ page }) => {
     await page.goto("/#/typography");
     await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible();
 
