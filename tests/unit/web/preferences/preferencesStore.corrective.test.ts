@@ -57,14 +57,89 @@ describe("preferences service corrective invariants", () => {
   });
 });
 
-describe("failed optimistic patch rollback (invariants)", () => {
-  it("patchPreferences increments authoritativeReapplySeq on non-conflict failure after refresh", () => {
+describe("failed optimistic patch rollback (behavioral + invariants)", () => {
+  it("BEHAVIORAL: non-conflict PATCH failure + authoritative refresh with same revision increments authoritativeReapplySeq (store signal for UI reapply)", async () => {
+    // Exercises the actual store path: optimistic patch -> PATCH 500 -> refresh returns same revision -> reapply signal.
+    // This verifies store behavior/signal; usePreferencesSync consumes the signal (covered by invariant below).
+    const { usePreferencesStore } = await import("@web/features/preferences/state/preferencesStore");
+    const realFetch = globalThis.fetch;
+    const snap = (revision = 5) => ({
+      revision,
+      sharedTabs: [],
+      preferences: {
+        appearance: { themeMode: "system", lightTheme: "default", darkTheme: "default", typography: "default" },
+        desktop: {
+          sidebarVisible: true,
+          statusBarVisible: true,
+          chatWidth: "comfortable",
+          sidebarSort: "updated",
+          sectionOrder: [],
+          sectionCollapsed: {},
+          showCompleted: false,
+          spellCheck: true,
+        },
+        welcome: { engine: "direct", quickActionTab: "coding", scopeMode: "simple", folderId: null },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    });
+
+    usePreferencesStore.getState().stop();
+    usePreferencesStore.setState({
+      snapshot: snap(5),
+      hydration: "ready",
+      hydrationError: null,
+      refreshSeq: 0,
+      authoritativeReapplySeq: 0,
+      mutationQueue: Promise.resolve(),
+    } as any);
+
+    try {
+      globalThis.fetch = (async (input: any, init?: any) => {
+        const url = typeof input === "string" ? input : String(input?.url ?? input);
+        const method = init?.method || (input?.method ?? "GET");
+        if (url.includes("/api/preferences") && method === "PATCH") {
+          return new Response(JSON.stringify({ error: "server error" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        // Authoritative refresh returns same revision (unchanged).
+        return new Response(JSON.stringify(snap(5)), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+
+      await expect(
+        usePreferencesStore.getState().patchPreferences({ appearance: { themeMode: "dark" } }),
+      ).rejects.toBeDefined();
+
+      // 4. Reapply signal changes despite unchanged revision.
+      expect(usePreferencesStore.getState().authoritativeReapplySeq).toBe(1);
+      // 5. Authoritative snapshot remains the server's values (same revision).
+      expect(usePreferencesStore.getState().snapshot?.revision).toBe(5);
+      expect((usePreferencesStore.getState().snapshot?.preferences as any)?.appearance?.themeMode).toBe("system");
+    } finally {
+      globalThis.fetch = realFetch;
+      usePreferencesStore.getState().stop();
+      usePreferencesStore.setState({
+        snapshot: null,
+        hydration: "idle",
+        hydrationError: null,
+        refreshSeq: 0,
+        authoritativeReapplySeq: 0,
+        mutationQueue: Promise.resolve(),
+      } as any);
+    }
+  });
+
+  it("INVARIANT (source-level): patchPreferences increments authoritativeReapplySeq on non-conflict failure after refresh", () => {
     const src = read("web/src/features/preferences/state/preferencesStore.ts");
     expect(src).toContain("authoritativeReapplySeq: s.authoritativeReapplySeq + 1");
     expect(src).toContain("Failed optimistic patch: restore authoritative UI even if revision unchanged");
   });
 
-  it("usePreferencesSync force-reapplies on authoritativeReapplySeq change", () => {
+  it("INVARIANT (source-level): usePreferencesSync force-reapplies on authoritativeReapplySeq change", () => {
     const src = read("web/src/features/preferences/state/usePreferencesSync.ts");
     expect(src).toContain("authoritativeReapplySeq");
     expect(src).toContain("forceReapply");

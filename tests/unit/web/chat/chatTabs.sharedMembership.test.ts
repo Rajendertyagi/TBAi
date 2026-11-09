@@ -81,31 +81,45 @@ describe("requestDelayedSharedOpen", () => {
     );
   });
 
-  it("is suppressed when user explicitly closed before commit", async () => {
+  it("in-flight delayed add + explicit single close: explicit close is the only close op (no second auto close/retry)", async () => {
+    // Scenario A (deterministic, deferred): delayed add's openSharedTab is held pending;
+    // user requests explicit close while in flight; open resolves after suppression is set.
+    // The delayed-add suppression branch must NOT issue a second closeSharedTab.
+    let resolveOpen!: (v: any) => void;
+    const openPending = new Promise<any>((r) => {
+      resolveOpen = r;
+    });
     let openCalls = 0;
     let closeCalls = 0;
+    const base = usePreferencesStore.getState().snapshot!;
     usePreferencesStore.setState({
       openSharedTab: async () => {
         openCalls++;
-        // Simulate close happening before commit resolves in this window.
-        useChatTabsStore.setState((s) => ({
-          suppressedDelayedAdds: { ...s.suppressedDelayedAdds, c1: Date.now() },
-        }));
-        return usePreferencesStore.getState().snapshot;
+        return openPending;
       },
       closeSharedTab: async () => {
         closeCalls++;
-        const snap = usePreferencesStore.getState().snapshot!;
-        return { ok: true, snapshot: snap };
+        return { ok: true, snapshot: base };
       },
-      refresh: async () => usePreferencesStore.getState().snapshot,
+      refresh: async () => base,
     } as any);
 
+    // 1. Start delayed membership addition (will await openSharedTab).
     useChatTabsStore.getState().requestDelayedSharedOpen("c1", "chat");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openCalls).toBe(1);
+
+    // 2. Request explicit single close while add is in flight (sets suppression, queues close).
+    const closeP = useChatTabsStore.getState().requestSharedClose("c1");
+    await closeP;
+    expect(closeCalls).toBe(1); // explicit close only
+
+    // 3. Resolve the delayed add's open — suppression branch must not issue another close.
+    resolveOpen({ ...base, revision: 2, sharedTabs: [{ kind: "chat", ref: "c1" }] });
     await new Promise((r) => setTimeout(r, 20));
 
     expect(openCalls).toBe(1);
-    expect(closeCalls).toBe(1); // preserves explicit close
+    expect(closeCalls).toBe(1); // no second automatic close or retry
   });
 });
 
@@ -204,5 +218,96 @@ describe("batch close suppresses delayed membership additions (race)", () => {
     useChatTabsStore.getState().requestDelayedSharedOpen("c", "chat"); // removed (right of b)
     await new Promise((r) => setTimeout(r, 20));
     expect(opened).toEqual([]);
+  });
+
+  it("in-flight delayed add + batch close conflict/error: no individual close auto-issued, batch remains failed (Scenario B)", async () => {
+    // Deterministic, deferred: hold delayed add's openSharedTab pending; request Close All;
+    // batch returns conflict; resolve delayed add. Must NOT issue individual closeSharedTab.
+    usePreferencesStore.setState({
+      snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 1),
+    } as any);
+
+    let resolveOpen!: (v: any) => void;
+    const openPending = new Promise<any>((r) => {
+      resolveOpen = r;
+    });
+    let openCalls = 0;
+    let individualCloseCalls = 0;
+    let batchCalls = 0;
+    const base = usePreferencesStore.getState().snapshot!;
+
+    usePreferencesStore.setState({
+      openSharedTab: async () => {
+        openCalls++;
+        return openPending;
+      },
+      closeSharedTab: async () => {
+        individualCloseCalls++;
+        return { ok: true, snapshot: base };
+      },
+      closeSharedTabsBatch: async () => {
+        batchCalls++;
+        return {
+          ok: false,
+          reason: "conflict",
+          snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 5),
+        };
+      },
+      refresh: async () => usePreferencesStore.getState().snapshot,
+    } as any);
+
+    // 1. Start delayed membership addition and hold it pending.
+    useChatTabsStore.getState().requestDelayedSharedOpen("a", "chat");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openCalls).toBe(1);
+
+    // 2. Request Close All while add is in flight (sets suppression for removed tabs).
+    const batchResultP = useChatTabsStore.getState().requestSharedCloseBatch({ mode: "all" });
+    await batchResultP;
+    expect(batchCalls).toBe(1);
+    expect(individualCloseCalls).toBe(0);
+
+    // 3. Resolve the delayed addition — suppression branch must not auto-issue individual close.
+    resolveOpen(snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 2));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(batchCalls).toBe(1); // batch was the explicit operation
+    expect(individualCloseCalls).toBe(0); // no individual close auto-issued
+    // Failed batch remains failed (no silent outcome change); local state preserved by chatTabs handler.
+  });
+
+  it("in-flight delayed add + batch close server error: no individual close auto-issued (Scenario B variant)", async () => {
+    usePreferencesStore.setState({
+      snapshot: snapWithTabs([{ kind: "chat", ref: "a" }], 1),
+    } as any);
+
+    let resolveOpen!: (v: any) => void;
+    const openPending = new Promise<any>((r) => {
+      resolveOpen = r;
+    });
+    let individualCloseCalls = 0;
+    let batchCalls = 0;
+
+    usePreferencesStore.setState({
+      openSharedTab: async () => openPending,
+      closeSharedTab: async () => {
+        individualCloseCalls++;
+        return { ok: true, snapshot: snapWithTabs([], 9) };
+      },
+      closeSharedTabsBatch: async () => {
+        batchCalls++;
+        return { ok: false, reason: "error", error: "server error", snapshot: snapWithTabs([{ kind: "chat", ref: "a" }], 1) };
+      },
+      refresh: async () => usePreferencesStore.getState().snapshot,
+    } as any);
+
+    useChatTabsStore.getState().requestDelayedSharedOpen("a", "chat");
+    await new Promise((r) => setTimeout(r, 0));
+    await useChatTabsStore.getState().requestSharedCloseBatch({ mode: "all" });
+    resolveOpen(snapWithTabs([{ kind: "chat", ref: "a" }], 2));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(batchCalls).toBe(1);
+    expect(individualCloseCalls).toBe(0);
   });
 });

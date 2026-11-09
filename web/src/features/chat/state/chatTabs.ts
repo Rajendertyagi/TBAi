@@ -350,12 +350,10 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
       try {
         await usePreferencesStore.getState().openSharedTab(conversationId, kind);
         if (isSuppressed(get(), conversationId)) {
-          // User explicitly closed before/around commit; preserve close.
-          try {
-            await usePreferencesStore.getState().closeSharedTab(conversationId);
-          } catch {
-            await usePreferencesStore.getState().refresh();
-          }
+          // Explicit close (single/batch) already queued its close operation and set
+          // suppression. Do NOT issue a second close or refresh-as-retry: that would
+          // queue another serialized close, can turn a failed batch into a partial
+          // individual close, and violates no-automatic-retry on explicit close failure.
           return;
         }
         set((s) => {
