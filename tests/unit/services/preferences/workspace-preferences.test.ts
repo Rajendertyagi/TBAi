@@ -137,8 +137,56 @@ describe("workspace preferences service (canonical)", () => {
     expect(() => openSharedTab({ baseRevision: 1, kind: "chat", conversationId: "c1" })).toThrow(
       WorkspacePreferencesCorruptError,
     );
+    expect(() => closeSharedTab({ baseRevision: 1, conversationId: "c1" })).toThrow(
+      WorkspacePreferencesCorruptError,
+    );
+    expect(() =>
+      closeSharedTabsBatch({ baseRevision: 1, mode: "all" }),
+    ).toThrow(WorkspacePreferencesCorruptError);
+    expect(() => reorderSharedTab({ baseRevision: 1, conversationId: "c1", toIndex: 0 })).toThrow(
+      WorkspacePreferencesCorruptError,
+    );
     const rawAfter = readRawSnapshotRow();
     expect(rawAfter?.value).toBe(rawBefore?.value);
+  });
+
+  it("rejects explicit null required snapshot/group objects as corruption and preserves row", () => {
+    const cases: unknown[] = [
+      { revision: 1, sharedTabs: [], preferences: null },
+      { revision: 1, sharedTabs: [], preferences: { appearance: null } },
+      { revision: 1, sharedTabs: [], preferences: { desktop: null } },
+      { revision: 1, sharedTabs: [], preferences: { welcome: null } },
+      { revision: 1, sharedTabs: [], preferences: { navigation: null } },
+    ];
+    for (const value of cases) {
+      writeRawSnapshot(value);
+      const rawBefore = readRawSnapshotRow();
+      expect(() => getWorkspacePreferences()).toThrow(WorkspacePreferencesCorruptError);
+      expect(() =>
+        patchWorkspacePreferences({ baseRevision: 1, preferences: { appearance: { themeMode: "dark" } } }),
+      ).toThrow(WorkspacePreferencesCorruptError);
+      expect(readRawSnapshotRow()?.value).toBe(rawBefore?.value);
+      clearSnapshot();
+    }
+  });
+
+  it("missing fields use defaults; nullable leaves and sectionOrder:null remain valid", () => {
+    writeRawSnapshot({
+      revision: 3,
+      sharedTabs: [],
+      preferences: {
+        appearance: {},
+        desktop: { sectionOrder: null },
+        welcome: { folderId: null },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    });
+    const snapshot = getWorkspacePreferences();
+    expect(snapshot.revision).toBe(3);
+    expect(snapshot.preferences.appearance.themeMode).toBe("system");
+    expect(snapshot.preferences.desktop.sectionOrder).toEqual(["folders", "chats"]);
+    expect(snapshot.preferences.welcome.folderId).toBeNull();
+    expect(snapshot.preferences.navigation.selectedFolderId).toBeNull();
   });
 
   it("ignores obsolete legacy fields on read without restoring behavior", () => {
@@ -154,6 +202,23 @@ describe("workspace preferences service (canonical)", () => {
     expect(snapshot.sharedTabs).toEqual([{ ref: "c1", kind: "chat" }]);
     expect((snapshot as any).sharedActiveConversationId).toBeUndefined();
     expect((snapshot as any).migration).toBeUndefined();
+  });
+
+  it("normalizes legacy WIP sharedTabs conversationId to canonical ref on read", () => {
+    writeRawSnapshot({
+      revision: 29,
+      sharedTabs: [
+        { kind: "chat", conversationId: "conv-legacy-1" },
+        { kind: "agent", conversationId: "conv-legacy-2" },
+      ],
+      preferences: defaultSnapshot().preferences,
+    });
+    const snapshot = getWorkspacePreferences();
+    expect(snapshot.revision).toBe(29);
+    expect(snapshot.sharedTabs).toEqual([
+      { kind: "chat", ref: "conv-legacy-1" },
+      { kind: "agent", ref: "conv-legacy-2" },
+    ]);
   });
 
   it("does not affect existing app_settings consumers' keys", () => {
@@ -302,6 +367,42 @@ describe("workspace preferences shared tabs (CAS, canonical)", () => {
       expect(events[events.length - 1]?.originWindowId).toBe("win-1");
     } finally {
       unsub();
+    }
+  });
+
+  it("does not emit events for stale conflicts or no-op mutations", () => {
+    openSharedTab({ baseRevision: 0, kind: "chat", conversationId: "c1" });
+    const events: Array<{ revision: number }> = [];
+    const unsub = subscribePreferencesChanges((e) => events.push({ revision: e.revision }));
+    try {
+      const conflict = closeSharedTab({ baseRevision: 0, conversationId: "c1" });
+      expect(conflict.conflict).toBe(true);
+      const noop = openSharedTab({ baseRevision: 1, kind: "chat", conversationId: "c1" });
+      expect(noop.conflict).toBe(false);
+      if (!noop.conflict) expect(noop.snapshot.revision).toBe(1);
+      const noopClose = closeSharedTab({ baseRevision: 1, conversationId: "missing" });
+      expect(noopClose.conflict).toBe(false);
+      if (!noopClose.conflict) expect(noopClose.snapshot.revision).toBe(1);
+      expect(events).toEqual([]);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("subscriber exceptions do not break successful mutation results", () => {
+    const events: number[] = [];
+    const unsubThrow = subscribePreferencesChanges(() => {
+      throw new Error("boom");
+    });
+    const unsubOk = subscribePreferencesChanges((e) => events.push(e.revision));
+    try {
+      const result = openSharedTab({ baseRevision: 0, kind: "chat", conversationId: "c1" });
+      expect(result.conflict).toBe(false);
+      if (!result.conflict) expect(result.snapshot.revision).toBe(1);
+      expect(events).toEqual([1]);
+    } finally {
+      unsubThrow();
+      unsubOk();
     }
   });
 });

@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useTheme } from "@/components/theme-provider";
 import { suppressAppearancePatch } from "@/features/appearance/appearance-patch-guard";
-import { applyTypographyToDom, migrateTypography } from "@/features/appearance/typography";
+import {
+  applyTypographyToDom,
+  DEFAULT_TYPOGRAPHY,
+  migrateTypography,
+} from "@/features/appearance/typography";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 import { isChatWidth } from "@/config/chat";
 import { normalizeSectionOrderLenient } from "@/features/desktop/state/sidebarSections";
@@ -14,6 +18,8 @@ import { usePreferencesStore } from "./preferencesStore";
 /**
  * Passive write-through pre-paint cache for appearance keys only (mirrors
  * authoritative SQLite state). Never read as authority/migration source.
+ * When SQLite says "system", writes "system" (not resolved). When typography
+ * is default, removes stale cache key.
  */
 function writeAppearancePrepaintCache(input: {
   themeMode: "light" | "dark" | "system";
@@ -23,12 +29,13 @@ function writeAppearancePrepaintCache(input: {
 }): void {
   if (typeof window === "undefined") return;
   try {
-    const mode = input.themeMode === "light" ? "light" : "dark";
-    window.localStorage.setItem("tbai-theme", mode);
+    window.localStorage.setItem("tbai-theme", input.themeMode);
     window.localStorage.setItem("tbai-theme-light", input.lightTheme);
     window.localStorage.setItem("tbai-theme-dark", input.darkTheme);
     if (input.typography && input.typography !== "default") {
       window.localStorage.setItem("tbai-typography", input.typography);
+    } else {
+      window.localStorage.removeItem("tbai-typography");
     }
   } catch {
     /* storage unavailable */
@@ -63,10 +70,16 @@ export function usePreferencesSync(): void {
         suppressAppearancePatch();
         applyTypographyToDom(config);
       } catch {
-        /* keep current typography */
+        // Invalid authoritative typography: apply safe canonical default (no DB migration).
+        suppressAppearancePatch();
+        applyTypographyToDom(DEFAULT_TYPOGRAPHY);
       }
+    } else {
+      // Authoritative default: replace any stale cached/custom typography.
+      suppressAppearancePatch();
+      applyTypographyToDom(DEFAULT_TYPOGRAPHY);
     }
-    if (a.themeMode === "light" || a.themeMode === "dark") {
+    if (a.themeMode === "light" || a.themeMode === "dark" || a.themeMode === "system") {
       if (theme !== a.themeMode) {
         suppressAppearancePatch();
         setTheme(a.themeMode);

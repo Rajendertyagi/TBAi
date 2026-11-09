@@ -42,3 +42,8 @@ export interface WorkspacePreferencesSnapshot {
 }
 
 export type PreferencesHydrationStatus = "idle" | "loading" | "ready" | "error";
+
+export type PreferencesCloseResult =
+  | { ok: true; snapshot: WorkspacePreferencesSnapshot }
+  | { ok: false; reason: "conflict"; snapshot: WorkspacePreferencesSnapshot }
+  | { ok: false; reason: "error"; error: string; snapshot?: WorkspacePreferencesSnapshot };

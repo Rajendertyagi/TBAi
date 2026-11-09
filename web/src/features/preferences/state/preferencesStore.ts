@@ -11,7 +11,12 @@ import {
   PreferencesConflictError,
   reorderSharedTab as apiReorderSharedTab,
 } from "../api/preferences";
-import type { PreferencesHydrationStatus, SharedTabKind, WorkspacePreferencesSnapshot } from "./types";
+import type {
+  PreferencesCloseResult,
+  PreferencesHydrationStatus,
+  SharedTabKind,
+  WorkspacePreferencesSnapshot,
+} from "./types";
 
 interface PreferencesState {
   snapshot: WorkspacePreferencesSnapshot | null;
@@ -24,30 +29,29 @@ interface PreferencesState {
   start: () => void;
   stop: () => void;
   refresh: () => Promise<WorkspacePreferencesSnapshot | null>;
+  /** Waits for authoritative hydration; throws on hydration failure with no snapshot. */
+  waitForHydratedSnapshot: () => Promise<WorkspacePreferencesSnapshot>;
   applySnapshot: (snapshot: WorkspacePreferencesSnapshot) => void;
-  patchPreferences: (
-    preferences: Record<string, unknown>,
-  ) => Promise<WorkspacePreferencesSnapshot | null>;
+  patchPreferences: (preferences: Record<string, unknown>) => Promise<WorkspacePreferencesSnapshot>;
   openSharedTab: (
     conversationId: string,
     kind: SharedTabKind,
-  ) => Promise<WorkspacePreferencesSnapshot | null>;
-  closeSharedTab: (conversationId: string) => Promise<WorkspacePreferencesSnapshot | null>;
+  ) => Promise<WorkspacePreferencesSnapshot>;
+  closeSharedTab: (conversationId: string) => Promise<PreferencesCloseResult>;
   closeSharedTabsBatch: (input: {
     mode: "others" | "right" | "all";
     anchorConversationId?: string;
-  }) => Promise<WorkspacePreferencesSnapshot | null>;
-  reorderSharedTab: (
-    conversationId: string,
-    toIndex: number,
-  ) => Promise<WorkspacePreferencesSnapshot | null>;
+  }) => Promise<PreferencesCloseResult>;
+  reorderSharedTab: (conversationId: string, toIndex: number) => Promise<WorkspacePreferencesSnapshot>;
 }
 
 let eventSource: EventSource | null = null;
 let started = false;
+let hasConnectedSseOnce = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelayMs = 1000;
+let hydrationPromise: Promise<WorkspacePreferencesSnapshot | null> | null = null;
 
 function clearRefreshTimer(): void {
   if (refreshTimer !== null) {
@@ -71,6 +75,10 @@ function scheduleRefresh(): void {
   }, 50);
 }
 
+function onVisibilityChange(): void {
+  if (typeof document !== "undefined" && document.visibilityState === "visible") scheduleRefresh();
+}
+
 function connectSse(): void {
   if (eventSource) return;
   try {
@@ -79,6 +87,14 @@ function connectSse(): void {
     eventSource = source;
     source.onopen = () => {
       reconnectDelayMs = 1000;
+      // Authoritative refresh after (re)connection; coalesced with other refreshes.
+      if (hasConnectedSseOnce) {
+        scheduleRefresh();
+      } else {
+        hasConnectedSseOnce = true;
+        // Initial connection: refresh path is fine (coalesced with start() refresh).
+        scheduleRefresh();
+      }
     };
     source.addEventListener("preferences.changed", (e) => {
       try {
@@ -88,8 +104,15 @@ function connectSse(): void {
         };
         const known = usePreferencesStore.getState().snapshot?.revision ?? -1;
         if (typeof data.revision === "number" && data.revision <= known) return;
-        // Originating window can skip redundant refetch if it already applied the mutation response.
-        if (data.originWindowId && data.originWindowId === originWindowId) return;
+        // Skip self-origin only when local snapshot already has this revision or newer.
+        if (
+          data.originWindowId &&
+          data.originWindowId === originWindowId &&
+          typeof data.revision === "number" &&
+          known >= data.revision
+        ) {
+          return;
+        }
       } catch {
         /* refresh anyway */
       }
@@ -119,6 +142,7 @@ function disconnectSse(): void {
   clearRefreshTimer();
   clearReconnectTimer();
   reconnectDelayMs = 1000;
+  hasConnectedSseOnce = false;
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -150,17 +174,17 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     connectSse();
     if (typeof window !== "undefined") {
       window.addEventListener("focus", scheduleRefresh);
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") scheduleRefresh();
-      });
+      document.addEventListener("visibilitychange", onVisibilityChange);
     }
   },
 
   stop: () => {
     started = false;
     disconnectSse();
+    hydrationPromise = null;
     if (typeof window !== "undefined") {
       window.removeEventListener("focus", scheduleRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     }
   },
 
@@ -171,22 +195,46 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
       hydration: s.snapshot ? s.hydration : "loading",
       hydrationError: null,
     }));
-    try {
-      const snapshot = await fetchPreferences();
-      if (get().refreshSeq !== seq) return null;
-      const known = get().snapshot?.revision ?? -1;
-      if (snapshot.revision < known) return get().snapshot;
-      set({ snapshot, hydration: "ready", hydrationError: null });
-      return snapshot;
-    } catch (err) {
-      if (get().refreshSeq !== seq) return null;
-      const message = err instanceof Error ? err.message : "Failed to load preferences";
-      set((s) => ({
-        hydration: s.snapshot ? "ready" : "error",
-        hydrationError: s.snapshot ? s.hydrationError : message,
-      }));
-      return null;
+    let promise!: Promise<WorkspacePreferencesSnapshot | null>;
+    promise = (async () => {
+      try {
+        const snapshot = await fetchPreferences();
+        if (get().refreshSeq !== seq) return null;
+        const known = get().snapshot?.revision ?? -1;
+        if (snapshot.revision < known) return get().snapshot;
+        set({ snapshot, hydration: "ready", hydrationError: null });
+        return snapshot;
+      } catch (err) {
+        if (get().refreshSeq !== seq) return null;
+        const message = err instanceof Error ? err.message : "Failed to load preferences";
+        set((s) => ({
+          hydration: s.snapshot ? "ready" : "error",
+          hydrationError: s.snapshot ? s.hydrationError : message,
+        }));
+        return null;
+      } finally {
+        if (hydrationPromise === promise) hydrationPromise = null;
+      }
+    })();
+    hydrationPromise = promise;
+    return promise;
+  },
+
+  waitForHydratedSnapshot: async () => {
+    const existing = get().snapshot;
+    if (existing) return existing;
+    if (hydrationPromise) {
+      const snap = await hydrationPromise;
+      if (snap) return snap;
     }
+    if (get().hydration === "error" && !get().snapshot) {
+      throw new Error(get().hydrationError ?? "Preferences hydration failed");
+    }
+    const snap = await get().refresh();
+    if (snap) return snap;
+    const after = get().snapshot;
+    if (after) return after;
+    throw new Error(get().hydrationError ?? "Preferences hydration failed");
   },
 
   applySnapshot: (snapshot) => {
@@ -197,8 +245,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   patchPreferences: (preferences) =>
     runSerialized(async () => {
-      const base = get().snapshot;
-      if (!base) return null;
+      const base = await get().waitForHydratedSnapshot();
       try {
         const snapshot = await apiPatchPreferences({ baseRevision: base.revision, preferences });
         get().applySnapshot(snapshot);
@@ -206,17 +253,16 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
       } catch (err) {
         if (err instanceof PreferencesConflictError) {
           get().applySnapshot(err.snapshot);
-        } else {
-          await get().refresh();
+          throw err;
         }
-        return null;
+        await get().refresh();
+        throw err;
       }
     }),
 
   openSharedTab: (conversationId, kind) =>
     runSerialized(async () => {
-      const base = get().snapshot;
-      if (!base) return null;
+      const base = await get().waitForHydratedSnapshot();
       try {
         const snapshot = await apiOpenSharedTab({ baseRevision: base.revision, conversationId, kind });
         get().applySnapshot(snapshot);
@@ -233,44 +279,51 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   closeSharedTab: (conversationId) =>
     runSerialized(async () => {
-      const base = get().snapshot;
-      if (!base) return null;
+      const base = await get().waitForHydratedSnapshot();
       try {
         const snapshot = await apiCloseSharedTab({ baseRevision: base.revision, conversationId });
         get().applySnapshot(snapshot);
-        return snapshot;
+        return { ok: true, snapshot };
       } catch (err) {
         if (err instanceof PreferencesConflictError) {
           get().applySnapshot(err.snapshot);
-        } else {
-          await get().refresh();
+          return { ok: false, reason: "conflict", snapshot: err.snapshot };
         }
-        return null;
+        await get().refresh();
+        return {
+          ok: false,
+          reason: "error",
+          error: err instanceof Error ? err.message : "Failed to close shared tab",
+          snapshot: get().snapshot ?? undefined,
+        };
       }
     }),
 
   closeSharedTabsBatch: (input) =>
     runSerialized(async () => {
-      const base = get().snapshot;
-      if (!base) return null;
+      const base = await get().waitForHydratedSnapshot();
       try {
         const snapshot = await apiCloseSharedTabsBatch({ baseRevision: base.revision, ...input });
         get().applySnapshot(snapshot);
-        return snapshot;
+        return { ok: true, snapshot };
       } catch (err) {
         if (err instanceof PreferencesConflictError) {
           get().applySnapshot(err.snapshot);
-        } else {
-          await get().refresh();
+          return { ok: false, reason: "conflict", snapshot: err.snapshot };
         }
-        return null;
+        await get().refresh();
+        return {
+          ok: false,
+          reason: "error",
+          error: err instanceof Error ? err.message : "Failed to close shared tabs",
+          snapshot: get().snapshot ?? undefined,
+        };
       }
     }),
 
   reorderSharedTab: (conversationId, toIndex) =>
     runSerialized(async () => {
-      const base = get().snapshot;
-      if (!base) return null;
+      const base = await get().waitForHydratedSnapshot();
       try {
         const snapshot = await apiReorderSharedTab({
           baseRevision: base.revision,
@@ -282,10 +335,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
       } catch (err) {
         if (err instanceof PreferencesConflictError) {
           get().applySnapshot(err.snapshot);
-        } else {
-          await get().refresh();
+          throw err;
         }
-        return null;
+        await get().refresh();
+        throw err;
       }
     }),
 }));

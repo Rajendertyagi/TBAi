@@ -77,14 +77,26 @@ export function getWorkspacePreferences(): WorkspacePreferencesSnapshot {
   return read.snapshot;
 }
 
-function commitSnapshot(
-  next: WorkspacePreferencesSnapshot,
-  changedKeys?: string[],
-  originWindowId?: string,
-): PreferencesPatchResult {
+function commitSnapshot(next: WorkspacePreferencesSnapshot): PreferencesPatchResult {
   writeSnapshotRow(next);
-  emitPreferencesChange({ revision: next.revision, changedKeys, originWindowId, ts: Date.now() });
   return { conflict: false, snapshot: next };
+}
+
+function emitAfterCommit(
+  result: PreferencesPatchResult,
+  changedKeys: string[] | undefined,
+  originWindowId: string | undefined,
+  previousRevision: number,
+): PreferencesPatchResult {
+  if (!result.conflict && result.snapshot.revision > previousRevision) {
+    emitPreferencesChange({
+      revision: result.snapshot.revision,
+      changedKeys,
+      originWindowId,
+      ts: Date.now(),
+    });
+  }
+  return result;
 }
 
 function sameSharedTabs(a: SharedTabRef[], b: SharedTabRef[]): boolean {
@@ -135,10 +147,11 @@ export function patchWorkspacePreferences(input: {
       sharedTabs: current.sharedTabs,
       preferences: merged,
     };
-    return commitSnapshot(next, ["preferences"], input.originWindowId);
+    return commitSnapshot(next);
   });
 
-  return tx(input.baseRevision);
+  const result = tx(input.baseRevision);
+  return emitAfterCommit(result, ["preferences"], input.originWindowId, input.baseRevision);
 }
 
 /** Adds a real conversation to shared tab membership (idempotent). No shared active pointer. */
@@ -163,9 +176,10 @@ export function openSharedTab(input: {
       sharedTabs,
       preferences: current.preferences,
     };
-    return commitSnapshot(next, ["sharedTabs"], input.originWindowId);
+    return commitSnapshot(next);
   });
-  return tx(input.baseRevision);
+  const result = tx(input.baseRevision);
+  return emitAfterCommit(result, ["sharedTabs"], input.originWindowId, input.baseRevision);
 }
 
 /** Removes a real conversation from shared tab membership (idempotent). Never deletes conversation data. */
@@ -190,9 +204,10 @@ export function closeSharedTab(input: {
       sharedTabs,
       preferences: current.preferences,
     };
-    return commitSnapshot(next, ["sharedTabs"], input.originWindowId);
+    return commitSnapshot(next);
   });
-  return tx(input.baseRevision);
+  const result = tx(input.baseRevision);
+  return emitAfterCommit(result, ["sharedTabs"], input.originWindowId, input.baseRevision);
 }
 
 /** Atomically applies a batch close mutation to shared tab membership (server-computed). */
@@ -232,9 +247,10 @@ export function closeSharedTabsBatch(input: {
       sharedTabs,
       preferences: current.preferences,
     };
-    return commitSnapshot(next, ["sharedTabs"], input.originWindowId);
+    return commitSnapshot(next);
   });
-  return tx(input.baseRevision);
+  const result = tx(input.baseRevision);
+  return emitAfterCommit(result, ["sharedTabs"], input.originWindowId, input.baseRevision);
 }
 
 /** Reorders a shared tab by conversation id (CAS, server-computed). */
@@ -264,9 +280,10 @@ export function reorderSharedTab(input: {
       sharedTabs,
       preferences: current.preferences,
     };
-    return commitSnapshot(next, ["sharedTabs"], input.originWindowId);
+    return commitSnapshot(next);
   });
-  return tx(input.baseRevision);
+  const result = tx(input.baseRevision);
+  return emitAfterCommit(result, ["sharedTabs"], input.originWindowId, input.baseRevision);
 }
 
 export const workspacePreferencesService = {

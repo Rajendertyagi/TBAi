@@ -95,7 +95,8 @@ describe("requestDelayedSharedOpen", () => {
       },
       closeSharedTab: async () => {
         closeCalls++;
-        return usePreferencesStore.getState().snapshot;
+        const snap = usePreferencesStore.getState().snapshot!;
+        return { ok: true, snapshot: snap };
       },
       refresh: async () => usePreferencesStore.getState().snapshot,
     } as any);

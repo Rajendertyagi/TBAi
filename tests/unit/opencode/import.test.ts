@@ -576,5 +576,53 @@ describe("OpenCode session import service", () => {
       const data = (await res.json()) as any;
       expect(data.error).toContain("sessionId and sourceRef are required");
     });
+
+    it("route-level: discovers external fixture session and imports via HTTP with identity/metadata and no duplicated history", async () => {
+      const { default: app } = await import("@/routes");
+      const externalSessionId = "ses_route_external_fixture";
+      const externalDir = "/external/route-fixture";
+      fakeSessions = [
+        {
+          id: externalSessionId,
+          title: "Route External Fixture",
+          agent: "build",
+          model: { id: "anthropic/claude-sonnet-4" },
+          location: { directory: externalDir },
+          time: { created: 1700000000000, updated: 1700000005000 },
+        },
+      ];
+      fakeMessages.set(externalSessionId, [
+        { id: "oc_msg_route_1", type: "user", text: "External history stays in OpenCode." },
+      ]);
+
+      const listRes = await app.request("http://localhost/api/opencode/importable");
+      expect(listRes.status).toBe(200);
+      const listData = (await listRes.json()) as any;
+      const hit = listData.sessions.find((s: any) => s.sessionId === externalSessionId);
+      expect(hit).toBeDefined();
+      expect(hit.directory).toBe(externalDir);
+      expect(hit.sourceRef).toBeDefined();
+
+      const importRes = await app.request("http://localhost/api/opencode/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: externalSessionId, sourceRef: hit.sourceRef }),
+      });
+      expect(importRes.status).toBe(201);
+      const importData = (await importRes.json()) as any;
+      expect(importData.conversationId).toBeDefined();
+
+      const conv = await conversationService.get(importData.conversationId);
+      expect(conv?.engine).toBe("opencode");
+      expect(conv?.opencodeSessionId).toBe(externalSessionId);
+      expect(conv?.opencodeDirectory).toBe(externalDir);
+      expect(conv?.opencodeImported).toBe(true);
+      expect(conv?.opencodeAgent).toBe("build");
+      expect(conv?.opencodeModel).toBe("anthropic/claude-sonnet-4");
+      expect(conv?.title).toBe("Route External Fixture");
+
+      const storedMessages = await messageService.listThreadMessages(importData.conversationId);
+      expect(storedMessages).toEqual([]);
+    });
   });
 });

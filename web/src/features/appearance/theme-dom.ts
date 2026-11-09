@@ -21,19 +21,27 @@ import type { ThemeMode } from "./theme-storage";
 /** Attribute the generated blocks are keyed on. */
 export const THEME_ATTRIBUTE = "data-tbai-theme";
 
+export type EffectiveThemeMode = "light" | "dark";
+
+export function resolveEffectiveThemeMode(mode: ThemeMode): EffectiveThemeMode {
+  if (mode === "light" || mode === "dark") return mode;
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "dark";
+}
+
 /**
- * Apply a mode + palette pair to the document.
- *
- * `themeId` may be any known family id; the built-in `classic` has no generated
- * block, so applying it means *removing* the attribute, which lets the
- * stylesheet's own `:root`/`.dark` values take over again.
+ * Apply a logical mode + palette pair to the document.
+ * When mode is "system", resolves via prefers-color-scheme for rendering.
  */
 export function applyThemeToDom(mode: ThemeMode, themeId: string): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
+  const effective = resolveEffectiveThemeMode(mode);
 
   root.classList.remove("light", "dark");
-  root.classList.add(mode);
+  root.classList.add(effective);
 
   const theme = getTheme(themeId);
   if (theme?.builtin) {
@@ -45,7 +53,7 @@ export function applyThemeToDom(mode: ThemeMode, themeId: string): void {
   // Browser chrome (address bar on mobile, title bar on desktop) should match the
   // app background rather than the hardcoded value in index.html.
   if (theme) {
-    const background = resolveThemeVars(theme, mode)["--background"];
+    const background = resolveThemeVars(theme, effective)["--background"];
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta && background) meta.setAttribute("content", background);
   }

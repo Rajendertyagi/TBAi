@@ -75,7 +75,7 @@ function reset() {
         sharedTabs: snap.sharedTabs.filter((t) => t.ref !== conversationId),
       };
       usePreferencesStore.setState({ snapshot: next });
-      return next;
+      return { ok: true, snapshot: next };
     },
   } as any);
 }

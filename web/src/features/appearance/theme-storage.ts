@@ -19,13 +19,13 @@
 
 import { DEFAULT_THEME_ID, isThemeId } from "./theme-data";
 
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "light" | "dark" | "system";
 
 const MODE_KEY = "tbai-theme";
 const LIGHT_KEY = "tbai-theme-light";
 const DARK_KEY = "tbai-theme-dark";
 
-export const DEFAULT_MODE: ThemeMode = "dark";
+export const DEFAULT_MODE: ThemeMode = "system";
 
 function read(key: string): string | null {
   try {
@@ -45,7 +45,7 @@ function write(key: string, value: string): void {
 
 export function readMode(): ThemeMode {
   const stored = read(MODE_KEY);
-  return stored === "light" || stored === "dark" ? stored : DEFAULT_MODE;
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : DEFAULT_MODE;
 }
 
 export function writeMode(mode: ThemeMode): void {

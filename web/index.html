@@ -10,18 +10,26 @@
     <script>
       // Pre-apply the saved theme before first paint (no flash).
       //
-      // This mirrors ThemeProvider exactly, and deliberately carries NO colour
+      // This mirrors ThemeProvider/theme-dom exactly, and deliberately carries NO colour
       // logic: the palettes live in `src/styles/themes.css`, so all this has to do
       // is set the mode class and the theme attribute and let the (render-blocking)
       // stylesheet do the rest. That is what keeps this bootstrap from drifting away
       // from the provider.
       //
-      // Keys: tbai-theme (mode), tbai-theme-light / tbai-theme-dark (palette per
-      // mode). An unknown or missing palette id simply matches no generated block,
-      // which leaves the stylesheet's own colours — TBAi's existing look — standing.
+      // Keys: tbai-theme (logical mode: light|dark|system), tbai-theme-light /
+      // tbai-theme-dark (palette per mode). "system" resolves via prefers-color-scheme
+      // for rendering but the cached logical value remains "system" (SQLite authoritative).
+      // An unknown or missing palette id simply matches no generated block, which leaves
+      // the stylesheet's own colours — TBAi's existing look — standing.
       try {
         var t = localStorage.getItem("tbai-theme");
-        var theme = t === "light" || t === "dark" ? t : "dark";
+        var logical = t === "light" || t === "dark" || t === "system" ? t : "system";
+        var theme =
+          logical === "system"
+            ? window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : logical;
         var root = document.documentElement;
         root.classList.remove("light", "dark");
         root.classList.add(theme);

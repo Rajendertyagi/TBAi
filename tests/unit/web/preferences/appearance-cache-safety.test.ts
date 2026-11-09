@@ -30,8 +30,11 @@ describe("appearance pre-paint cache safety (narrow exception)", () => {
     const src = read("web/src/features/preferences/state/usePreferencesSync.ts");
     expect(src).toContain("writeAppearancePrepaintCache");
     expect(src).toContain('hydration !== "ready"');
-    expect(src).toContain('localStorage.setItem("tbai-theme"');
-    expect(src).toContain('localStorage.setItem("tbai-typography"');
+    // Logical theme is mirrored as-is (including "system"); typography default removes stale cache.
+    expect(src).toContain('localStorage.setItem("tbai-theme", input.themeMode)');
+    expect(src).toContain('localStorage.removeItem("tbai-typography")');
+    expect(src).toContain("DEFAULT_TYPOGRAPHY");
+    expect(src).toContain("applyTypographyToDom(DEFAULT_TYPOGRAPHY)");
     // Must not read cache to seed SQLite / must not treat cache as authority.
     expect(src).not.toContain("readAppearanceCache");
     expect(src).not.toContain("localStorage.getItem");
@@ -41,6 +44,8 @@ describe("appearance pre-paint cache safety (narrow exception)", () => {
     const html = read("web/index.html");
     expect(html).toContain('localStorage.getItem("tbai-theme")');
     expect(html).toContain('localStorage.getItem("tbai-typography")');
+    expect(html).toContain('t === "system"');
+    expect(html).toContain("prefers-color-scheme: dark");
     // No fetch/API calls that would seed SQLite from cache.
     expect(html).not.toContain("/api/preferences");
     expect(html).not.toContain("fetch(");

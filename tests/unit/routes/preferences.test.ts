@@ -52,6 +52,33 @@ describe("preferences routes (canonical)", () => {
     expect(row?.value).toContain('"sharedTabs":"nope"');
   });
 
+  it("GET/PATCH reject explicit null required snapshot/group objects as corruption and preserve row", async () => {
+    const cases = [
+      { revision: 1, sharedTabs: [], preferences: null },
+      { revision: 1, sharedTabs: [], preferences: { appearance: null } },
+      { revision: 1, sharedTabs: [], preferences: { desktop: null } },
+    ];
+    for (const value of cases) {
+      writeRawSnapshot(value);
+      const rawBefore = db
+        .query("SELECT value FROM app_settings WHERE key = ?")
+        .get(WORKSPACE_PREFERENCES_SNAPSHOT_KEY) as { value: string } | undefined;
+      const getRes = await app.request("http://localhost/api/preferences");
+      expect(getRes.status).toBe(500);
+      const patchRes = await app.request("http://localhost/api/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseRevision: 1, preferences: { appearance: { themeMode: "dark" } } }),
+      });
+      expect(patchRes.status).toBe(500);
+      const rawAfter = db
+        .query("SELECT value FROM app_settings WHERE key = ?")
+        .get(WORKSPACE_PREFERENCES_SNAPSHOT_KEY) as { value: string } | undefined;
+      expect(rawAfter?.value).toBe(rawBefore?.value);
+      clearSnapshot();
+    }
+  });
+
   it("PATCH applies allowlisted preferences with leaf-field merge and CAS", async () => {
     const res = await app.request("http://localhost/api/preferences", {
       method: "PATCH",

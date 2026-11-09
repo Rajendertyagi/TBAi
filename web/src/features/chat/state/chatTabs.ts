@@ -213,19 +213,21 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
     const wasActive = get().localActiveKey === keyChat || get().localActiveKey === keyAgent;
     const sharedBefore = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
     const closedIndex = sharedBefore.findIndex((t) => t.ref === conversationId);
-    try {
-      await usePreferencesStore.getState().closeSharedTab(conversationId);
-    } catch (err) {
+    const result = await usePreferencesStore.getState().closeSharedTab(conversationId);
+    if (result.ok === false) {
       logger.debug("chat", "shared_tab_close_failed", {
         conversationId,
-        errorType: err instanceof Error ? err.name : typeof err,
+        reason: result.reason,
       });
+      // Conflict/error: preserve current local route/active conversation; require explicit action.
       return;
     }
+    // Navigate only when confirmed successful AND resulting snapshot no longer contains the conversation.
+    const stillMember = result.snapshot.sharedTabs.some((t) => t.ref === conversationId);
+    if (stillMember) return;
     if (wasActive) {
       // Local close behavior: select right neighbor (or last), else fresh local draft.
-      const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
-      const remaining = shared.filter((t) => t.ref !== conversationId);
+      const remaining = result.snapshot.sharedTabs;
       if (remaining.length > 0) {
         const nextIndex = Math.min(Math.max(closedIndex, 0), remaining.length - 1);
         const next = remaining[nextIndex] ?? remaining[remaining.length - 1]!;
@@ -237,16 +239,16 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
   },
 
   requestSharedCloseBatch: async (input) => {
-    try {
-      await usePreferencesStore.getState().closeSharedTabsBatch(input);
-    } catch (err) {
+    const result = await usePreferencesStore.getState().closeSharedTabsBatch(input);
+    if (result.ok === false) {
       logger.debug("chat", "shared_tab_close_batch_failed", {
         mode: input.mode,
-        errorType: err instanceof Error ? err.name : typeof err,
+        reason: result.reason,
       });
+      // Conflict/error: preserve current local route/active conversation.
       return;
     }
-    const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+    const shared = result.snapshot.sharedTabs;
     const active = get().localActiveKey;
     const parsed = active ? parseTabKey(active) : null;
     const activeRef = parsed?.ref;
