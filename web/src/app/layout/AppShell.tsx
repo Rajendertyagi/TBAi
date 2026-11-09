@@ -7,6 +7,9 @@ import {
   Suggestions,
   makeAssistantDataUI,
 } from "@assistant-ui/react";
+import { useShallow } from "zustand/react/shallow";
+import { usePreferencesStore } from "../../features/preferences/state/preferencesStore";
+import { usePreferencesSync } from "../../features/preferences/state/usePreferencesSync";
 import { Sidebar } from "../../components/Sidebar";
 import { StatusBar } from "../../components/StatusBar";
 import { ActivityBar } from "../../components/ActivityBar";
@@ -30,7 +33,13 @@ import { registerTabReconciliation } from "../../features/chat/state/tabReconcil
 import { useAppChatRuntime } from "../../runtime";
 import { threadListAdapter } from "../adapter";
 import { useSettingsStore } from "@/features/providers/state/providersStore";
-import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/chat/state/chatTabs";
+import {
+  NEW_DRAFT_TAB_ID,
+  activeTab,
+  parseTabKey,
+  useChatTabsStore,
+  visibleTabs,
+} from "../../features/chat/state/chatTabs";
 import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
 import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";
 import { appToolkit } from "../../tools/toolkit";
@@ -78,7 +87,19 @@ export function AppShell() {
   const chatWidth = useDesktopLayout((s) => s.chatWidth);
   const searchOpen = useDesktopLayout((s) => s.searchOpen);
 
-  const active = useChatTabsStore(activeTab);
+  const tabState = useChatTabsStore(
+    useShallow((s) => ({
+      localActiveKey: s.localActiveKey,
+      hasLocalDraft: s.hasLocalDraft,
+      detachedRefs: s.detachedRefs,
+    })),
+  );
+  const sharedTabs = usePreferencesStore((s) => s.snapshot?.sharedTabs);
+  const active = useMemo(() => {
+    const tabs = visibleTabs({ ...tabState, sharedTabs: sharedTabs ?? [] });
+    if (!tabState.localActiveKey) return tabs[0];
+    return tabs.find((t) => t.key === tabState.localActiveKey) ?? tabs[0];
+  }, [tabState, sharedTabs]);
   const runtimeThreadId =
     active?.kind === "chat" && active.ref !== NEW_DRAFT_TAB_ID ? active.ref : undefined;
 
@@ -89,8 +110,9 @@ export function AppShell() {
     logger.info("app", "runtime.bind", { threadId: id });
     if (current?.kind === "chat" && current.ref === NEW_DRAFT_TAB_ID) {
       state.resolveDraftId(id, peekMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine);
-    } else if (!state.tabs.some((t) => t.kind === "chat" && t.ref === id)) {
-      state.openChat(id);
+    } else {
+      // Presentation-only runtime binding; never mutates shared membership.
+      state.presentChat(id);
     }
   }, []);
 
@@ -146,6 +168,29 @@ export function AppShell() {
       useAvailabilityStore.getState().stop();
     };
   }, []);
+
+  // Authoritative shared workspace preferences (tabs/membership + portable prefs).
+  useEffect(() => {
+    usePreferencesStore.getState().start();
+    return () => usePreferencesStore.getState().stop();
+  }, []);
+
+  // Single coordinated sync owner (authoritative snapshot apply + loop suppression).
+  usePreferencesSync();
+
+  // Remote shared-membership changes: if the local active conversation was
+  // removed from shared tabs by another window, mark it detached locally.
+  // Never navigate, never interrupt composer/runtime/focus/IME.
+  useEffect(() => {
+    const localActiveKey = tabState.localActiveKey;
+    if (!sharedTabs || !localActiveKey) return;
+    const parsed = parseTabKey(localActiveKey);
+    if (!parsed || parsed.ref === "new") return;
+    const isMember = sharedTabs.some((t) => t.ref === parsed.ref);
+    const tabs = useChatTabsStore.getState();
+    if (!isMember) tabs.markDetached(parsed.ref);
+    else tabs.clearDetached(parsed.ref);
+  }, [sharedTabs, tabState.localActiveKey]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={config}>

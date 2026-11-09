@@ -72,35 +72,26 @@ describe("sidebar section ids are exactly folders/chats", () => {
   });
 });
 
-describe("normalizeSectionOrder drops unknown ids, dedupes, and re-adds missing", () => {
-  it("drops unknown ids from a persisted value", () => {
-    const result = normalizeSectionOrder([
-      "chats",
-      "some-removed-section",
-      "folders",
-    ]) as readonly SidebarSectionId[];
-    // Unknown entry dropped; both known entries preserved in their relative order.
-    expect(result).toEqual(["chats", "folders"]);
+describe("normalizeSectionOrder strict semantics (backend/frontend parity)", () => {
+  it("rejects unknown ids as corruption/validation error", () => {
+    expect(() => normalizeSectionOrder(["chats", "some-removed-section", "folders"])).toThrow();
+    expect(() => normalizeSectionOrder(["recent", "chats", "folders"])).toThrow();
   });
 
-  it("drops a retired id instead of re-appending it", () => {
-    // `recent` was a real section id before the sidebar redesign. A user who
-    // persisted it must end up with the two current sections, in their saved
-    // relative order — the retired id is unknown to `SIDEBAR_SECTION_IDS`, so it
-    // is dropped, not appended back.
-    const result = normalizeSectionOrder(["recent", "chats", "folders"]);
-    expect(result).toEqual(["chats", "folders"]);
-  });
-
-  it("dedupes repeated ids", () => {
+  it("dedupes repeated ids and preserves relative order", () => {
     const result = normalizeSectionOrder(["folders", "chats", "chats"]);
     expect(result).toEqual(["folders", "chats"]);
   });
 
-  it("returns the default order for a non-array value", () => {
-    expect(normalizeSectionOrder("not-an-array")).toEqual(["folders", "chats"]);
+  it("missing/null/undefined/empty => effective default order", () => {
     expect(normalizeSectionOrder(null)).toEqual(["folders", "chats"]);
     expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats"]);
+    expect(normalizeSectionOrder([])).toEqual(["folders", "chats"]);
+  });
+
+  it("rejects non-array and invalid element types", () => {
+    expect(() => normalizeSectionOrder("not-an-array")).toThrow();
+    expect(() => normalizeSectionOrder([1, 2])).toThrow();
   });
 
   it("returns a full permutation even when the persisted array is empty", () => {
@@ -110,8 +101,6 @@ describe("normalizeSectionOrder drops unknown ids, dedupes, and re-adds missing"
   });
 
   it("appends an omitted section in default order", () => {
-    // The "newly-added section appears for existing users" invariant, still
-    // exercised by the two-section model.
     const result = normalizeSectionOrder(["chats"]);
     expect(result).toEqual(["chats", "folders"]);
   });

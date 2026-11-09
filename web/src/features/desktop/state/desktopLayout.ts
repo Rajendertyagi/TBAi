@@ -12,62 +12,38 @@ import {
   type SidebarSectionId,
   type SidebarSortMode,
 } from "../../../config/sidebar";
-import { DEFAULT_CHAT_WIDTH, isChatWidth, type ChatWidth } from "../../../config/chat";
-import { moveSectionInOrder, normalizeSectionOrder } from "./sidebarSections";
+import { DEFAULT_CHAT_WIDTH, type ChatWidth } from "../../../config/chat";
+import { moveSectionInOrder } from "./sidebarSections";
+import { usePreferencesStore } from "../../preferences/state/preferencesStore";
+
+function patchDesktop(desktop: Record<string, unknown>): void {
+  void usePreferencesStore
+    .getState()
+    .patchPreferences({ desktop })
+    .catch(() => {});
+}
 
 /**
- * Desktop chrome layout + sidebar view preferences (VS Code–like). UI-only
- * state per AGENTS.md (Zustand = shared UI state, not the persistence layer);
- * layout preferences persist to localStorage so the user's chrome survives
- * restarts. Transient search UI (query/open/focus) lives here for cross-chrome
- * sharing (overlay input ↔ sidebar list) but is excluded from persistence.
- *
- * Versioned (`STORE_VERSION` + `migrate`) so future preference additions never
- * reset existing users, and corrupt payloads fall back to defaults field by
- * field instead of crashing.
+ * Desktop chrome layout + sidebar view preferences.
+ * SQLite is authoritative for shared portable desktop fields; this store holds
+ * current UI state and patches SQLite on user changes. Only `sidebarWidth` is
+ * persisted locally (device-specific). Before hydration, defaults are used.
  */
 interface DesktopLayoutState {
-  /** Left navigation/conversation sidebar. */
   sidebarVisible: boolean;
-  /** Bottom status bar (provider/model + connection). */
   statusBarVisible: boolean;
-  /** Conversation sidebar width in px (user-resizable, clamped). */
+  /** Local/device-only (persisted). */
   sidebarWidth: number;
-  /** Centred chat column width (transcript + composer + welcome). */
   chatWidth: ChatWidth;
-  /** Thread sort for the sidebar lists. */
   sidebarSort: SidebarSortMode;
-  /** Top-to-bottom sidebar section order (always a full permutation). */
   sectionOrder: readonly SidebarSectionId[];
-  /** Per-section collapsed flags. Absent = expanded. */
   sectionCollapsed: SidebarSectionCollapsed;
-  /** Whether archived conversations are shown in the sidebar lists. */
   showCompleted: boolean;
-  /**
-   * Browser-native spell check on the message composer.
-   *
-   * This is the platform's own checker (the `spellcheck` attribute) — no
-   * bundled dictionary and no spell-check library. Defaults to true because
-   * that is what a textarea already does in every browser; the switch exists
-   * to turn it OFF, not to turn it on.
-   */
   spellCheck: boolean;
-  /**
-   * Raw search box contents, one write per keystroke (transient). Consumers must
-   * read `searchQuery` instead — this exists only so the controlled input stays
-   * responsive while the query is still settling.
-   */
+  /** Transient search UI (never persisted). */
   searchInput: string;
-  /**
-   * Settled conversation-search query (transient, never persisted). Written
-   * `sidebarConfig.searchDebounceMs` after `searchInput` stops changing, so one
-   * keystroke burst produces ONE list request instead of one per keystroke per
-   * sidebar section (the folder list alone fetches once per registered folder).
-   */
   searchQuery: string;
-  /** Whether the chrome search input is expanded (transient). */
   searchOpen: boolean;
-  /** Bump to request focus of the chrome search input (transient). */
   searchFocusRequest: number;
   toggleSidebar: () => void;
   toggleStatusBar: () => void;
@@ -81,43 +57,45 @@ interface DesktopLayoutState {
   setAllSectionsCollapsed: (collapsed: boolean) => void;
   setShowCompleted: (v: boolean) => void;
   setSpellCheck: (v: boolean) => void;
-  /** Record a keystroke; `searchQuery` settles after the debounce. */
   setSearchInput: (q: string) => void;
-  /** Set input + query together, cancelling any pending settle. */
   setSearchQuery: (q: string) => void;
   setSearchOpen: (open: boolean) => void;
   requestSearchFocus: () => void;
 }
 
-/** The durable subset of the store (transient search UI excluded). */
-interface PersistedLayout {
-  sidebarVisible: boolean;
-  statusBarVisible: boolean;
+interface PersistedLayoutLocal {
   sidebarWidth: number;
-  chatWidth: ChatWidth;
-  sidebarSort: SidebarSortMode;
-  sectionOrder: readonly SidebarSectionId[];
-  sectionCollapsed: SidebarSectionCollapsed;
-  showCompleted: boolean;
-  spellCheck: boolean;
 }
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 
-/**
- * Pending `searchInput` -> `searchQuery` settle. Module scope (not state) so it
- * never reaches persistence or triggers a render on its own.
- */
 let searchSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Cancel a pending settle so an immediate `setSearchQuery` wins the race. */
 function cancelSearchSettle(): void {
   if (searchSettleTimer === null) return;
   clearTimeout(searchSettleTimer);
   searchSettleTimer = null;
 }
 
-function defaultPersisted(): PersistedLayout {
+function defaultState(): Omit<
+  DesktopLayoutState,
+  | "toggleSidebar"
+  | "toggleStatusBar"
+  | "setSidebar"
+  | "setStatusBar"
+  | "setSidebarWidth"
+  | "setChatWidth"
+  | "setSidebarSort"
+  | "moveSection"
+  | "setSectionCollapsed"
+  | "setAllSectionsCollapsed"
+  | "setShowCompleted"
+  | "setSpellCheck"
+  | "setSearchInput"
+  | "setSearchQuery"
+  | "setSearchOpen"
+  | "requestSearchFocus"
+> {
   return {
     sidebarVisible: true,
     statusBarVisible: true,
@@ -127,100 +105,90 @@ function defaultPersisted(): PersistedLayout {
     sectionOrder: sidebarConfig.defaultSectionOrder,
     sectionCollapsed: {},
     showCompleted: false,
-    // Matches the platform default for a textarea, so adding the setting
-    // changes nothing until the user turns it off.
     spellCheck: true,
-  };
-}
-
-function isSortMode(value: unknown): value is SidebarSortMode {
-  return value === "updated" || value === "created";
-}
-
-/**
- * Merge an unknown persisted payload over defaults, field by field.
- *
- * Exported for the migration test: a payload written before a preference
- * existed must load with that preference's default instead of resetting the
- * whole layout.
- */
-export function migratePersisted(persisted: unknown): DesktopLayoutState {
-  const defaults = defaultPersisted();
-  const transient = {
     searchInput: "",
     searchQuery: "",
     searchOpen: false,
     searchFocusRequest: 0,
   };
+}
+
+export function migratePersisted(persisted: unknown): { sidebarWidth: number } {
   if (typeof persisted !== "object" || persisted === null) {
-    return { ...defaults, ...transient } as DesktopLayoutState;
+    return { sidebarWidth: SIDEBAR_DEFAULT_WIDTH };
   }
   const p = persisted as Record<string, unknown>;
-  // Actions are re-created by the initializer; migrate only returns state.
-  // The `as DesktopLayoutState` cast is safe: every field is defaulted above.
   return {
-    ...defaults,
-    ...transient,
-    sidebarVisible:
-      typeof p.sidebarVisible === "boolean" ? p.sidebarVisible : defaults.sidebarVisible,
-    statusBarVisible:
-      typeof p.statusBarVisible === "boolean" ? p.statusBarVisible : defaults.statusBarVisible,
     sidebarWidth:
       typeof p.sidebarWidth === "number" && Number.isFinite(p.sidebarWidth)
         ? clamp(p.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
-        : defaults.sidebarWidth,
-    chatWidth: isChatWidth(p.chatWidth) ? p.chatWidth : defaults.chatWidth,
-    sidebarSort: isSortMode(p.sidebarSort) ? p.sidebarSort : defaults.sidebarSort,
-    sectionOrder: normalizeSectionOrder(p.sectionOrder),
-    sectionCollapsed:
-      typeof p.sectionCollapsed === "object" && p.sectionCollapsed !== null
-        ? (p.sectionCollapsed as SidebarSectionCollapsed)
-        : defaults.sectionCollapsed,
-    showCompleted: typeof p.showCompleted === "boolean" ? p.showCompleted : defaults.showCompleted,
-    spellCheck: typeof p.spellCheck === "boolean" ? p.spellCheck : defaults.spellCheck,
-  } as DesktopLayoutState;
+        : SIDEBAR_DEFAULT_WIDTH,
+  };
 }
 
 export const useDesktopLayout = create<DesktopLayoutState>()(
-  persist<DesktopLayoutState, [], [], PersistedLayout>(
+  persist<DesktopLayoutState, [], [], PersistedLayoutLocal>(
     (set) => ({
-      ...defaultPersisted(),
-      searchInput: "",
-      searchQuery: "",
-      searchOpen: false,
-      searchFocusRequest: 0,
-      toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
-      toggleStatusBar: () => set((s) => ({ statusBarVisible: !s.statusBarVisible })),
-      setSidebar: (v) => set({ sidebarVisible: v }),
-      setStatusBar: (v) => set({ statusBarVisible: v }),
+      ...defaultState(),
+      toggleSidebar: () =>
+        set((s) => {
+          const sidebarVisible = !s.sidebarVisible;
+          patchDesktop({ sidebarVisible });
+          return { sidebarVisible };
+        }),
+      toggleStatusBar: () =>
+        set((s) => {
+          const statusBarVisible = !s.statusBarVisible;
+          patchDesktop({ statusBarVisible });
+          return { statusBarVisible };
+        }),
+      setSidebar: (v) => {
+        set({ sidebarVisible: v });
+        patchDesktop({ sidebarVisible: v });
+      },
+      setStatusBar: (v) => {
+        set({ statusBarVisible: v });
+        patchDesktop({ statusBarVisible: v });
+      },
       setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
-      setChatWidth: (w) => set({ chatWidth: w }),
-      setSidebarSort: (sort) => set({ sidebarSort: sort }),
-      // Reorder through the shared pure helper so the store and the sidebar
-      // cannot drift on edge cases (out-of-range delta, unknown id). The helper
-      // returns the SAME array on a no-op, so returning `s` there keeps zustand
-      // from notifying subscribers for a move that changed nothing.
+      setChatWidth: (w) => {
+        set({ chatWidth: w });
+        patchDesktop({ chatWidth: w });
+      },
+      setSidebarSort: (sort) => {
+        set({ sidebarSort: sort });
+        patchDesktop({ sidebarSort: sort });
+      },
       moveSection: (id, delta) =>
         set((s) => {
           const sectionOrder = moveSectionInOrder(s.sectionOrder, id, delta);
-          return sectionOrder === s.sectionOrder ? s : { sectionOrder };
+          if (sectionOrder === s.sectionOrder) return s;
+          patchDesktop({ sectionOrder });
+          return { sectionOrder };
         }),
       setSectionCollapsed: (id, collapsed) =>
-        set((s) => ({
-          sectionCollapsed: { ...s.sectionCollapsed, [id]: collapsed },
-        })),
+        set((s) => {
+          const sectionCollapsed = { ...s.sectionCollapsed, [id]: collapsed };
+          patchDesktop({ sectionCollapsed });
+          return { sectionCollapsed };
+        }),
       setAllSectionsCollapsed: (collapsed) =>
         set((s) => {
           const next: SidebarSectionCollapsed = {};
           for (const id of s.sectionOrder) next[id] = collapsed;
+          patchDesktop({ sectionCollapsed: next });
           return { sectionCollapsed: next };
         }),
-      setShowCompleted: (v) => set({ showCompleted: v }),
-      setSpellCheck: (v) => set({ spellCheck: v }),
+      setShowCompleted: (v) => {
+        set({ showCompleted: v });
+        patchDesktop({ showCompleted: v });
+      },
+      setSpellCheck: (v) => {
+        set({ spellCheck: v });
+        patchDesktop({ spellCheck: v });
+      },
       setSearchInput: (q) => {
         set({ searchInput: q });
-        // Clearing is not a search — settle it now so the sections come back
-        // immediately instead of lingering for the debounce window.
         if (q === "") {
           cancelSearchSettle();
           set({ searchQuery: "" });
@@ -243,18 +211,14 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       name: "tbai:desktopLayout",
       version: STORE_VERSION,
       migrate: (persisted) => migratePersisted(persisted),
-      // Transient search UI never hits storage.
+      // Only sidebarWidth is local/device-specific.
       partialize: (s) => ({
-        sidebarVisible: s.sidebarVisible,
-        statusBarVisible: s.statusBarVisible,
         sidebarWidth: s.sidebarWidth,
-        chatWidth: s.chatWidth,
-        sidebarSort: s.sidebarSort,
-        sectionOrder: s.sectionOrder,
-        sectionCollapsed: s.sectionCollapsed,
-        showCompleted: s.showCompleted,
-        spellCheck: s.spellCheck,
       }),
+      merge: (persisted, current) => {
+        const local = migratePersisted(persisted);
+        return { ...current, sidebarWidth: local.sidebarWidth };
+      },
     },
   ),
 );

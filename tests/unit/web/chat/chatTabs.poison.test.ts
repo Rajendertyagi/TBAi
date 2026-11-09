@@ -1,95 +1,104 @@
 import { describe, it, expect, beforeEach } from "bun:test";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
 import {
-  NEW_DRAFT_TAB_ID,
   activeTab,
   agentKey,
   chatKey,
-  healTab,
   threadUrl,
   urlForTab,
   useChatTabsStore,
+  visibleTabs,
   type Tab,
 } from "@web/features/chat/state/chatTabs.ts";
 
 /**
- * Regression tests for the poisoned agent-tab defect: older builds created
- * Code tabs via a key factory that only understood chat:/page:, so every
- * agent:<id> key became { kind: "chat", ref: ":<id>" } — wrong kind plus a
- * colon-prefixed ref that 404-looped on /api/conversations/:<id> and stuck
- * around via persistence. Covers the fixed factory, the load-time healing,
- * and the no-colon invariant across store flows.
- *
- * Store hygiene mirrors welcomeEngine.test.ts: reset tabs/activeKey per test.
- * (The module's import-time loadPersisted ran with storage unavailable, so
- * initial state is empty — load-healing itself is covered via healTab.)
+ * Regression tests for tab shape/URL safety under the shared workspace model.
+ * Local presentation must never produce colon-prefixed refs or wrong routes.
  */
 
-const STORAGE_KEY = "tbai:openTabs";
-
-function resetTabs() {
-  useChatTabsStore.setState({ tabs: [], activeKey: undefined });
-}
-
-function currentTabs(): Tab[] {
-  return useChatTabsStore.getState().tabs;
+function reset() {
+  useChatTabsStore.setState({
+    localActiveKey: undefined,
+    hasLocalDraft: false,
+    detachedRefs: {},
+    membershipFailures: {},
+    suppressedDelayedAdds: {},
+  });
+  usePreferencesStore.setState({
+    snapshot: {
+      revision: 1,
+      sharedTabs: [],
+      preferences: {
+        appearance: {
+          themeMode: "system",
+          lightTheme: "default",
+          darkTheme: "default",
+          typography: "default",
+        },
+        desktop: {
+          sidebarVisible: true,
+          statusBarVisible: true,
+          chatWidth: "comfortable",
+          sidebarSort: "updated",
+          sectionOrder: [],
+          sectionCollapsed: {},
+          showCompleted: false,
+          spellCheck: true,
+        },
+        welcome: {
+          engine: "direct",
+          quickActionTab: "coding",
+          scopeMode: "simple",
+          folderId: null,
+        },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    },
+    hydration: "ready",
+    hydrationError: null,
+  });
 }
 
 function noColonRefs(tabs: Tab[]): boolean {
   return tabs.every((t) => !t.ref.startsWith(":"));
 }
 
-describe("agent tabs — factory shape (poison regression)", () => {
-  beforeEach(() => {
-    resetTabs();
-    try {
-      window.localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      /* storage shim absent — store-only assertions still hold */
-    }
-  });
+describe("agent/chat presentation — shape safety", () => {
+  beforeEach(reset);
 
-  it("openAgent creates a kind:agent tab with the bare conversation id", () => {
-    useChatTabsStore.getState().openAgent("vuvg19b9ep437ry4bt4jgfvk");
-    const tabs = currentTabs();
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]).toEqual({
+  it("presentAgent creates a clean local agent presentation", () => {
+    useChatTabsStore.getState().presentAgent("vuvg19b9ep437ry4bt4jgfvk");
+    expect(useChatTabsStore.getState().localActiveKey).toBe("agent:vuvg19b9ep437ry4bt4jgfvk");
+    const tab = activeTab(useChatTabsStore.getState());
+    expect(tab).toEqual({
       key: "agent:vuvg19b9ep437ry4bt4jgfvk",
       kind: "agent",
       ref: "vuvg19b9ep437ry4bt4jgfvk",
+      detached: true,
     });
   });
 
-  it("activating an agent key materializes the same clean shape", () => {
-    useChatTabsStore.getState().setActive(agentKey("abc123"));
-    const tab = activeTab(useChatTabsStore.getState());
-    expect(tab).toEqual({ key: "agent:abc123", kind: "agent", ref: "abc123" });
-  });
-
-  it("openChat still creates clean chat tabs (no regression)", () => {
-    useChatTabsStore.getState().openChat("thread1");
-    expect(currentTabs()[0]).toEqual({
-      key: "chat:thread1",
-      kind: "chat",
-      ref: "thread1",
-    });
+  it("presentChat creates a clean local chat presentation", () => {
+    useChatTabsStore.getState().presentChat("thread1");
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:thread1");
   });
 
   it("agent tabs route to /code/<id>, never /chat/:<id>", () => {
-    useChatTabsStore.getState().openAgent("vuvg19b9ep437ry4bt4jgfvk");
+    useChatTabsStore.getState().presentAgent("vuvg19b9ep437ry4bt4jgfvk");
     const tab = activeTab(useChatTabsStore.getState());
     expect(tab).toBeDefined();
     expect(urlForTab(tab as Tab)).toBe("/code/vuvg19b9ep437ry4bt4jgfvk");
   });
 
-  it("no tab ref ever starts with a colon across open/switch/close flows", () => {
+  it("no tab ref ever starts with a colon across local flows", () => {
     const s = useChatTabsStore.getState();
-    s.openChat("t1");
-    s.openAgent("a1");
-    s.openChat(NEW_DRAFT_TAB_ID);
-    s.setActive(agentKey("a1"));
-    s.setActive(chatKey("t1"));
-    s.close(agentKey("a1"));
-    expect(noColonRefs(currentTabs())).toBe(true);
+    s.presentChat("t1");
+    s.presentAgent("a1");
+    s.openNewDraft();
+    s.selectLocal(agentKey("a1"));
+    s.selectLocal(chatKey("t1"));
+    s.closeLocal(agentKey("a1"));
+    expect(noColonRefs(visibleTabs(useChatTabsStore.getState()))).toBe(true);
   });
 });
 
@@ -108,35 +117,5 @@ describe("threadUrl — engine-aware thread opening", () => {
     for (const engine of ["direct", "opencode", undefined, null, "bogus"]) {
       expect(threadUrl("abc", engine)).not.toContain("/:");
     }
-  });
-});
-
-describe("healTab — persisted poison repair", () => {
-  it("repairs a poisoned agent entry (chat kind + colon ref) by key", () => {
-    expect(healTab({ key: "agent:abc", kind: "chat", ref: ":abc" })).toEqual({
-      key: "agent:abc",
-      kind: "agent",
-      ref: "abc",
-    });
-  });
-
-  it("keeps well-formed chat/agent tabs byte-identical", () => {
-    const good: Tab[] = [
-      { key: "chat:t1", kind: "chat", ref: "t1" },
-      { key: "agent:a1", kind: "agent", ref: "a1" },
-    ];
-    for (const t of good) expect(healTab(t)).toEqual(t);
-  });
-
-  it("drops empty refs and bare colon refs (unrepairable)", () => {
-    expect(healTab({ key: "chat:", kind: "chat", ref: "" })).toBeNull();
-    expect(healTab({ key: "agent:", kind: "chat", ref: ":" })).toBeNull();
-    expect(healTab({ key: "mystery", kind: "chat", ref: "mystery" })).toBeNull();
-  });
-
-  it("drops non-objects and keyless entries", () => {
-    expect(healTab(null)).toBeNull();
-    expect(healTab("agent:a1")).toBeNull();
-    expect(healTab({ kind: "agent", ref: "a1" })).toBeNull();
   });
 });

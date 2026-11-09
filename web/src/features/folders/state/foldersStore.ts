@@ -1,28 +1,21 @@
 import { create } from "zustand";
 import { apiJson } from "../../../lib/api";
+import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 import type { Folder, FolderGroup, FolderLink } from "../../../types/index";
 
 /**
- * Registered folder / workspace registry store (codeg-aligned two-mode model).
- *
- * Holds ONLY: the registered folder list, folder groups, and UI navigation state
- * (the globally-selected folder for the Folders surface). Conversation workspace
- * mode/folder attachment lives on the conversation itself (persisted in SQLite
- * and surfaced via thread metadata) — never duplicated here.
+ * Registered folder / workspace registry store.
+ * Folder list/groups come from API. Navigation selection/expansion are shared
+ * portable preferences (SQLite authoritative); defaults before hydration.
  */
 interface FoldersState {
   folders: Folder[];
   folderGroups: FolderGroup[];
-  /** Globally-selected folder for navigation/UI (NOT the implicit chat workspace). */
+  /** Globally-selected folder for navigation/UI (shared portable). */
   selectedFolderId: string | null;
-  /** Per-folder expand/collapse state for the sidebar Folders section. */
+  /** Per-folder expand/collapse state (shared portable). */
   folderExpanded: Record<string, boolean>;
   loading: boolean;
-  /**
-   * True once the folder list has been fetched successfully at least once.
-   * Guards pruning logic (e.g. draft scope validation): an empty list before
-   * the first load means "unknown", never "no folders".
-   */
   foldersLoaded: boolean;
   loadFolders: () => Promise<void>;
   loadGroups: () => Promise<void>;
@@ -59,53 +52,27 @@ interface FoldersState {
   setAllFoldersExpanded: (expanded: boolean) => void;
 }
 
-const SELECTED_KEY = "tbai:selectedFolder";
-const EXPANDED_KEY = "tbai:folderExpanded";
-
-function loadFolderExpanded(): Record<string, boolean> {
-  try {
-    const raw = window.localStorage.getItem(EXPANDED_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, boolean>;
-  } catch {
-    /* ignore */
-  }
-  return {};
-}
-
-function saveFolderExpanded(state: Record<string, boolean>): void {
-  try {
-    window.localStorage.setItem(EXPANDED_KEY, JSON.stringify(state));
-  } catch {
-    /* ignore */
-  }
-}
-
 /**
- * Drop a persisted navigation selection that no longer names a registered
- * folder (removed/never-existed after reload). Pure so the rule is
- * unit-testable; the store applies it to every loaded list.
+ * Soft-reference resolver for navigation selection. Missing folder IDs are
+ * preserved (never silently nulled/substituted).
  */
-export function pruneSelectedFolderId(folders: Folder[], selectedId: string | null): string | null {
-  if (!selectedId) return null;
-  return folders.some((f) => f.id === selectedId) ? selectedId : null;
+export function resolveSelectedFolderId(
+  _folders: Folder[],
+  selectedId: string | null,
+): string | null {
+  return selectedId;
 }
 
-// Monotonic load epoch: overlapping loadFolders() calls converge on the
-// NEWEST response. A stale (slower, earlier-issued) list must never overwrite
-// newer registry state — the same stale-completion rule as navigation.
+/** @deprecated Use resolveSelectedFolderId; kept for compatibility with existing imports. */
+export const pruneSelectedFolderId = resolveSelectedFolderId;
+
 let foldersLoadEpoch = 0;
 
 export const useFoldersStore = create<FoldersState>((set, get) => ({
   folders: [],
   folderGroups: [],
-  selectedFolderId: (() => {
-    try {
-      return window.localStorage.getItem(SELECTED_KEY) || null;
-    } catch {
-      return null;
-    }
-  })(),
-  folderExpanded: loadFolderExpanded(),
+  selectedFolderId: null,
+  folderExpanded: {},
   loading: false,
   foldersLoaded: false,
 
@@ -114,19 +81,8 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     set({ loading: true });
     try {
       const folders = await apiJson<Folder[]>("/api/folders");
-      // A newer load issued while this one was in flight owns the state;
-      // this response is stale and must not overwrite it.
       if (epoch !== foldersLoadEpoch) return;
-      const selectedFolderId = pruneSelectedFolderId(folders, get().selectedFolderId);
-      if (selectedFolderId !== get().selectedFolderId) {
-        try {
-          if (selectedFolderId) window.localStorage.setItem(SELECTED_KEY, selectedFolderId);
-          else window.localStorage.removeItem(SELECTED_KEY);
-        } catch {
-          /* ignore */
-        }
-      }
-      set({ folders, foldersLoaded: true, selectedFolderId });
+      set({ folders, foldersLoaded: true });
     } finally {
       if (epoch === foldersLoadEpoch) set({ loading: false });
     }
@@ -182,7 +138,6 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   reorderFolders: async (ids: string[]) => {
-    // Optimistic reorder
     const current = get().folders;
     const map = new Map(current.map((f) => [f.id, f]));
     const next: Folder[] = [];
@@ -211,7 +166,6 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
       method: "POST",
       body: JSON.stringify({ folderId }),
     }).catch(async () => {
-      // groupId null path: fall back to clearing via folder update
       if (groupId === null) {
         await get().updateFolder(folderId, { groupId: null });
       }
@@ -240,19 +194,20 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   setSelectedFolder: (id) => {
-    try {
-      if (id) window.localStorage.setItem(SELECTED_KEY, id);
-      else window.localStorage.removeItem(SELECTED_KEY);
-    } catch {
-      /* ignore */
-    }
     set({ selectedFolderId: id });
+    void usePreferencesStore
+      .getState()
+      .patchPreferences({ navigation: { selectedFolderId: id } })
+      .catch(() => {});
   },
 
   setFolderExpanded: (id, expanded) => {
     set((s) => {
       const next = { ...s.folderExpanded, [id]: expanded };
-      saveFolderExpanded(next);
+      void usePreferencesStore
+        .getState()
+        .patchPreferences({ navigation: { folderExpanded: next } })
+        .catch(() => {});
       return { folderExpanded: next };
     });
   },
@@ -261,7 +216,10 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     set((s) => {
       const next: Record<string, boolean> = {};
       for (const f of s.folders) next[f.id] = expanded;
-      saveFolderExpanded(next);
+      void usePreferencesStore
+        .getState()
+        .patchPreferences({ navigation: { folderExpanded: next } })
+        .catch(() => {});
       return { folderExpanded: next };
     });
   },

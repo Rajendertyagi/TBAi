@@ -1,378 +1,462 @@
-import { create } from "zustand";
+﻿import { create } from "zustand";
 import { logger } from "../../../lib/logger";
 import { ROUTES } from "../../../config/routes";
+import { usePreferencesStore } from "../../preferences/state/preferencesStore";
+import { PreferencesConflictError } from "../../preferences/api/preferences";
+import type { SharedTabRef } from "../../preferences/state/types";
 
 export const NEW_DRAFT_TAB_ID = "new";
-const STORAGE_KEY = "tbai:openTabs";
 const DEFAULT_GROUP_ID = "main";
 
 /**
  * Unified tab model: chat threads and Code conversations live in one strip.
  * - Chat tab: `{ kind: "chat", ref: threadId | "new" }`, key `chat:<ref>`.
  * - Agent tab (OpenCode Code mode): `{ kind: "agent", ref: conversationId }`, key `agent:<ref>`.
- * Message/streaming state is NOT here (assistant-ui runtime owns it);
- * this is open-tab layout only. `groupId` is split-screen future-proofing.
+ *
+ * Shared workspace state (SQLite authoritative): ordered real-conversation
+ * membership only (`sharedTabs` in preferences snapshot). No global active
+ * pointer. Each window owns local active selection/route and local draft state.
  */
 export interface Tab {
   key: string;
   kind: "chat" | "agent";
   /** threadId (or "new" draft) for chat tabs; conversationId for agent tabs. */
   ref: string;
+  /** Local presentation of a real conversation not in shared membership. */
+  detached?: boolean;
+}
+
+export interface MembershipFailure {
+  message: string;
+  at: number;
 }
 
 export interface ChatTabsState {
-  tabs: Tab[];
-  activeKey: string | undefined;
+  /** Per-window local active tab key (URL-authoritative via TabUrlSync). */
+  localActiveKey: string | undefined;
+  /** Local draft tab is per-window and never shared. */
+  hasLocalDraft: boolean;
+  /** Real conversations presented locally but not in shared membership. */
+  detachedRefs: Record<string, true>;
+  /** Transient per-window shared-membership failures (survives navigation). */
+  membershipFailures: Record<string, MembershipFailure>;
+  /** Explicit closes suppress delayed/non-awaited shared adds (race protection). */
+  suppressedDelayedAdds: Record<string, number>;
   groupId: string;
+
+  /** Presentation-only: select/open locally. Never mutates shared membership. */
+  presentChat: (threadId: string) => void;
+  /** Presentation-only: select/open locally. Never mutates shared membership. */
+  presentAgent: (conversationId: string) => void;
+  /** Local selection only. */
+  selectLocal: (key: string) => void;
+  /** Local draft open/select. */
+  openNewDraft: () => void;
+  /** Local draft resolution after materialization. No shared mutation. */
+  resolveDraftId: (id: string, engine?: "direct" | "opencode") => void;
+  /** Explicit user close: shared membership removal (CAS) + local behavior. */
+  requestSharedClose: (conversationId: string) => Promise<void>;
+  /** Explicit user batch close: atomic shared mutation + local behavior. */
+  requestSharedCloseBatch: (input: {
+    mode: "others" | "right" | "all";
+    anchorConversationId?: string;
+  }) => Promise<void>;
+  /** Explicit user reorder: shared mutation (CAS). */
+  requestSharedReorder: (conversationId: string, toIndex: number) => Promise<void>;
+  /** Explicit user open/add: shared mutation (CAS), then local selection. */
+  requestSharedOpen: (conversationId: string, kind: "chat" | "agent") => Promise<void>;
+  /**
+   * Delayed/non-awaited shared add after materialization. Failure-isolated,
+   * never recreates/resends. Stale 409 must NOT auto-retry with fresh revision.
+   * Suppressed if user explicitly closed before commit.
+   */
+  requestDelayedSharedOpen: (conversationId: string, kind: "chat" | "agent") => void;
+  /** Explicit retry of shared membership only (never materialize/resend). */
+  retrySharedOpen: (conversationId: string, kind: "chat" | "agent") => Promise<void>;
+  /** Clear a transient membership failure after success or explicit dismiss. */
+  clearMembershipFailure: (conversationId: string) => void;
+  /** Mark a conversation detached locally (remote close / not in shared membership). */
+  markDetached: (conversationId: string) => void;
+  /** Remove local detached marker (e.g. after explicit shared open). */
+  clearDetached: (conversationId: string) => void;
+  /** Local-only close for draft or detached presentation cleanup. */
+  closeLocal: (key: string) => void;
+
+  /** Backward-compatible aliases (presentation-only). */
   openChat: (threadId: string) => void;
   openAgent: (conversationId: string) => void;
+  /** Backward-compatible: explicit close by key (draft local, real => shared close). */
   close: (key: string) => void;
-  /**
-   * Close every tab bound to a conversation id (both chat and agent
-   * surfaces). Tabs only — never deletes server data. Consumed by the
-   * deletion flow after authoritative teardown; route correction follows via
-   * TabUrlSync reacting to the active-key change.
-   */
-  closeByRef: (ref: string) => void;
-  setActive: (key: string) => void;
-  /** Reorder an open tab (drag-and-drop in the desktop tab strip). */
-  reorder: (from: number, to: number) => void;
-  /**
-   * First-send id binding keyed by the row's engine — the single home for
-   * draft→real resolution. Direct keeps a chat tab (key rewrite); OpenCode
-   * swaps the draft chat tab for an agent tab (which drives TabUrlSync to
-   * the Code surface).
-   */
-  resolveDraftId: (realId: string, engine: string | null) => void;
 }
 
-interface PersistedTabs {
-  tabs: Tab[];
-  activeKey: string | undefined;
+export function chatKey(ref: string): string {
+  return `chat:${ref}`;
 }
 
-/**
- * Validates a persisted tab AND repairs the poisoned shape older builds
- * wrote (agent:<id> keys stored as kind:"chat" with ref:":<id>"). Returns
- * null for unrepairable entries (empty ref, colon-prefixed ref that maps to
- * no known prefix) so they are dropped instead of 404-looping.
- *
- * Exported pure (no store access) so the repair contract is unit-testable.
- */
-export function healTab(value: unknown): Tab | null {
-  if (typeof value !== "object" || value === null) return null;
-  const t = value as Record<string, unknown>;
-  if (typeof t.key !== "string") return null;
-  const key: string = t.key;
-  // Rebuild from the key prefix — the key is the source of truth, never the
-  // stored kind/ref (those are what got poisoned).
-  if (key.startsWith("agent:")) {
-    const ref = key.slice(6);
-    return ref.length > 0 && !ref.startsWith(":") ? { key, kind: "agent", ref } : null;
-  }
-  if (key.startsWith("chat:")) {
-    const ref = key.slice(5);
-    return ref.length > 0 && !ref.startsWith(":") ? { key, kind: "chat", ref } : null;
-  }
+export function agentKey(ref: string): string {
+  return `agent:${ref}`;
+}
+
+export function tabKey(kind: "chat" | "agent", ref: string): string {
+  return kind === "agent" ? agentKey(ref) : chatKey(ref);
+}
+
+export function parseTabKey(key: string): { kind: "chat" | "agent"; ref: string } | null {
+  if (key.startsWith("chat:")) return { kind: "chat", ref: key.slice(5) };
+  if (key.startsWith("agent:")) return { kind: "agent", ref: key.slice(6) };
   return null;
 }
 
-export const chatKey = (threadId: string): string => `chat:${threadId}`;
-export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
-
-/**
- * Fresh draft tab. The workbench never sits at zero tabs (codeg parity), so
- * closers fall back to exactly one of these instead of inventing ad-hoc
- * replacements in multiple places.
- */
-export function freshDraftTab(): Tab {
-  return { key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID };
+export function sharedTabsToTabs(sharedTabs: SharedTabRef[]): Tab[] {
+  return sharedTabs.map((t) => ({
+    key: tabKey(t.kind, t.ref),
+    kind: t.kind,
+    ref: t.ref,
+  }));
 }
 
-export function loadPersisted(): PersistedTabs {
-  const loaded = loadRaw();
-  // Workbench never sits at zero tabs (codeg parity)
-  const tabs = loaded.tabs.length > 0 ? loaded.tabs : [freshDraftTab()];
-  const activeKey = tabs.some((t) => t.key === loaded.activeKey) ? loaded.activeKey : tabs[0]?.key;
-  return { tabs, activeKey };
-}
-
-export function loadRaw(): PersistedTabs {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { tabs: [], activeKey: undefined };
-    const parsed = JSON.parse(raw) as unknown;
-    // Migrate the pre-unified shape { openIds, activeId }.
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      Array.isArray((parsed as { openIds?: unknown }).openIds)
-    ) {
-      const openIds = (parsed as { openIds: unknown[] }).openIds
-        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-        .filter((id, idx, arr) => arr.indexOf(id) === idx);
-      const tabs = openIds.map((id): Tab => ({ key: chatKey(id), kind: "chat", ref: id }));
-      const legacy = parsed as { activeId?: unknown };
-      const activeKey =
-        typeof legacy.activeId === "string" && tabs.some((t) => t.ref === legacy.activeId)
-          ? chatKey(legacy.activeId)
-          : tabs[0]?.key;
-      return { tabs, activeKey };
+/** Visible tabs for this window: shared tabs + local draft + detached active tab if needed. */
+export function visibleTabs(
+  state: Pick<ChatTabsState, "localActiveKey" | "hasLocalDraft" | "detachedRefs"> & {
+    sharedTabs?: SharedTabRef[];
+  },
+): Tab[] {
+  const shared = sharedTabsToTabs(
+    state.sharedTabs ?? usePreferencesStore.getState().snapshot?.sharedTabs ?? [],
+  );
+  const tabs: Tab[] = [];
+  if (state.hasLocalDraft) {
+    tabs.push({ key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID });
+  }
+  tabs.push(...shared);
+  const active = state.localActiveKey;
+  if (active) {
+    const parsed = parseTabKey(active);
+    if (parsed && parsed.ref !== NEW_DRAFT_TAB_ID && !tabs.some((t) => t.key === active)) {
+      tabs.push({ key: active, kind: parsed.kind, ref: parsed.ref, detached: true });
     }
-    const unifiedShape =
-      typeof parsed === "object" && parsed !== null
-        ? (parsed as { tabs?: unknown }).tabs
-        : undefined;
-    if (Array.isArray(unifiedShape)) {
-      const tabs = unifiedShape
-        .map(healTab)
-        .filter((t): t is Tab => t !== null)
-        .filter((t, idx, arr) => arr.findIndex((x) => x.key === t.key) === idx);
-      const legacy = parsed as { activeKey?: unknown };
-      const activeKey =
-        typeof legacy.activeKey === "string" && tabs.some((t) => t.key === legacy.activeKey)
-          ? legacy.activeKey
-          : tabs[0]?.key;
-      return { tabs, activeKey };
-    }
-    return { tabs: [], activeKey: undefined };
-  } catch {
-    return { tabs: [], activeKey: undefined };
   }
+  return tabs;
 }
 
-function persist(tabs: Tab[], activeKey: string | undefined): void {
-  try {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ tabs, activeKey } satisfies PersistedTabs),
-    );
-  } catch {
-    /* storage unavailable — session-only */
-  }
+export function activeTab(state: ChatTabsState): Tab | undefined {
+  const tabs = visibleTabs(state);
+  if (!state.localActiveKey) return tabs[0];
+  return tabs.find((t) => t.key === state.localActiveKey) ?? tabs[0];
 }
 
-const initial = loadPersisted();
-
-function withActive(tabs: Tab[], activeKey: string): { tabs: Tab[]; activeKey: string } {
-  const next = tabs.some((t) => t.key === activeKey) ? tabs : [...tabs, tabForKey(activeKey)];
-  persist(next, activeKey);
-  return { tabs: next, activeKey };
-}
-
-function tabForKey(key: string): Tab {
-  if (key.startsWith("agent:")) {
-    return { key, kind: "agent", ref: key.slice(6) };
-  }
-  if (key.startsWith("chat:")) {
-    return { key, kind: "chat", ref: key.slice(5) };
-  }
-  // Unknown prefix: never silently mangle (a wrong kind/colon-prefixed ref
-  // once caused 404 loops on /api/conversations/:<id>). Treat as a chat id
-  // verbatim so the failure, if any, is visible and debuggable.
-  return { key: chatKey(key), kind: "chat", ref: key };
-}
-
-/** URL a tab points at: chat tabs → thread route, agent tabs → code route. */
 export function urlForTab(tab: Tab): string {
   if (tab.kind === "agent") return ROUTES.code(tab.ref);
   return ROUTES.chat(tab.ref);
 }
 
-/**
- * Route for opening an existing conversation by engine. Pure — the single
- * home for thread-opening URL rules (sidebar, folders, scheduler all use
- * this; ChatView/OpenCodeView open the matching tab on mount). Unknown or
- * absent engine opens the Direct surface: legacy conversations predate the
- * engine column and are all Direct.
- */
 export function threadUrl(remoteId: string, engine?: string | null): string {
   return engine === "opencode" ? ROUTES.code(remoteId) : ROUTES.chat(remoteId);
 }
 
-/**
- * Conversation id from a route path, for either engine surface. Inverse of
- * `threadUrl` — the single home for path→id rules so scope UI (folder
- * highlight, breadcrumbs) works on `/code/` routes exactly as on `/chat/`.
- * Returns null for non-conversation paths (draft hosts neither axis).
- */
-export function conversationIdFromPath(pathname: string): string | null {
-  return ROUTES.parseConversationId(pathname);
-}
-
-/**
- * Phase 8 stale-navigation guard (pure). True only while the route still
- * names `ref` on either engine surface. An async completion (existence
- * validation, engine reconciliation) captured `ref` at dispatch time; by the
- * time it resolves the user may have moved on, and rewriting navigation then
- * would overwrite newer state. Callers skip the redirect and emit
- * `navigation.rejected` instead. Exact match (not prefix): a deeper path is
- * never a conversation route, and query strings never carry identity.
- */
-export function routeStillReferencesRef(pathname: string, ref: string): boolean {
-  if (ref === NEW_DRAFT_TAB_ID) {
-    return pathname === ROUTES.CHAT_NEW;
-  }
-  return ROUTES.parseConversationId(pathname) === ref;
-}
-
-/**
- * History-duplication guard (pure). Opening the already-shown conversation
- * must not push an identical entry — back/forward would otherwise step
- * through duplicates of one location. Callers navigate only when true.
- */
 export function shouldNavigateToThread(
-  currentPathname: string,
+  pathname: string,
   remoteId: string,
   engine?: string | null,
 ): boolean {
-  return currentPathname !== threadUrl(remoteId, engine);
+  return pathname !== threadUrl(remoteId, engine);
 }
 
-export const useChatTabsStore = create<ChatTabsState>((set) => ({
-  tabs: initial.tabs,
-  activeKey: initial.activeKey,
+export function routeStillReferencesRef(pathname: string, ref: string): boolean {
+  if (!ref || ref === NEW_DRAFT_TAB_ID) return pathname === ROUTES.CHAT_NEW;
+  return pathname === ROUTES.chat(ref) || pathname === ROUTES.code(ref);
+}
+
+function isSuppressed(state: ChatTabsState, conversationId: string): boolean {
+  return Boolean(state.suppressedDelayedAdds[conversationId]);
+}
+
+export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
+  localActiveKey: undefined,
+  hasLocalDraft: false,
+  detachedRefs: {},
+  membershipFailures: {},
+  suppressedDelayedAdds: {},
   groupId: DEFAULT_GROUP_ID,
-  openChat: (threadId) => {
-    logger.info("chat", "tab.open", { kind: "chat", threadId });
-    set((state) => withActive(state.tabs, chatKey(threadId)));
-  },
-  openAgent: (conversationId) => {
-    logger.info("chat", "tab.open", { kind: "agent", conversationId });
-    set((state) => withActive(state.tabs, agentKey(conversationId)));
+
+  presentChat: (threadId) => {
+    const key = chatKey(threadId);
+    set(() => {
+      const next: Partial<ChatTabsState> = { localActiveKey: key };
+      if (threadId === NEW_DRAFT_TAB_ID) next.hasLocalDraft = true;
+      return next;
+    });
   },
 
-  close: (key) =>
-    set((state) => {
-      const remaining = state.tabs.filter((t) => t.key !== key);
-      // Never sit at zero tabs: closing the last one opens a fresh draft
-      // (codeg parity — the workbench always has a conversation to type in).
-      const tabs = remaining.length === 0 ? [freshDraftTab()] : remaining;
-      // Canonical close behavior: the right neighbor takes over (browser tab
-      // convention), falling back to the fresh draft. Single rule, no ad-hoc
-      // fallbacks scattered across closers.
-      const activeKey =
-        state.activeKey === key
-          ? (nextActiveAfterClose(state.tabs, key) ?? tabs[0]?.key)
-          : state.activeKey;
-      if (state.activeKey === key) {
-        logger.info("chat", "tab.close", { tabKey: key, nextActiveKey: activeKey });
-      } else {
-        logger.info("chat", "tab.close", { tabKey: key });
-      }
-      persist(tabs, activeKey);
-      return { tabs, activeKey };
-    }),
-  closeByRef: (ref) =>
-    set((state) => {
-      const removed = state.tabs.filter((t) => t.ref === ref);
-      const remaining = state.tabs.filter((t) => t.ref !== ref);
-      const tabs = remaining.length === 0 ? [freshDraftTab()] : remaining;
-      const activeGone = !tabs.some((t) => t.key === state.activeKey);
-      // Same right-neighbor rule as `close` (never a second fallback rule):
-      // the candidate from the shared helper wins when it survived, otherwise
-      // the last remaining tab. Deletion and close always agree on the next
-      // active tab, so TabUrlSync has one deterministic URL to follow.
-      const candidate =
-        state.activeKey !== undefined
-          ? nextActiveAfterClose(state.tabs, state.activeKey)
-          : undefined;
-      const activeKey = activeGone
-        ? candidate && tabs.some((t) => t.key === candidate)
-          ? candidate
-          : tabs[tabs.length - 1]?.key
-        : state.activeKey;
-      logger.info("chat", "tab.close", {
-        conversationId: ref,
-        closedCount: removed.length,
-        nextActiveKey: activeKey,
-      });
-      persist(tabs, activeKey);
-      return { tabs, activeKey };
-    }),
-  setActive: (key) => {
-    // Idempotent: re-selecting the active tab is a no-op for history (the
-    // caller skips navigation), but still recorded so activation is traceable.
-    if (useChatTabsStore.getState().activeKey !== key) {
-      logger.info("chat", "tab.activate", { tabKey: key });
-    }
-    set((state) => withActive(state.tabs, key));
+  presentAgent: (conversationId) => {
+    set({ localActiveKey: agentKey(conversationId) });
   },
-  reorder: (from, to) =>
-    set((state) => {
-      if (
-        from < 0 ||
-        to < 0 ||
-        from >= state.tabs.length ||
-        to >= state.tabs.length ||
-        from === to
-      ) {
-        return state;
-      }
-      const tabs = state.tabs.slice();
-      const [moved] = tabs.splice(from, 1);
-      tabs.splice(to, 0, moved);
-      persist(tabs, state.activeKey);
-      return { tabs };
-    }),
-  resolveDraftId: (realId, engine) =>
-    set((state) => {
-      const draftKey = chatKey(NEW_DRAFT_TAB_ID);
-      if (engine === "opencode") {
-        const nextKey = agentKey(realId);
-        const tabs = state.tabs
-          .filter((t) => t.key !== draftKey)
-          .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
-        const next = tabs.some((t) => t.key === nextKey) ? tabs : [...tabs, tabForKey(nextKey)];
-        logger.info("chat", "conversation.draft_resolved", {
-          conversationId: realId,
-          engine: "opencode",
-        });
-        persist(next, nextKey);
-        return { tabs: next, activeKey: nextKey };
-      }
-      const newKey = chatKey(realId);
-      const tabs = state.tabs
-        .map((t) => (t.key === draftKey ? { ...t, key: newKey, ref: realId } : t))
-        .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
-      const nextActiveKey = state.activeKey === draftKey ? newKey : state.activeKey;
-      logger.info("chat", "conversation.draft_resolved", {
-        conversationId: realId,
-        engine: "direct",
+
+  selectLocal: (key) => set({ localActiveKey: key }),
+
+  openNewDraft: () => set({ hasLocalDraft: true, localActiveKey: chatKey(NEW_DRAFT_TAB_ID) }),
+
+  resolveDraftId: (id, engine) => {
+    const key = engine === "opencode" ? agentKey(id) : chatKey(id);
+    set((s) => ({
+      hasLocalDraft: false,
+      localActiveKey: s.localActiveKey === chatKey(NEW_DRAFT_TAB_ID) ? key : s.localActiveKey,
+    }));
+  },
+
+  requestSharedClose: async (conversationId) => {
+    set((s) => ({
+      suppressedDelayedAdds: { ...s.suppressedDelayedAdds, [conversationId]: Date.now() },
+    }));
+    const keyChat = chatKey(conversationId);
+    const keyAgent = agentKey(conversationId);
+    const wasActive = get().localActiveKey === keyChat || get().localActiveKey === keyAgent;
+    const sharedBefore = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+    const closedIndex = sharedBefore.findIndex((t) => t.ref === conversationId);
+    try {
+      await usePreferencesStore.getState().closeSharedTab(conversationId);
+    } catch (err) {
+      logger.debug("chat", "shared_tab_close_failed", {
+        conversationId,
+        errorType: err instanceof Error ? err.name : typeof err,
       });
-      persist(tabs, nextActiveKey);
-      return { tabs, activeKey: nextActiveKey };
+      return;
+    }
+    if (wasActive) {
+      // Local close behavior: select right neighbor (or last), else fresh local draft.
+      const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+      const remaining = shared.filter((t) => t.ref !== conversationId);
+      if (remaining.length > 0) {
+        const nextIndex = Math.min(Math.max(closedIndex, 0), remaining.length - 1);
+        const next = remaining[nextIndex] ?? remaining[remaining.length - 1]!;
+        set({ localActiveKey: tabKey(next.kind, next.ref) });
+      } else {
+        set({ hasLocalDraft: true, localActiveKey: chatKey(NEW_DRAFT_TAB_ID) });
+      }
+    }
+  },
+
+  requestSharedCloseBatch: async (input) => {
+    try {
+      await usePreferencesStore.getState().closeSharedTabsBatch(input);
+    } catch (err) {
+      logger.debug("chat", "shared_tab_close_batch_failed", {
+        mode: input.mode,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+      return;
+    }
+    const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+    const active = get().localActiveKey;
+    const parsed = active ? parseTabKey(active) : null;
+    const activeRef = parsed?.ref;
+    const stillMember = activeRef ? shared.some((t) => t.ref === activeRef) : false;
+    if (activeRef && activeRef !== NEW_DRAFT_TAB_ID && !stillMember) {
+      // If this window was viewing an affected conversation, it becomes detached (preserve route/view).
+      if (
+        input.mode === "all" ||
+        (input.anchorConversationId && input.anchorConversationId !== activeRef)
+      ) {
+        set((s) => ({ detachedRefs: { ...s.detachedRefs, [activeRef]: true } }));
+      } else if (input.anchorConversationId === activeRef && input.mode === "others") {
+        // kept
+      } else if (shared[0]) {
+        set({ localActiveKey: tabKey(shared[0].kind, shared[0].ref) });
+      } else {
+        set({ hasLocalDraft: true, localActiveKey: chatKey(NEW_DRAFT_TAB_ID) });
+      }
+    }
+  },
+
+  requestSharedReorder: async (conversationId, toIndex) => {
+    try {
+      await usePreferencesStore.getState().reorderSharedTab(conversationId, toIndex);
+    } catch (err) {
+      logger.debug("chat", "shared_tab_reorder_failed", {
+        conversationId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+    }
+  },
+
+  requestSharedOpen: async (conversationId, kind) => {
+    set((s) => {
+      const next = { ...s.suppressedDelayedAdds };
+      delete next[conversationId];
+      return { suppressedDelayedAdds: next };
+    });
+    try {
+      await usePreferencesStore.getState().openSharedTab(conversationId, kind);
+    } catch (err) {
+      if (err instanceof PreferencesConflictError) {
+        // Stale 409: authoritative snapshot applied by store; no auto-retry.
+        // Select locally; conversation remains accessible (may be detached).
+        set({ localActiveKey: tabKey(kind, conversationId) });
+        return;
+      }
+      set({ localActiveKey: tabKey(kind, conversationId) });
+      set((s) => ({
+        membershipFailures: {
+          ...s.membershipFailures,
+          [conversationId]: {
+            message: err instanceof Error ? err.message : "Failed to add to shared workspace",
+            at: Date.now(),
+          },
+        },
+      }));
+      return;
+    }
+    set((s) => {
+      const next = { ...s.detachedRefs };
+      delete next[conversationId];
+      const failures = { ...s.membershipFailures };
+      delete failures[conversationId];
+      return {
+        detachedRefs: next,
+        localActiveKey: tabKey(kind, conversationId),
+        membershipFailures: failures,
+      };
+    });
+  },
+
+  requestDelayedSharedOpen: (conversationId, kind) => {
+    void (async () => {
+      if (isSuppressed(get(), conversationId)) return;
+      try {
+        await usePreferencesStore.getState().openSharedTab(conversationId, kind);
+        if (isSuppressed(get(), conversationId)) {
+          // User explicitly closed before/around commit; preserve close.
+          try {
+            await usePreferencesStore.getState().closeSharedTab(conversationId);
+          } catch {
+            await usePreferencesStore.getState().refresh();
+          }
+          return;
+        }
+        set((s) => {
+          const failures = { ...s.membershipFailures };
+          delete failures[conversationId];
+          const detached = { ...s.detachedRefs };
+          delete detached[conversationId];
+          return { membershipFailures: failures, detachedRefs: detached };
+        });
+      } catch (err) {
+        if (err instanceof PreferencesConflictError) {
+          // Stale 409 from delayed add: MUST NOT auto-retry with fresh revision.
+          // Refresh authoritative state, preserve close, require explicit action.
+          await usePreferencesStore.getState().refresh();
+          if (isSuppressed(get(), conversationId)) return;
+          set((s) => ({
+            membershipFailures: {
+              ...s.membershipFailures,
+              [conversationId]: {
+                message:
+                  "Workspace changed. Retry adding to shared workspace if you still want it open.",
+                at: Date.now(),
+              },
+            },
+          }));
+          return;
+        }
+        if (isSuppressed(get(), conversationId)) return;
+        set((s) => ({
+          membershipFailures: {
+            ...s.membershipFailures,
+            [conversationId]: {
+              message: err instanceof Error ? err.message : "Failed to add to shared workspace",
+              at: Date.now(),
+            },
+          },
+        }));
+      }
+    })();
+  },
+
+  retrySharedOpen: async (conversationId, kind) => {
+    set((s) => {
+      const next = { ...s.suppressedDelayedAdds };
+      delete next[conversationId];
+      return { suppressedDelayedAdds: next };
+    });
+    try {
+      await usePreferencesStore.getState().openSharedTab(conversationId, kind);
+      set((s) => {
+        const failures = { ...s.membershipFailures };
+        delete failures[conversationId];
+        const detached = { ...s.detachedRefs };
+        delete detached[conversationId];
+        return {
+          membershipFailures: failures,
+          detachedRefs: detached,
+          localActiveKey: tabKey(kind, conversationId),
+        };
+      });
+    } catch (err) {
+      if (err instanceof PreferencesConflictError) {
+        await usePreferencesStore.getState().refresh();
+      }
+      set((s) => ({
+        membershipFailures: {
+          ...s.membershipFailures,
+          [conversationId]: {
+            message: err instanceof Error ? err.message : "Failed to add to shared workspace",
+            at: Date.now(),
+          },
+        },
+      }));
+    }
+  },
+
+  clearMembershipFailure: (conversationId) =>
+    set((s) => {
+      const failures = { ...s.membershipFailures };
+      delete failures[conversationId];
+      return { membershipFailures: failures };
     }),
+
+  markDetached: (conversationId) =>
+    set((s) => ({ detachedRefs: { ...s.detachedRefs, [conversationId]: true } })),
+
+  clearDetached: (conversationId) =>
+    set((s) => {
+      const detached = { ...s.detachedRefs };
+      delete detached[conversationId];
+      return { detachedRefs: detached };
+    }),
+
+  closeLocal: (key) => {
+    const parsed = parseTabKey(key);
+    set((s) => {
+      const next: Partial<ChatTabsState> = {};
+      if (key === chatKey(NEW_DRAFT_TAB_ID)) next.hasLocalDraft = false;
+      if (parsed && parsed.ref !== NEW_DRAFT_TAB_ID) {
+        const detached = { ...s.detachedRefs };
+        delete detached[parsed.ref];
+        next.detachedRefs = detached;
+      }
+      if (s.localActiveKey === key) {
+        const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+        if (shared[0]) next.localActiveKey = tabKey(shared[0].kind, shared[0].ref);
+        else next.localActiveKey = undefined;
+      }
+      return next;
+    });
+  },
+
+  openChat: (threadId) => get().presentChat(threadId),
+  openAgent: (conversationId) => get().presentAgent(conversationId),
+  close: (key) => {
+    if (key === chatKey(NEW_DRAFT_TAB_ID)) {
+      get().closeLocal(key);
+      return;
+    }
+    const parsed = parseTabKey(key);
+    if (!parsed) return;
+    void get().requestSharedClose(parsed.ref);
+  },
 }));
 
-/** Active tab object (not just the key) for views that need kind/ref. */
-export function activeTab(state: ChatTabsState): Tab | undefined {
-  return state.tabs.find((t) => t.key === state.activeKey);
-}
-
-// Canonical concurrent-tab rule: each browser tab owns its in-memory state;
-// the persisted mirror is the convergence bus, never a second authority.
-// Storage events fire only in tabs OTHER than the writer, so converging to
-// the latest write cannot loop. A tab that deletes converges its peers to
-// the deleted state (loadPersisted heals the same way boot does); truly
-// simultaneous edits resolve last-writer-wins, identical to today.
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
-    if (e.key !== STORAGE_KEY) return;
-    const next = loadPersisted();
-    const current = useChatTabsStore.getState();
-    const same =
-      current.activeKey === next.activeKey &&
-      current.tabs.length === next.tabs.length &&
-      current.tabs.every((t, i) => t.key === next.tabs[i]?.key);
-    if (!same) useChatTabsStore.setState({ tabs: next.tabs, activeKey: next.activeKey });
-  });
-}
-
-/** Key to activate after closing `closedKey` (right neighbor preferred). */
-export function nextActiveAfterClose(tabs: Tab[], closedKey: string): string | undefined {
-  const remaining = tabs.filter((t) => t.key !== closedKey);
-  if (remaining.length === 0) return undefined;
-  const closedIndex = tabs.findIndex((t) => t.key === closedKey);
-  return remaining[Math.min(Math.max(closedIndex, 0), remaining.length - 1)]?.key;
+/** Path→conversation id extraction (compatibility). */
+export function conversationIdFromPath(pathname: string): string | null {
+  return ROUTES.parseConversationId(pathname);
 }

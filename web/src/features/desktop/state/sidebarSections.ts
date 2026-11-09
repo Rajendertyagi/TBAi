@@ -6,8 +6,7 @@ import {
 
 /**
  * Pure sidebar section-order logic (no storage, no JSX, no runtime).
- * Unit-testable; the store and components consume these so ordering rules live
- * in one place.
+ * Strict semantics must match backend (docs/2026-11-08-preferences-architecture-review.md).
  */
 
 function isSectionId(value: unknown): value is SidebarSectionId {
@@ -15,17 +14,27 @@ function isSectionId(value: unknown): value is SidebarSectionId {
 }
 
 /**
- * Coerce an arbitrary persisted value into a full, duplicate-free permutation
- * of the known section ids. Unknown entries and repeats are dropped; sections
- * the value omits are appended in default order so a newly added section
- * appears instead of vanishing for existing users.
+ * Strict sectionOrder normalization (backend/frontend parity).
+ * - missing/undefined/null/[] => effective default order
+ * - valid known IDs => dedupe (first occurrence), append missing in default order
+ * - non-array / invalid element types / unknown IDs => throws
  */
 export function normalizeSectionOrder(value: unknown): readonly SidebarSectionId[] {
-  if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER;
+  if (value === undefined || value === null) return DEFAULT_SECTION_ORDER;
+  if (!Array.isArray(value)) {
+    throw new Error("sectionOrder must be an array");
+  }
+  if (value.length === 0) return DEFAULT_SECTION_ORDER;
   const seen = new Set<SidebarSectionId>();
   const out: SidebarSectionId[] = [];
   for (const entry of value) {
-    if (!isSectionId(entry) || seen.has(entry)) continue;
+    if (typeof entry !== "string") {
+      throw new Error("sectionOrder elements must be strings");
+    }
+    if (!isSectionId(entry)) {
+      throw new Error(`sectionOrder contains unknown section id: ${entry}`);
+    }
+    if (seen.has(entry)) continue;
     seen.add(entry);
     out.push(entry);
   }
@@ -33,6 +42,15 @@ export function normalizeSectionOrder(value: unknown): readonly SidebarSectionId
     if (!seen.has(id)) out.push(id);
   }
   return out;
+}
+
+/** Lenient normalizer for non-authoritative/local contexts (never for snapshot validation). */
+export function normalizeSectionOrderLenient(value: unknown): readonly SidebarSectionId[] {
+  try {
+    return normalizeSectionOrder(value);
+  } catch {
+    return DEFAULT_SECTION_ORDER;
+  }
 }
 
 /**

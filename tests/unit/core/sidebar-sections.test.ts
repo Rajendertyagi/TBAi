@@ -25,26 +25,27 @@ import {
   normalizeSectionOrder,
 } from "@web/features/desktop/state/sidebarSections";
 
-describe("normalizeSectionOrder", () => {
-  it("passes a full permutation through", () => {
-    // Archived is a rail surface (not a sidebar section) — only folders/chats
-    // are known sidebar section ids, so an "archived" entry is dropped.
-    expect(normalizeSectionOrder(["chats", "archived", "folders"])).toEqual(["chats", "folders"]);
+describe("normalizeSectionOrder (strict, backend/frontend parity)", () => {
+  it("passes a valid permutation through and dedupes", () => {
+    expect(normalizeSectionOrder(["chats", "folders"])).toEqual(["chats", "folders"]);
+    expect(normalizeSectionOrder(["folders", "folders", "chats"])).toEqual(["folders", "chats"]);
   });
 
-  it("drops unknowns and repeats, appends missing in default order", () => {
-    // `recent` is retired: unknown to `SIDEBAR_SECTION_IDS`, therefore dropped
-    // rather than re-appended.
-    expect(normalizeSectionOrder(["recent", "nope", "recent", "chats"])).toEqual([
-      "chats",
-      "folders",
-    ]);
+  it("appends missing known sections in default order", () => {
+    expect(normalizeSectionOrder(["chats"])).toEqual(["chats", "folders"]);
   });
 
-  it("falls back to default for absent or corrupt values", () => {
+  it("returns default for absent or empty values", () => {
     expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats"]);
-    expect(normalizeSectionOrder("chats-first")).toEqual(["folders", "chats"]);
     expect(normalizeSectionOrder(null)).toEqual(["folders", "chats"]);
+    expect(normalizeSectionOrder([])).toEqual(["folders", "chats"]);
+  });
+
+  it("throws for corrupt values and unknown IDs (no silent repair)", () => {
+    expect(() => normalizeSectionOrder("chats-first")).toThrow();
+    expect(() => normalizeSectionOrder([1, 2])).toThrow();
+    expect(() => normalizeSectionOrder(["recent", "chats"])).toThrow();
+    expect(() => normalizeSectionOrder(["chats", "archived", "folders"])).toThrow();
   });
 });
 

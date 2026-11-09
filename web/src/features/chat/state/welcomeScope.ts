@@ -2,11 +2,11 @@ import { create } from "zustand";
 import {
   DEFAULT_QUICK_ACTION_TAB,
   isQuickActionTabId,
-  welcomeConfig,
   type QuickActionTabId,
 } from "@/config/welcome";
 import type { WorkspaceMode } from "@/types";
 import { logger } from "@/lib/logger";
+import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 
 export interface WelcomeScope {
   mode: WorkspaceMode;
@@ -22,62 +22,16 @@ interface WelcomeScopeState {
   validateAgainstFolderIds: (liveIds: readonly string[]) => void;
 }
 
-function loadScope(): WelcomeScope {
-  const fallback: WelcomeScope = { mode: "simple", folderId: null };
-  try {
-    const raw = window.localStorage.getItem(welcomeConfig.storage.scopeKey);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as Partial<WelcomeScope>;
-    if (
-      parsed.mode === "project" &&
-      typeof parsed.folderId === "string" &&
-      parsed.folderId.length > 0
-    ) {
-      return { mode: "project", folderId: parsed.folderId };
-    }
-    return fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function loadTab(): QuickActionTabId {
-  try {
-    const raw = window.localStorage.getItem(welcomeConfig.storage.tabKey);
-    return isQuickActionTabId(raw) ? raw : DEFAULT_QUICK_ACTION_TAB;
-  } catch {
-    return DEFAULT_QUICK_ACTION_TAB;
-  }
-}
-
-function persistScope(scope: WelcomeScope): void {
-  try {
-    window.localStorage.setItem(welcomeConfig.storage.scopeKey, JSON.stringify(scope));
-  } catch {
-    /* storage unavailable — session-only */
-  }
-}
-
-function persistTab(tab: QuickActionTabId): void {
-  try {
-    window.localStorage.setItem(welcomeConfig.storage.tabKey, tab);
-  } catch {
-    /* ignore */
-  }
-}
-
 export const useWelcomeScopeStore = create<WelcomeScopeState>((set) => ({
-  scope: loadScope(),
-  quickActionTab: loadTab(),
+  // Defaults before hydration; SQLite authoritative state applied by usePreferencesSync.
+  scope: { mode: "simple", folderId: null },
+  quickActionTab: DEFAULT_QUICK_ACTION_TAB,
   setScope: (scope) => {
     const next: WelcomeScope =
       scope.mode === "project" && scope.folderId
         ? { mode: "project", folderId: scope.folderId }
         : { mode: "simple", folderId: null };
     const prev = useWelcomeScopeStore.getState().scope;
-    // Lifecycle record on actual transitions only (steady re-selection is
-    // noise): the draft scope is UI state, and binding is what a later
-    // materialization will attach the conversation to.
     if (prev.mode !== next.mode || prev.folderId !== next.folderId) {
       if (next.mode === "project" && next.folderId) {
         logger.info("folders.ui", "workspace.bind", {
@@ -89,28 +43,23 @@ export const useWelcomeScopeStore = create<WelcomeScopeState>((set) => ({
         });
       }
     }
-    persistScope(next);
     set({ scope: next });
+    void usePreferencesStore
+      .getState()
+      .patchPreferences({ welcome: { scopeMode: next.mode, folderId: next.folderId } })
+      .catch(() => {});
   },
   setQuickActionTab: (tab) => {
-    persistTab(tab);
-    set({ quickActionTab: tab });
+    const next = isQuickActionTabId(tab) ? tab : DEFAULT_QUICK_ACTION_TAB;
+    set({ quickActionTab: next });
+    void usePreferencesStore
+      .getState()
+      .patchPreferences({ welcome: { quickActionTab: next } })
+      .catch(() => {});
   },
-  validateAgainstFolderIds: (liveIds) =>
-    set((state) => {
-      if (state.scope.mode !== "project" || !state.scope.folderId) return state;
-      if (liveIds.includes(state.scope.folderId)) return state;
-      // A pruned preset is a real lifecycle transition (the draft loses its
-      // project binding), so it is recorded rather than happening silently.
-      logger.info("folders.ui", "workspace.unbind", {
-        from: "project",
-        reason: "folder_not_registered",
-        workspaceId: state.scope.folderId,
-      });
-      const next: WelcomeScope = { mode: "simple", folderId: null };
-      persistScope(next);
-      return { scope: next };
-    }),
+  validateAgainstFolderIds: (_liveIds) => {
+    // Soft reference: preserve missing folder IDs.
+  },
 }));
 
 /** Snapshot for non-React callers (adapter initialize). */

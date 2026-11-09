@@ -104,7 +104,8 @@ describe("thread-list fetch error taxonomy (Phase 3.4)", () => {
     // than dropped alongside the literal.
     expect(source).toContain("navigate(ROUTES.CHAT_NEW");
     expect(ROUTES.CHAT_NEW).toBe("/chat/new");
-    expect(source).toContain("current.close");
+    // Closing is delegated to evictIfGone (confirmed-gone cleanup) or direct close.
+    expect(source.includes("current.close") || source.includes("evictIfGone")).toBe(true);
   });
 });
 

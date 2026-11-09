@@ -17,14 +17,8 @@ describe("welcome config — no hardcoded UI values", () => {
   });
 });
 
-describe("welcome scope store — durable folder selection", () => {
+describe("welcome scope store — canonical (SQLite authoritative, soft folder refs)", () => {
   beforeEach(() => {
-    try {
-      window.localStorage.removeItem(welcomeConfig.storage.scopeKey);
-      window.localStorage.removeItem(welcomeConfig.storage.tabKey);
-    } catch {
-      /* ignore */
-    }
     useWelcomeScopeStore.setState({
       scope: { mode: "simple", folderId: null },
       quickActionTab: "coding",
@@ -43,12 +37,12 @@ describe("welcome scope store — durable folder selection", () => {
     expect(useWelcomeScopeStore.getState().scope.mode).toBe("simple");
   });
 
-  it("drops a folder that no longer exists (deleted-folder edge)", () => {
+  it("preserves a missing folder ID as a soft reference (no silent substitution)", () => {
     useWelcomeScopeStore.getState().setScope({ mode: "project", folderId: "gone" });
     useWelcomeScopeStore.getState().validateAgainstFolderIds(["kept"]);
     expect(useWelcomeScopeStore.getState().scope).toEqual({
-      mode: "simple",
-      folderId: null,
+      mode: "project",
+      folderId: "gone",
     });
   });
 
@@ -59,5 +53,13 @@ describe("welcome scope store — durable folder selection", () => {
       mode: "project",
       folderId: "kept",
     });
+  });
+
+  it("does not use localStorage as authority", async () => {
+    const src = await Bun.file(
+      new URL("../../../../web/src/features/chat/state/welcomeScope.ts", import.meta.url),
+    ).text();
+    expect(src).not.toContain("tbai:welcome-scope");
+    expect(src).not.toContain("localStorage");
   });
 });

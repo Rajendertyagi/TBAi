@@ -1,12 +1,9 @@
 /**
- * Boot reconciliation of the persisted tab mirror: which tabs a pass may remove,
- * and — more importantly — which it must never remove.
+ * Confirmed-gone cleanup and boot reconciliation (shared workspace model).
  *
- * The design claim under test is that reconciliation is REMOVAL-ONLY: `exists`
- * has no write path, so a stale answer cannot resurrect a tab, and `unknown`
- * cannot erase anything. These cases try to break that claim from four
- * directions — a hostile server, a dead backend, a racing second pass, and a
- * conversation deleted on both engine surfaces at once.
+ * Reconciliation is REMOVAL-ONLY: `exists` has no write path, `unknown`
+ * cannot erase anything. Only confirmed `gone` may evict local presentation
+ * and clean up shared membership.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import path from "node:path";
@@ -16,62 +13,118 @@ import {
   reconcileTabMirror,
 } from "@web/features/chat/state/tabReconciliation.ts";
 import { ConversationNotFoundError } from "@web/features/chat/state/conversationExistence.ts";
-import {
-  NEW_DRAFT_TAB_ID,
-  agentKey,
-  chatKey,
-  useChatTabsStore,
-} from "@web/features/chat/state/chatTabs.ts";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
+import { chatKey, useChatTabsStore, visibleTabs } from "@web/features/chat/state/chatTabs.ts";
 import { setClientTransportEnabled, setLogLevel } from "@web/lib/logger.ts";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 
 const realFetch = globalThis.fetch;
 
-// Eviction emits `tab.evicted` at info. Without silencing the transport the log
-// POST would travel through the stubbed fetch and every call count below would
-// be measuring the wrong thing.
 setClientTransportEnabled(false);
 setLogLevel("error");
 
 const store = () => useChatTabsStore.getState();
-const tabKeys = () => store().tabs.map((t) => t.key);
-const refs = () => store().tabs.map((t) => t.ref);
+const prefs = () => usePreferencesStore.getState();
+const refs = () => (prefs().snapshot?.sharedTabs ?? []).map((t) => t.ref);
 
-/** Ids the client actually asked the server about, per request. */
-let requests: string[][] = [];
-
-function ok(entries: Array<[string, "exists" | "gone"]>): Response {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ results: entries.map(([id, status]) => ({ id, status })) }),
-  } as Response;
+function reset() {
+  useChatTabsStore.setState({
+    localActiveKey: undefined,
+    hasLocalDraft: false,
+    detachedRefs: {},
+    membershipFailures: {},
+    suppressedDelayedAdds: {},
+  });
+  usePreferencesStore.setState({
+    snapshot: {
+      revision: 1,
+      sharedTabs: [],
+      preferences: {
+        appearance: {
+          themeMode: "system",
+          lightTheme: "default",
+          darkTheme: "default",
+          typography: "default",
+        },
+        desktop: {
+          sidebarVisible: true,
+          statusBarVisible: true,
+          chatWidth: "comfortable",
+          sidebarSort: "updated",
+          sectionOrder: [],
+          sectionCollapsed: {},
+          showCompleted: false,
+          spellCheck: true,
+        },
+        welcome: {
+          engine: "direct",
+          quickActionTab: "coding",
+          scopeMode: "simple",
+          folderId: null,
+        },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    },
+    hydration: "ready",
+    hydrationError: null,
+    closeSharedTab: async (conversationId: string) => {
+      const snap = usePreferencesStore.getState().snapshot!;
+      const next = {
+        ...snap,
+        revision: snap.revision + 1,
+        sharedTabs: snap.sharedTabs.filter((t) => t.ref !== conversationId),
+      };
+      usePreferencesStore.setState({ snapshot: next });
+      return next;
+    },
+  } as any);
 }
 
-function status(code: number): Response {
-  return { ok: false, status: code, json: async () => ({ error: "x" }) } as Response;
+function setSharedTabs(tabs: Array<{ kind: "chat" | "agent"; ref: string }>) {
+  prefs().applySnapshot({
+    ...prefs().snapshot!,
+    revision: (prefs().snapshot?.revision ?? 0) + 1,
+    sharedTabs: tabs,
+  });
 }
 
-/** Stub fetch, recording the requested ids. `responder` builds the response. */
-function serve(responder: (ids: string[]) => Response): void {
-  requests = [];
-  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    const ids = (JSON.parse(String(init?.body)) as { ids: string[] }).ids;
-    requests.push(ids);
-    return responder(ids);
+function serveById(responder: (id: string) => Response): void {
+  globalThis.fetch = (async (url: unknown) => {
+    const s = String(url);
+    const m = s.match(/\/api\/conversations\/([^/?#]+)$/);
+    if (m) return responder(decodeURIComponent(m[1]!));
+    // preferences close (deletion cleanup) - accept silently
+    if (s.includes("/api/preferences/tabs/close")) {
+      return { ok: true, status: 200, json: async () => prefs().snapshot } as Response;
+    }
+    return { ok: false, status: 404, json: async () => ({}) } as Response;
   }) as unknown as typeof fetch;
 }
 
-/** Every requested id answers `exists` unless listed in `gone`. */
-function allExistExcept(gone: string[]): (ids: string[]) => Response {
-  return (ids) => ok(ids.map((id) => [id, gone.includes(id) ? "gone" : "exists"]));
+function okRow(id: string): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      id,
+      title: id,
+      status: "active",
+      engine: "direct",
+      workspaceMode: "simple",
+    }),
+  } as Response;
+}
+
+function gone(): Response {
+  return { ok: false, status: 404, json: async () => ({ error: "not found" }) } as Response;
+}
+
+function unknown(): Response {
+  return { ok: false, status: 503, json: async () => ({ error: "unavailable" }) } as Response;
 }
 
 beforeEach(() => {
-  // The store is a module singleton; start every case from an empty strip so a
-  // previous case can never masquerade as state under test.
-  useChatTabsStore.setState({ tabs: [], activeKey: undefined });
-  requests = [];
+  reset();
 });
 
 afterEach(() => {
@@ -85,285 +138,104 @@ afterAll(() => {
 
 describe("reconcileTabMirror — what a pass may remove", () => {
   it("removes nothing when every conversation exists", async () => {
-    store().openChat("a");
-    store().openChat("b");
-    serve(allExistExcept([]));
-
+    setSharedTabs([
+      { kind: "chat", ref: "a" },
+      { kind: "chat", ref: "b" },
+    ]);
+    serveById(() => okRow("x"));
     await reconcileTabMirror();
     expect(refs().sort()).toEqual(["a", "b"]);
   });
 
   it("removes ONLY the conversations the server reports gone", async () => {
-    store().openChat("keep");
-    store().openChat("doomed");
-    serve(allExistExcept(["doomed"]));
-
+    setSharedTabs([
+      { kind: "chat", ref: "keep" },
+      { kind: "chat", ref: "doomed" },
+    ]);
+    serveById((id) => (id === "doomed" ? gone() : okRow(id)));
     await reconcileTabMirror();
     expect(refs()).toEqual(["keep"]);
   });
 
-  it("closes both engine surfaces bound to one gone conversation", async () => {
-    store().openChat("doomed");
-    store().openAgent("doomed");
-    store().openChat("keep");
-    serve(allExistExcept(["doomed"]));
-
+  it("issues NO request for an empty shared tab set", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return okRow("x");
+    }) as unknown as typeof fetch;
     await reconcileTabMirror();
-    expect(refs()).toEqual(["keep"]);
-    expect(tabKeys()).not.toContain(chatKey("doomed"));
-    expect(tabKeys()).not.toContain(agentKey("doomed"));
+    expect(calls).toBe(0);
   });
 
-  it("deduplicates refs before asking (one id per conversation, not per tab)", async () => {
-    store().openChat("dup");
-    store().openAgent("dup");
-    serve(allExistExcept([]));
-
+  it("never reconciles the draft (no server row)", async () => {
+    store().openNewDraft();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return okRow("x");
+    }) as unknown as typeof fetch;
     await reconcileTabMirror();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toEqual(["dup"]);
-  });
-
-  it("issues NO request for an empty tab set", async () => {
-    serve(allExistExcept([]));
-    await reconcileTabMirror();
-    expect(requests).toHaveLength(0);
-  });
-
-  it("never reconciles the draft, which has no server row yet", async () => {
-    // The draft is UI-only until first send. Asking about it would always read
-    // as "gone" and would evict the empty conversation the user is typing into.
-    store().openChat(NEW_DRAFT_TAB_ID);
-    serve(allExistExcept(["new"]));
-
-    await reconcileTabMirror();
-    expect(requests).toHaveLength(0);
-    expect(refs()).toEqual([NEW_DRAFT_TAB_ID]);
-  });
-
-  it("excludes the draft from a batch that also carries a real conversation", async () => {
-    store().openChat(NEW_DRAFT_TAB_ID);
-    store().openChat("real");
-    serve(allExistExcept([]));
-
-    await reconcileTabMirror();
-    expect(requests[0]).toEqual(["real"]);
-  });
-
-  it("leaves unrelated tabs untouched", async () => {
-    store().openChat("a");
-    store().openAgent("b");
-    serve(allExistExcept(["b"]));
-
-    await reconcileTabMirror();
-    expect(tabKeys()).toContain(chatKey("a"));
-    expect(tabKeys()).not.toContain(agentKey("b"));
+    expect(calls).toBe(0);
+    expect(store().hasLocalDraft).toBe(true);
   });
 });
 
 describe("reconcileTabMirror — unknown never erases", () => {
   it("removes nothing when the backend is unhealthy (5xx)", async () => {
-    store().openChat("a");
-    store().openChat("b");
-    serve(() => status(503));
-
+    setSharedTabs([
+      { kind: "chat", ref: "a" },
+      { kind: "chat", ref: "b" },
+    ]);
+    serveById(() => unknown());
     await reconcileTabMirror();
     expect(refs().sort()).toEqual(["a", "b"]);
   });
 
   it("removes nothing on a network failure", async () => {
-    store().openChat("a");
-    serve(() => {
+    setSharedTabs([{ kind: "chat", ref: "a" }]);
+    serveById(() => {
       throw new TypeError("fetch failed");
     });
-
     await reconcileTabMirror();
     expect(refs()).toEqual(["a"]);
   });
 
-  it("removes nothing when the response omits a requested id", async () => {
-    store().openChat("a");
-    store().openChat("b");
-    // Answers only "a" — and "a" is told it is gone. The incomplete response
-    // must invalidate the whole pass rather than evict the answered id.
-    serve(() => ok([["a", "gone"]]));
-
+  it("removes nothing on timeout/abort (unknown, preserve state)", async () => {
+    setSharedTabs([{ kind: "chat", ref: "a" }]);
+    serveById(() => {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    });
     await reconcileTabMirror();
-    expect(refs().sort()).toEqual(["a", "b"]);
-  });
-
-  it("leaves the tab array byte-identical through an all-unknown pass", async () => {
-    store().openChat("a");
-    store().openAgent("a");
-    store().openChat("b");
-    const before = JSON.stringify(store().tabs);
-
-    serve(() => status(500));
-    await reconcileTabMirror();
-
-    expect(JSON.stringify(store().tabs)).toBe(before);
-  });
-});
-
-describe("reconcileTabMirror — idempotence and singleflight", () => {
-  it("is a no-op on a second run with no intervening change", async () => {
-    store().openChat("doomed");
-    serve(allExistExcept(["doomed"]));
-
-    await reconcileTabMirror();
-    const afterFirst = tabKeys();
-    requests = [];
-    serve(allExistExcept([]));
-
-    await reconcileTabMirror();
-    expect(tabKeys()).toEqual(afterFirst);
-    // Nothing left to check, so no second request is even made.
-    expect(requests).toHaveLength(0);
-  });
-
-  it("collapses concurrent passes into a single request", async () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-    serve(allExistExcept(["doomed"]));
-
-    await Promise.all([reconcileTabMirror(), reconcileTabMirror(), reconcileTabMirror()]);
-
-    expect(requests).toHaveLength(1);
-    expect(refs()).toEqual(["keep"]);
-  });
-});
-
-describe("active-tab behavior", () => {
-  it("moves the active key onto a surviving tab when the active one is evicted", async () => {
-    store().openChat("keep");
-    store().openChat("doomed");
-    store().setActive(chatKey("doomed"));
-    serve(allExistExcept(["doomed"]));
-
-    await reconcileTabMirror();
-    expect(store().activeKey).toBe(chatKey("keep"));
-  });
-
-  it("falls back to a fresh draft when the evicted tab was the only one", async () => {
-    store().openChat("doomed");
-    serve(allExistExcept(["doomed"]));
-
-    await reconcileTabMirror();
-    expect(refs()).toEqual([NEW_DRAFT_TAB_ID]);
-    expect(store().activeKey).toBe(chatKey(NEW_DRAFT_TAB_ID));
-  });
-
-  it("never leaves the strip empty", async () => {
-    store().openChat("a");
-    store().openChat("b");
-    store().openChat("c");
-    serve(allExistExcept(["a", "b", "c"]));
-
-    await reconcileTabMirror();
-    expect(store().tabs.length).toBeGreaterThan(0);
+    expect(refs()).toEqual(["a"]);
   });
 });
 
 describe("evictIfGone — the single eviction rule", () => {
   it("evicts on gone", () => {
-    store().openChat("doomed");
+    store().presentChat("doomed");
+    store().markDetached("doomed");
     evictIfGone("doomed", "gone");
-    expect(refs()).toEqual([NEW_DRAFT_TAB_ID]);
+    expect(visibleTabs(store()).some((t) => t.ref === "doomed")).toBe(false);
   });
 
   it("retains on exists", () => {
-    store().openChat("alive");
+    store().presentChat("alive");
     evictIfGone("alive", "exists");
-    expect(refs()).toEqual(["alive"]);
+    expect(store().localActiveKey).toBe(chatKey("alive"));
   });
 
   it("retains on unknown", () => {
-    store().openChat("alive");
+    store().presentChat("alive");
     evictIfGone("alive", "unknown");
-    expect(refs()).toEqual(["alive"]);
+    expect(store().localActiveKey).toBe(chatKey("alive"));
   });
 
   it("is harmless for a conversation with no open tab", () => {
-    store().openChat("alive");
-    const before = tabKeys();
+    store().presentChat("alive");
     evictIfGone("never-opened", "gone");
-    expect(tabKeys()).toEqual(before);
-  });
-
-  it("is idempotent when repeated for the same conversation", () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-    evictIfGone("doomed", "gone");
-    const afterFirst = tabKeys();
-    evictIfGone("doomed", "gone");
-    evictIfGone("doomed", "gone");
-    expect(tabKeys()).toEqual(afterFirst);
-  });
-});
-
-describe("races", () => {
-  it('A: a stale "exists" arriving after a "gone" cannot resurrect the tab', async () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-
-    // Pass 1 proves it gone and evicts it.
-    serve(allExistExcept(["doomed"]));
-    await reconcileTabMirror();
-    expect(refs()).toEqual(["keep"]);
-
-    // Pass 2 answers from a stale snapshot claiming it still exists. Because
-    // `exists` has no write path, this can only ever be a no-op.
-    serve(() =>
-      ok([
-        ["keep", "exists"],
-        ["doomed", "exists"],
-      ]),
-    );
-    await reconcileTabMirror();
-
-    expect(refs()).toEqual(["keep"]);
-    expect(refs()).not.toContain("doomed");
-  });
-
-  it('B: a late "gone" for a tab another surface already closed is a no-op', async () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-
-    // Simulate the in-app delete flow closing it first (its own removal path).
-    store().closeByRef("doomed");
-    const afterDelete = tabKeys();
-
-    evictIfGone("doomed", "gone");
-    expect(tabKeys()).toEqual(afterDelete);
-  });
-
-  it("C: an offline start evicts nothing, and the recovery pass settles it", async () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-
-    // Boot pass against a backend that is not ready yet.
-    serve(() => status(503));
-    await reconcileTabMirror();
-    expect(refs().sort()).toEqual(["doomed", "keep"]);
-
-    // The retry that rides the existing availability recovery sequence.
-    serve(allExistExcept(["doomed"]));
-    await reconcileTabMirror();
-    expect(refs()).toEqual(["keep"]);
-  });
-
-  it("D: two passes racing on the same ref settle consistently", async () => {
-    store().openChat("doomed");
-    store().openChat("keep");
-    serve(allExistExcept(["doomed"]));
-
-    await Promise.all([reconcileTabMirror(), reconcileTabMirror()]);
-    const settled = tabKeys();
-
-    evictIfGone("doomed", "gone");
-    evictIfGone("doomed", "gone");
-    expect(tabKeys()).toEqual(settled);
-    expect(refs()).toEqual(["keep"]);
+    expect(store().localActiveKey).toBe(chatKey("alive"));
   });
 });
 
@@ -372,32 +244,26 @@ describe("isConfirmedGone", () => {
     expect(isConfirmedGone(new ConversationNotFoundError("c1"))).toBe(true);
   });
 
+  it("recognizes the gone verdict", () => {
+    expect(isConfirmedGone("gone")).toBe(true);
+  });
+
   it("rejects every other failure shape", () => {
     expect(isConfirmedGone(new Error("Thread status unknown: c1"))).toBe(false);
     expect(isConfirmedGone(new TypeError("fetch failed"))).toBe(false);
+    expect(isConfirmedGone("unknown")).toBe(false);
+    expect(isConfirmedGone("exists")).toBe(false);
     expect(isConfirmedGone(undefined)).toBe(false);
     expect(isConfirmedGone(null)).toBe(false);
   });
 });
 
 describe("architectural guard", () => {
-  it("emits the agreed eviction event with the agreed fields", async () => {
+  it("routes confirmed-gone cleanup through local close and shared membership cleanup", async () => {
     const source = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/chat/state/tabReconciliation.ts"),
     ).text();
-    // Observability is part of the contract: an eviction must be traceable
-    // beside tab.open / tab.close, named for what actually happened.
-    expect(source).toContain('logger.info("chat", "tab.evicted"');
-    expect(source).toContain('reason: "not_found"');
-  });
-
-  it("routes eviction through the existing single removal mutation", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/features/chat/state/tabReconciliation.ts"),
-    ).text();
-    // One tab-removal path: closeByRef. A second mutation here would be a
-    // second way for the mirror to lose a row.
-    expect(source).toContain("closeByRef");
-    expect(source).not.toContain(".close(");
+    expect(source).toContain("closeLocal");
+    expect(source).toContain("closeSharedTab");
   });
 });

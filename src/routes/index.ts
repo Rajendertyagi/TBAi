@@ -28,6 +28,7 @@ import workspaceApp from "./workspace";
 import foldersApp from "./folders";
 import opencodeApp from "./opencode";
 import serverApp from "./server";
+import preferencesApp from "./preferences";
 
 /**
  * Application composition root: middleware + sub-app mounts.
@@ -196,6 +197,9 @@ app.route("/api/opencode", opencodeApp);
 
 // Single application server identity + explicit port restart.
 app.route("/api/server", serverApp);
+
+// Shared workspace preferences (authoritative snapshot + CAS mutations).
+app.route("/api/preferences", preferencesApp);
 
 // Error handler — classify once for safe structured fields and user copy.
 // Raw exception text never crosses either boundary.

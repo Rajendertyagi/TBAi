@@ -3,29 +3,25 @@ import { expect, test, type Page, type APIRequestContext } from "@playwright/tes
 /**
  * Phase 8 — tab & conversation lifecycle, browser-level verification.
  *
- * The Phase 8 guards (routeStillReferencesRef, shouldNavigateToThread,
- * right-neighbor close, no-duplicate-open) shipped with pure store tests only;
- * the browser flow was never run. This spec proves the invariants end-to-end:
+ * Updated for shared-workspace preferences architecture:
+ * - Shared tab membership is authoritative in SQLite/preferences API (explicit
+ *   open/close/reorder). Route mounting is presentation binding only and never
+ *   mutates shared membership.
+ * - A valid direct URL to a non-shared conversation creates a local detached
+ *   presentation for this window only (not a shared tab).
+ * - Tests that verify shared-tab strip close/reorder behavior seed shared
+ *   membership via the preferences API (explicit workflow), not route mounting.
  *
- *   - opening the same conversation through two UI paths → exactly ONE tab
- *   - navigating to the draft never creates a conversation row
- *   - first send from the draft → exactly ONE row + one tab (API-counted)
- *   - closing an inactive tab leaves the active conversation untouched
- *   - closing the active tab activates the RIGHT NEIGHBOUR (or a fresh draft)
- *   - deleting the active conversation falls back safely, deleted id not active
- *   - browser back/forward creates no row; reload restores tabs/URL
- *
- * Row counts are asserted against GET /api/conversations (the source of
- * truth), never screenshots. All conversations created here are deleted in
- * `finally` so repeated runs stay hermetic.
- *
- * NOTE on "second UI path": opening a conversation can only happen through
- * the route views (the sidebar opens existing rows via navigation, and the
- * context-menu "Open in new tab" creates the SECOND engine-surface tab, which
- * is a distinct tab by design — see the navigation spec's surface tests). So
- * the "same conversation, one tab" invariant is proven here as: navigate to
- * the conversation, then re-navigate the SAME way + click the row again —
- * the store's dedupe keeps exactly one chat tab for that ref.
+ * Preserved invariants:
+ * - No duplicate visible tab/presentation for the same conversation ref.
+ * - Navigating to draft never creates a conversation row.
+ * - First send from draft creates exactly one row (and delayed shared open is
+ *   handled by the app; row count is the source of truth here).
+ * - Closing an inactive shared tab leaves the active conversation unchanged.
+ * - Closing the active shared tab activates the right neighbour.
+ * - Deleting the active conversation falls back safely; deleted id never active.
+ * - Browser back/forward creates no row; reload preserves direct URL and creates
+ *   no duplicate rows.
  */
 
 type Conv = { id: string; title: string; engine?: string | null };
@@ -54,6 +50,23 @@ async function deleteConversation(request: APIRequestContext, id: string): Promi
   await request.delete(`/api/conversations/${id}`).catch(() => {});
 }
 
+/** Add conversations to shared workspace membership in order (CAS). */
+async function addSharedTabs(request: APIRequestContext, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const prefsRes = await request.get("/api/preferences");
+      expect(prefsRes.ok()).toBe(true);
+      const prefs = (await prefsRes.json()) as { revision: number };
+      const res = await request.post("/api/preferences/tabs/open", {
+        data: { baseRevision: prefs.revision, conversationId: id, kind: "chat" },
+      });
+      if (res.status() === 409) continue;
+      expect(res.ok()).toBe(true);
+      break;
+    }
+  }
+}
+
 /** The composer's send affordance (shared across specs, same selector as phase-4). */
 async function waitDraftReady(page: Page): Promise<void> {
   await page
@@ -64,37 +77,30 @@ async function waitDraftReady(page: Page): Promise<void> {
 }
 
 test.describe.configure({ mode: "serial" });
-
 test.describe.configure({ timeout: 120000 });
 
 test.beforeEach(async ({ page }) => {
-  // Start every case at a known draft location with a clean tab strip.
   await page.goto("/#/chat/new");
   await waitDraftReady(page);
 });
 
-test("opening the same conversation through two paths yields ONE tab", async ({ page }) => {
+test("opening the same conversation through two paths yields no duplicate visible tab", async ({
+  page,
+}) => {
   const created = await createConversation(page.request, "p8-dup-conv");
   try {
-    // Path 1: direct route navigation.
+    // Path 1: direct route navigation (detached local presentation; no shared mutation).
     await page.goto(`/#/chat/${created}`);
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
 
-    // Path 2: sidebar row click (the other UI path). The route guard
-    // (shouldNavigateToThread) must suppress the duplicate navigation, and the
-    // store's dedupe must keep exactly one chat tab for this ref. The sidebar
-    // renders rows by CONVERSATION TITLE, so the marker is the title. The list
-    // was loaded before creation, so reload to pick up the new row.
+    // Path 2: sidebar row click. Reload so the sidebar list includes the new row.
     await page.reload();
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
 
-    // The conversation row renders in the "Chats" sidebar section (it is a
-    // simple chat, so it belongs to no folder). Scoped to the section so the
-    // locator cannot drift onto another surface that repeats the title.
     const row = page
       .locator("#sidebar-section-chats")
       .getByRole("button", { name: /p8-dup-conv/i });
@@ -102,18 +108,14 @@ test("opening the same conversation through two paths yields ONE tab", async ({ 
     await row.click();
     await expect(page).toHaveURL(new RegExp(`#/chat/${created}$`), { timeout: 10000 });
 
-    // Exactly one tab on this ref. A duplicate tab would render two strip
-    // entries with the same title; count the non-draft, non-new tabs that
-    // point at this conversation via the strip's DOM.
+    // No duplicate visible tab for this conversation ref.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
     await expect(strip).toBeVisible();
-    const tabCount = await strip
-      .getByRole("tab")
-      .filter({ hasNot: page.getByRole("button", { name: "Close tab" }) })
-      .count();
-    // The strip always has the draft tab plus this conversation tab: with the
-    // dedupe invariant, re-opening never adds a second entry for the ref.
-    expect(tabCount).toBeLessThanOrEqual(2);
+    const tabsForRef = strip.locator(`[data-tab-ref="${created}"], [data-conversation-id="${created}"]`);
+    // Fallback: count tabs whose accessible name/title contains the marker.
+    const namedTabs = strip.getByRole("tab", { name: /p8-dup-conv/i });
+    const count = (await tabsForRef.count()) || (await namedTabs.count());
+    expect(count).toBeLessThanOrEqual(1);
   } finally {
     await deleteConversation(page.request, created);
   }
@@ -154,7 +156,6 @@ test("first send from the draft creates exactly ONE row and one tab", async ({ p
     expect(match).not.toBeNull();
     created.push(match![1]);
 
-    // The conversation now exists (exactly one new row for this send).
     const after = await idsOf(page.request);
     expect(after.has(match![1]), "first send materialized a conversation").toBe(true);
 
@@ -165,27 +166,23 @@ test("first send from the draft creates exactly ONE row and one tab", async ({ p
   }
 });
 
-test("closing an inactive tab leaves the active conversation unchanged", async ({ page }) => {
+test("closing an inactive shared tab leaves the active conversation unchanged", async ({ page }) => {
   const a = await createConversation(page.request, "p8-close-a");
   const b = await createConversation(page.request, "p8-close-b");
   try {
-    // Two open: A then B → B is active, A inactive.
-    await page.goto(`/#/chat/${a}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
-      timeout: 15000,
-    });
+    await addSharedTabs(page.request, [a, b]);
     await page.goto(`/#/chat/${b}`);
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
 
-    // Close the INACTIVE tab (A) via its X button.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
-    const tabA = strip.getByRole("tab", { name: /p8-close-a/ });
+    await expect(strip).toBeVisible({ timeout: 10000 });
+    const tabA = strip.getByRole("tab", { name: /p8-close-a/i });
+    await expect(tabA).toBeVisible({ timeout: 10000 });
     await tabA.hover();
     await tabA.getByRole("button", { name: "Close tab" }).click();
 
-    // The active conversation did not change: URL still B.
     await expect(page).toHaveURL(new RegExp(`#/chat/${b}$`), { timeout: 10000 });
   } finally {
     await deleteConversation(page.request, a);
@@ -193,34 +190,25 @@ test("closing an inactive tab leaves the active conversation unchanged", async (
   }
 });
 
-test("closing the active tab activates the right neighbour", async ({ page }) => {
+test("closing the active shared tab activates the right neighbour", async ({ page }) => {
   const a = await createConversation(page.request, "p8-neigh-a");
   const doomed = await createConversation(page.request, "p8-neigh-mid");
   const b = await createConversation(page.request, "p8-neigh-b");
   try {
-    // Order: a, mid, b — all three opened in sequence → b active last.
-    await page.goto(`/#/chat/${a}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
-      timeout: 15000,
-    });
+    await addSharedTabs(page.request, [a, doomed, b]);
     await page.goto(`/#/chat/${doomed}`);
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
-    await page.goto(`/#/chat/${b}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
-      timeout: 15000,
-    });
 
-    // Make the middle tab active, then close it.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
-    await strip.getByRole("tab", { name: /p8-neigh-mid/ }).click();
-    await expect(page).toHaveURL(new RegExp(`#/chat/${doomed}$`), { timeout: 10000 });
-    const midTab = strip.getByRole("tab", { name: /p8-neigh-mid/ });
+    await expect(strip).toBeVisible({ timeout: 10000 });
+    const midTab = strip.getByRole("tab", { name: /p8-neigh-mid/i });
+    await expect(midTab).toBeVisible({ timeout: 10000 });
     await midTab.hover();
     await midTab.getByRole("button", { name: "Close tab" }).click();
 
-    // Right neighbour (b) becomes active — the Phase 8 rule, not "last tab".
+    // Right neighbour (b) becomes active.
     await expect(page).toHaveURL(new RegExp(`#/chat/${b}$`), { timeout: 10000 });
   } finally {
     for (const id of [a, doomed, b]) await deleteConversation(page.request, id);
@@ -233,44 +221,28 @@ test("deleting the active conversation falls back safely; deleted id never activ
   const doomed = await createConversation(page.request, "p8-delete-active");
   const survivor = await createConversation(page.request, "p8-delete-survivor");
   try {
-    // doomed active, survivor behind it.
-    await page.goto(`/#/chat/${survivor}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
-      timeout: 15000,
-    });
+    await addSharedTabs(page.request, [survivor, doomed]);
     await page.goto(`/#/chat/${doomed}`);
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
 
-    // Delete the ACTIVE conversation through the sidebar row's "..." menu.
-    // Reload so the freshly-created rows appear in the sidebar list.
     await page.reload();
     await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
       timeout: 15000,
     });
 
-    // The accessible name belongs to the title button INSIDE the row, and the
-    // "…" trigger is not a sibling of that button — it lives in the row's
-    // trailing action div. So resolve the row container from the title, then
-    // take its last button (title, then the more-menu trigger).
     const titleButton = page
       .locator("#sidebar-section-chats")
       .getByRole("button", { name: /p8-delete-active/i });
     await expect(titleButton).toBeVisible({ timeout: 10000 });
     const row = titleButton.locator("xpath=..");
-    // Hover the row to reveal the "..." more-button, then open the menu and pick Delete.
     await row.hover();
     await row.getByRole("button").last().click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
-    // The menu label ends in an ellipsis because it opens a confirmation; the
-    // delete itself only happens on the dialog's own button.
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
 
-    // The deleted id must never remain the active route.
     await page.waitForURL((url) => !url.toString().includes(doomed), { timeout: 15000 });
-
-    // The row is gone server-side and the URL is either a live neighbour or the draft.
     const remaining = await idsOf(page.request);
     expect(remaining.has(doomed), "deleted conversation is gone").toBe(false);
   } finally {
@@ -295,8 +267,6 @@ test("browser back/forward creates no conversation row", async ({ page }) => {
     await page.goForward();
     await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 10000 });
 
-    // Navigation alone never mints a row: the only new row is the one we
-    // explicitly created for this test (the draft itself is not a row).
     const after = await idsOf(page.request);
     const newRows = [...after].filter((id) => !before.has(id));
     expect(newRows).toEqual([]);
@@ -305,7 +275,7 @@ test("browser back/forward creates no conversation row", async ({ page }) => {
   }
 });
 
-test("reload restores tabs/URL with no duplicate rows", async ({ page }) => {
+test("reload preserves direct conversation URL with no duplicate rows", async ({ page }) => {
   const target = await createConversation(page.request, "p8-reload");
   try {
     const before = await idsOf(page.request);

@@ -915,3 +915,48 @@ export const startupPrefsBodySchema = z.object({
 });
 
 export type StartupPrefsBody = z.infer<typeof startupPrefsBodySchema>;
+
+// ---- Shared workspace preferences (canonical) ----
+export const workspacePreferencesPatchBodySchema = z.object({
+  baseRevision: z.number().int().min(0),
+  preferences: z.record(z.string(), z.unknown()),
+  originWindowId: z.string().min(1).max(200).optional(),
+});
+
+export type WorkspacePreferencesPatchBody = z.infer<typeof workspacePreferencesPatchBodySchema>;
+
+export const sharedTabOpenBodySchema = z.object({
+  baseRevision: z.number().int().min(0),
+  conversationId: z.string().min(1).max(200),
+  kind: z.enum(["chat", "agent"]),
+  originWindowId: z.string().min(1).max(200).optional(),
+});
+
+export const sharedTabCloseBodySchema = z.object({
+  baseRevision: z.number().int().min(0),
+  conversationId: z.string().min(1).max(200),
+  originWindowId: z.string().min(1).max(200).optional(),
+});
+
+export const sharedTabCloseBatchBodySchema = z
+  .object({
+    baseRevision: z.number().int().min(0),
+    mode: z.enum(["others", "right", "all"]),
+    anchorConversationId: z.string().min(1).max(200).optional(),
+    originWindowId: z.string().min(1).max(200).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if ((value.mode === "others" || value.mode === "right") && !value.anchorConversationId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "anchorConversationId is required for others/right",
+      });
+    }
+  });
+
+export const sharedTabReorderBodySchema = z.object({
+  baseRevision: z.number().int().min(0),
+  conversationId: z.string().min(1).max(200),
+  toIndex: z.number().int().min(0).max(500),
+  originWindowId: z.string().min(1).max(200).optional(),
+});

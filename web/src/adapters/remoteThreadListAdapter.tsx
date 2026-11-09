@@ -5,6 +5,7 @@ import { createThreadHistoryAdapter } from "./threadHistoryAdapter";
 import { historyConfig } from "../config/history";
 import { logger } from "../lib/logger";
 import { captureDraftSnapshot, materializeDraft } from "../features/chat/state/materializeDraft";
+import { useChatTabsStore } from "../features/chat/state/chatTabs";
 import {
   ConversationNotFoundError,
   probeConversation,
@@ -205,6 +206,10 @@ export function createRemoteThreadListAdapter(
       // converge here rather than minting duplicate rows.
       const snapshot = captureDraftSnapshot();
       const created = await materializeDraft(snapshot);
+      // Separate shared-membership operation (non-awaited, failure-isolated).
+      // Must not block/abort initialize, must not rerun materializeDraft, and
+      // must not be reported as creation/first-send failure.
+      useChatTabsStore.getState().requestDelayedSharedOpen(created.id, "chat");
       return { remoteId: created.id };
     },
 

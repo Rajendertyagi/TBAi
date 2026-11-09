@@ -7,27 +7,16 @@ import {
   type ThemeDefinition,
 } from "../features/appearance/theme-data";
 import { applyThemeToDom, THEME_ATTRIBUTE } from "../features/appearance/theme-dom";
-import {
-  DEFAULT_MODE,
-  readMode,
-  readThemeIds,
-  writeMode,
-  writeThemeId,
-  type ThemeMode,
-} from "../features/appearance/theme-storage";
+import { DEFAULT_MODE, type ThemeMode } from "../features/appearance/theme-storage";
+import { consumeAppearancePatchSuppression } from "../features/appearance/appearance-patch-guard";
+import { usePreferencesStore } from "../features/preferences/state/preferencesStore";
 
 /**
- * Colour theme state: a light/dark mode, plus one palette per mode.
- *
- * Two palette slots rather than one because they are genuinely independent — a
- * warm palette in light and a cool one in dark is a legitimate choice, and it is
- * how OpenChamber models it. Keeping them separate means picking a theme for
- * dark mode cannot disturb light mode, or the reverse.
- *
- * Backwards compatible by construction: `theme`/`setTheme`/`toggleTheme` behave
- * exactly as before, and an install with nothing stored keeps TBAi's existing
- * look because both slots default to `classic`, which has no generated CSS and
- * therefore lets the stylesheet's own colours stand.
+ * Colour theme state. SQLite is authoritative for shared appearance.
+ * Before hydration, application state uses defaults (index.html may apply a
+ * pre-paint cache hint; React state does not read localStorage as authority).
+ * Once SQLite loads, usePreferencesSync applies authoritative state and writes
+ * the pre-paint cache (mirror only).
  */
 
 export type Theme = ThemeMode;
@@ -48,8 +37,12 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(readMode);
-  const [themeIds, setThemeIds] = useState(readThemeIds);
+  // Defaults before hydration; authoritative SQLite state applied by usePreferencesSync.
+  const [theme, setThemeState] = useState<Theme>(DEFAULT_MODE);
+  const [themeIds, setThemeIds] = useState<{ light: string; dark: string }>({
+    light: DEFAULT_THEME_ID,
+    dark: DEFAULT_THEME_ID,
+  });
 
   // One effect for the whole DOM write, so class and attribute can never disagree.
   useEffect(() => {
@@ -58,13 +51,23 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next);
-    writeMode(next);
+    if (!consumeAppearancePatchSuppression()) {
+      void usePreferencesStore
+        .getState()
+        .patchPreferences({ appearance: { themeMode: next } })
+        .catch(() => {});
+    }
   }, []);
 
   const toggleTheme = useCallback(() => {
     setThemeState((prev) => {
       const next = prev === "dark" ? "light" : "dark";
-      writeMode(next);
+      if (!consumeAppearancePatchSuppression()) {
+        void usePreferencesStore
+          .getState()
+          .patchPreferences({ appearance: { themeMode: next } })
+          .catch(() => {});
+      }
       return next;
     });
   }, []);
@@ -73,7 +76,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (!getTheme(id)) return;
     setThemeIds((prev) => {
       if (prev[mode] === id) return prev;
-      writeThemeId(mode, id);
+      if (!consumeAppearancePatchSuppression()) {
+        const key = mode === "light" ? "lightTheme" : "darkTheme";
+        void usePreferencesStore
+          .getState()
+          .patchPreferences({ appearance: { [key]: id } })
+          .catch(() => {});
+      }
       return { ...prev, [mode]: id };
     });
   }, []);

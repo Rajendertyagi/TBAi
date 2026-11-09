@@ -15,6 +15,7 @@ import {
   OpenCodeImportedSessionMissingError,
 } from "../../../src/services/opencode/errors";
 import { conversationService } from "../../../src/services/storage/conversations";
+import { messageService } from "../../../src/services/storage/messages";
 
 // Test target state
 let currentTarget = {
@@ -328,6 +329,72 @@ describe("OpenCode session import service", () => {
       expect(page2.sessions[0].sessionId).toBe("ses_page_2");
       expect(page2.hasMore).toBe(true);
       expect(page2.nextCursor).toBe("4");
+    });
+  });
+
+  describe("fixture-backed behavioral proof (external sessions, never opened in TBAi)", () => {
+    it("discovers an external OpenCode session created outside TBAi when never opened/started through TBAi, imports it, preserves identity/metadata, and does not duplicate message history", async () => {
+      const externalSessionId = "ses_external_fixture_never_in_tbai";
+      const externalDir = "/external/project/created-outside-tbai";
+      const validRef = encodeSourceRef({
+        mode: "managed",
+        targetId: 42,
+        origin: "http://127.0.0.1:4096",
+      });
+
+      // Fixture: session exists in OpenCode (external source), with representative metadata.
+      // No TBAi conversation is created for it before discovery/import.
+      fakeSessions = [
+        {
+          id: externalSessionId,
+          title: "External Session (never opened in TBAi)",
+          agent: "build",
+          model: { id: "anthropic/claude-sonnet-4" },
+          location: { directory: externalDir },
+          time: { created: 1700000000000, updated: 1700000005000 },
+        },
+      ];
+      fakeMessages.set(externalSessionId, [
+        { id: "oc_msg_1", type: "user", text: "This history lives in OpenCode, not TBAi." },
+        { id: "oc_msg_2", type: "assistant", text: "External reply" },
+      ]);
+
+      // (1)(2) Discoverable: external session created outside TBAi, never opened/started through TBAi.
+      const discovered = await listImportableOpenCodeSessions();
+      const hit = discovered.sessions.find((s) => s.sessionId === externalSessionId);
+      expect(hit).toBeDefined();
+      expect(hit?.directory).toBe(externalDir);
+      expect(hit?.title).toBe("External Session (never opened in TBAi)");
+      expect(hit?.sourceRef).toBe(validRef);
+      expect(hit?.firstPromptPreview).toBe("This history lives in OpenCode, not TBAi.");
+
+      // (3) Import/open successfully.
+      const imported = await importOpenCodeSession({
+        sessionId: externalSessionId,
+        sourceRef: validRef,
+      });
+      expect(imported.conversationId).toBeDefined();
+      expect(typeof imported.conversationId).toBe("string");
+
+      // (4) Preserves identity/messages/metadata without duplicating history.
+      const conv = await conversationService.get(imported.conversationId);
+      expect(conv).not.toBeNull();
+      expect(conv?.engine).toBe("opencode");
+      expect(conv?.opencodeSessionId).toBe(externalSessionId);
+      expect(conv?.opencodeServiceOwner).toBe("local");
+      expect(conv?.opencodeDirectory).toBe(externalDir);
+      expect(conv?.opencodeImported).toBe(true);
+      expect(conv?.opencodeAgent).toBe("build");
+      expect(conv?.opencodeModel).toBe("anthropic/claude-sonnet-4");
+      expect(conv?.title).toBe("External Session (never opened in TBAi)");
+
+      // No message-history copy into TBAi storage: OpenCode remains the history owner.
+      const storedMessages = await messageService.listThreadMessages(imported.conversationId);
+      expect(storedMessages).toEqual([]);
+
+      // After import, the same external session is no longer offered as importable (already imported).
+      const after = await listImportableOpenCodeSessions();
+      expect(after.sessions.some((s) => s.sessionId === externalSessionId)).toBe(false);
     });
   });
 

@@ -22,13 +22,15 @@ export function RouteError() {
   const error = useRouteError();
 
   const message = error instanceof Error ? error.message : "Something went wrong.";
+  const stack = error instanceof Error ? error.stack : undefined;
 
   useEffect(() => {
     logger.error("app", "boundary_error", {
       message,
       errorType: error instanceof Error ? error.name : typeof error,
+      stack: stack?.slice(0, 4000),
     });
-  }, [error, message]);
+  }, [error, message, stack]);
 
   return (
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center">
@@ -36,6 +38,11 @@ export function RouteError() {
       <p className="max-w-md truncate text-sm text-muted-foreground" title={message}>
         {message}
       </p>
+      {stack ? (
+        <pre className="max-h-64 max-w-2xl overflow-auto whitespace-pre-wrap text-left text-xs text-muted-foreground">
+          {stack.slice(0, 4000)}
+        </pre>
+      ) : null}
       <div className="flex items-center gap-2">
         <Button variant="outline" onClick={() => navigate(ROUTES.CHAT_NEW)}>
           New chat

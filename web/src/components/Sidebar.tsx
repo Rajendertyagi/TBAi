@@ -34,7 +34,11 @@ import {
 import { NewProjectChatDialog } from "./NewProjectChatDialog";
 import { OpenCodeImportDialog } from "../features/opencode/OpenCodeImportDialog";
 import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
-import { shouldNavigateToThread, threadUrl } from "../features/chat/state/chatTabs";
+import {
+  shouldNavigateToThread,
+  threadUrl,
+  useChatTabsStore,
+} from "../features/chat/state/chatTabs";
 
 /**
  * Conversation sidebar (codeg `layout/sidebar` parity): fixed `h-10` header
@@ -62,6 +66,12 @@ export function Sidebar() {
   // opening — the sidebar never creates rows).
   const openThread = useCallback(
     (remoteId: string, engine?: string | null) => {
+      // Explicit user open: add to shared workspace (idempotent) then navigate.
+      const kind = engine === "opencode" ? "agent" : "chat";
+      void useChatTabsStore
+        .getState()
+        .requestSharedOpen(remoteId, kind)
+        .catch(() => {});
       if (shouldNavigateToThread(location.pathname, remoteId, engine)) {
         navigate(threadUrl(remoteId, engine));
       }

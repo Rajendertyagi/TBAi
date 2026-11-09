@@ -1,93 +1,162 @@
 /**
  * Application-foundation unit tests (no DOM, no server).
  *
- * Covers: chat tab store (open/switch/close/draft/neighbor fallback),
- * tab URL mapping, and the settings-nav source of truth.
- * Written by the implementation agent; executed by the test agent
- * (`bun test`).
+ * Covers: chat tab store (local presentation, draft, active resolution, close
+ * behavior), tab URL mapping, and the settings-nav source of truth.
+ *
+ * Shared-workspace architecture: shared membership is server-authoritative;
+ * each window owns local active selection/draft state. Close invariants that
+ * were synchronous in the old unified store are exercised via
+ * `requestSharedClose` with a mocked shared-membership mutation (the
+ * authoritative close path). The old pure `nextActiveAfterClose` export was
+ * removed; its right-neighbor invariant is preserved by the close tests below.
  */
 import { describe, it, expect, beforeEach } from "bun:test";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
 import {
   NEW_DRAFT_TAB_ID,
   activeTab,
   chatKey,
-  nextActiveAfterClose,
   urlForTab,
   useChatTabsStore,
-  type Tab,
+  visibleTabs,
 } from "@web/features/chat/state/chatTabs.ts";
 import { getRailNav, getSettingsNav } from "@web/config/navigation.ts";
+import type { WorkspacePreferencesSnapshot } from "@web/features/preferences/state/types";
 
-function resetStore(): void {
-  useChatTabsStore.setState({ tabs: [], activeKey: undefined });
+function baseSnapshot(
+  overrides: Partial<WorkspacePreferencesSnapshot> = {},
+): WorkspacePreferencesSnapshot {
+  return {
+    revision: 1,
+    sharedTabs: [],
+    preferences: {
+      appearance: {
+        themeMode: "system",
+        lightTheme: "default",
+        darkTheme: "default",
+        typography: "default",
+      },
+      desktop: {
+        sidebarVisible: true,
+        statusBarVisible: true,
+        chatWidth: "comfortable",
+        sidebarSort: "updated",
+        sectionOrder: [],
+        sectionCollapsed: {},
+        showCompleted: false,
+        spellCheck: true,
+      },
+      welcome: {
+        engine: "direct",
+        quickActionTab: "coding",
+        scopeMode: "simple",
+        folderId: null,
+      },
+      navigation: { selectedFolderId: null, folderExpanded: {} },
+    },
+    ...overrides,
+  };
 }
 
-describe("unified tab store", () => {
-  beforeEach(resetStore);
+function resetStores(): void {
+  useChatTabsStore.setState({
+    localActiveKey: undefined,
+    hasLocalDraft: false,
+    detachedRefs: {},
+    membershipFailures: {},
+    suppressedDelayedAdds: {},
+  });
+  usePreferencesStore.setState({
+    snapshot: baseSnapshot(),
+    hydration: "ready",
+    hydrationError: null,
+    // Default: simulate authoritative shared close by removing the tab.
+    closeSharedTab: async (conversationId: string) => {
+      const cur = usePreferencesStore.getState().snapshot!;
+      const sharedTabs = cur.sharedTabs.filter((t) => t.ref !== conversationId);
+      const next = baseSnapshot({
+        revision: cur.revision + 1,
+        sharedTabs,
+      });
+      usePreferencesStore.getState().applySnapshot(next);
+      return next;
+    },
+  } as any);
+}
+
+function setSharedTabs(ids: string[], activeLocal?: string): void {
+  usePreferencesStore.getState().applySnapshot(
+    baseSnapshot({
+      revision: 2,
+      sharedTabs: ids.map((id) => ({ kind: "chat" as const, ref: id })),
+      }),
+  );
+  if (activeLocal) useChatTabsStore.setState({ localActiveKey: chatKey(activeLocal) });
+}
+
+describe("unified tab store (local presentation)", () => {
+  beforeEach(resetStores);
 
   it("opens a chat tab and makes it active", () => {
-    useChatTabsStore.getState().openChat("abc");
+    useChatTabsStore.getState().presentChat("abc");
     const s = useChatTabsStore.getState();
-    expect(s.tabs).toEqual([{ key: "chat:abc", kind: "chat", ref: "abc" }]);
-    expect(s.activeKey).toBe("chat:abc");
+    expect(s.localActiveKey).toBe("chat:abc");
+    expect(visibleTabs(s).some((t) => t.key === "chat:abc")).toBe(true);
   });
 
   it("does not duplicate an already-open chat tab", () => {
     const api = useChatTabsStore.getState();
-    api.openChat("abc");
-    api.openChat("def");
-    useChatTabsStore.getState().openChat("abc");
-    expect(useChatTabsStore.getState().tabs.map((t) => t.key)).toEqual(["chat:abc", "chat:def"]);
-    expect(useChatTabsStore.getState().activeKey).toBe("chat:abc");
+    api.presentChat("abc");
+    api.presentChat("def");
+    api.presentChat("abc");
+    const tabs = visibleTabs(useChatTabsStore.getState());
+    expect(tabs.filter((t) => t.ref === "abc")).toHaveLength(1);
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:abc");
   });
 
   it("supports the unsent draft tab and attaches the real id", () => {
     const api = useChatTabsStore.getState();
-    api.openChat(NEW_DRAFT_TAB_ID);
-    expect(useChatTabsStore.getState().activeKey).toBe("chat:new");
+    api.presentChat(NEW_DRAFT_TAB_ID);
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:new");
     useChatTabsStore.getState().resolveDraftId("real-1", "direct");
     const s = useChatTabsStore.getState();
-    expect(s.tabs).toEqual([{ key: "chat:real-1", kind: "chat", ref: "real-1" }]);
-    expect(s.activeKey).toBe("chat:real-1");
+    expect(s.localActiveKey).toBe("chat:real-1");
   });
 
-  it("closing the active tab falls back to the neighbor", () => {
-    const api = useChatTabsStore.getState();
-    api.openChat("a");
-    api.openChat("b");
-    api.openChat("c");
-    useChatTabsStore.getState().close("chat:c");
+  it("closing the active tab falls back to the neighbor", async () => {
+    setSharedTabs(["a", "b", "c"], "c");
+    await useChatTabsStore.getState().requestSharedClose("c");
     const s = useChatTabsStore.getState();
-    expect(s.tabs.map((t) => t.key)).toEqual(["chat:a", "chat:b"]);
-    expect(s.activeKey).toBe("chat:b");
+    expect(usePreferencesStore.getState().snapshot?.sharedTabs.map((t) => t.ref)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(s.localActiveKey).toBe("chat:b");
   });
 
-  it("closing the last tab opens a fresh draft (never zero tabs)", () => {
-    useChatTabsStore.getState().openChat("only");
-    useChatTabsStore.getState().close("chat:only");
+  it("closing the last tab opens a fresh draft (never zero tabs)", async () => {
+    setSharedTabs(["only"], "only");
+    await useChatTabsStore.getState().requestSharedClose("only");
     const s = useChatTabsStore.getState();
-    expect(s.tabs).toEqual([{ key: "chat:new", kind: "chat", ref: NEW_DRAFT_TAB_ID }]);
-    expect(s.activeKey).toBe("chat:new");
+    expect(usePreferencesStore.getState().snapshot?.sharedTabs).toEqual([]);
+    expect(s.hasLocalDraft).toBe(true);
+    expect(s.localActiveKey).toBe("chat:new");
   });
 
-  it("closing a background tab keeps the active tab", () => {
-    const api = useChatTabsStore.getState();
-    api.openChat("a");
-    api.openChat("b");
-    useChatTabsStore.getState().setActive("chat:a");
-    useChatTabsStore.getState().close("chat:b");
+  it("closing a background tab keeps the active tab", async () => {
+    setSharedTabs(["a", "b"], "a");
+    await useChatTabsStore.getState().requestSharedClose("b");
     const s = useChatTabsStore.getState();
-    expect(s.tabs.map((t) => t.key)).toEqual(["chat:a"]);
-    expect(s.activeKey).toBe("chat:a");
+    expect(usePreferencesStore.getState().snapshot?.sharedTabs.map((t) => t.ref)).toEqual([
+      "a",
+    ]);
+    expect(s.localActiveKey).toBe("chat:a");
   });
 
   it("activeTab resolves the active tab object", () => {
-    useChatTabsStore.getState().openChat("abc");
-    expect(activeTab(useChatTabsStore.getState())).toEqual({
-      key: "chat:abc",
-      kind: "chat",
-      ref: "abc",
-    });
+    useChatTabsStore.getState().presentChat("abc");
+    expect(activeTab(useChatTabsStore.getState())?.key).toBe("chat:abc");
   });
 });
 
@@ -98,32 +167,29 @@ describe("tab keys and urls", () => {
     expect(urlForTab({ key: "chat:new", kind: "chat", ref: "new" })).toBe("/chat/new");
   });
 
-  it("nextActiveAfterClose prefers the right neighbor", () => {
-    const tabs: Tab[] = [
-      { key: "chat:a", kind: "chat", ref: "a" },
-      { key: "chat:b", kind: "chat", ref: "b" },
-      { key: "chat:c", kind: "chat", ref: "c" },
-    ];
-    expect(nextActiveAfterClose(tabs, "chat:b")).toBe("chat:c");
-    expect(nextActiveAfterClose(tabs, "chat:c")).toBe("chat:b");
-    expect(
-      nextActiveAfterClose([{ key: "chat:a", kind: "chat", ref: "a" }], "chat:a"),
-    ).toBeUndefined();
+  it("nextActiveAfterClose prefers the right neighbor (invariant preserved by requestSharedClose)", async () => {
+    // Old pure export `nextActiveAfterClose` was removed with the shared-workspace
+    // architecture; the right-neighbor invariant is preserved by the authoritative
+    // close path. Closing middle selects right neighbor; closing rightmost selects left.
+    setSharedTabs(["a", "b", "c"], "b");
+    await useChatTabsStore.getState().requestSharedClose("b");
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:c");
+
+    resetStores();
+    setSharedTabs(["a", "b", "c"], "c");
+    await useChatTabsStore.getState().requestSharedClose("c");
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:b");
+
+    resetStores();
+    setSharedTabs(["a"], "a");
+    await useChatTabsStore.getState().requestSharedClose("a");
+    expect(useChatTabsStore.getState().localActiveKey).toBe("chat:new");
   });
 });
 
 describe("settings nav source of truth", () => {
   it("lists every settings section exactly once, in order", () => {
     const routes = getSettingsNav().map((item) => item.route);
-    // Order follows navigation.ts (the single source of truth); this test
-    // guards the membership (no missing/duplicate sections). Scheduler is a
-    // top-level workbench route, not a settings section.
-    // `opencode-config` joins at `order: 5`, after workspace and before folders.
-    // Like the list in `toolkit.test.ts`, this is a hardcoded mirror of a
-    // registry: `c371fc7` added the section and this list was not updated with
-    // it, so the guard was red from that commit onwards. Adding the route here
-    // keeps the assertion exactly as strong — it is still an ordered,
-    // exact-equality list, so a removal or a reordering still fails.
     expect(routes).toEqual([
       "/providers",
       "/appearance",
@@ -142,9 +208,6 @@ describe("settings nav source of truth", () => {
 
 describe("rail nav (single-gear rule)", () => {
   it("shows chat, scheduler, archived, and one settings gear — never settings-area icons", () => {
-    // Archived is a top-level rail surface (T3-UI), so it joins the rail
-    // alongside chat + scheduler. Settings *areas* (providers, appearance,
-    // mcp, logs, etc.) must stay behind the single gear, never as rail icons.
     const ids = getRailNav().map((item) => item.id);
     expect(ids).toEqual(["chat", "scheduler", "archived", "settings"]);
   });

@@ -94,16 +94,15 @@ export function SidebarThreadRow({
   activeId?: string | null;
 }) {
   const copy = sidebarConfig.copy;
-  const openChat = useChatTabsStore((s) => s.openChat);
-  const openAgent = useChatTabsStore((s) => s.openAgent);
-  const activeKey = useChatTabsStore((s) => s.activeKey);
+  const requestSharedOpen = useChatTabsStore((s) => s.requestSharedOpen);
+  const localActiveKey = useChatTabsStore((s) => s.localActiveKey);
   const title = item.title ?? "Untitled";
   const removeConversation = useDeleteConversation();
 
   const isActive =
     activeId !== undefined
       ? activeId === item.remoteId
-      : activeKey === `chat:${item.remoteId}` || activeKey === `agent:${item.remoteId}`;
+      : localActiveKey === `chat:${item.remoteId}` || localActiveKey === `agent:${item.remoteId}`;
 
   const handleDelete = (remoteId: string) => {
     void removeConversation(remoteId)
@@ -181,7 +180,11 @@ export function SidebarThreadRow({
     renameEnabled: historyConfig.renameEnabled,
     archiveEnabled: historyConfig.archiveEnabled,
     deleteEnabled: historyConfig.deleteEnabled,
-    onOpen: () => (item.engine === "opencode" ? openAgent(item.remoteId) : openChat(item.remoteId)),
+    onOpen: () => {
+      const kind = item.engine === "opencode" ? "agent" : "chat";
+      void requestSharedOpen(item.remoteId, kind);
+      onOpenThread(item.remoteId, item.engine ?? null);
+    },
     onOpenInExplorer: handleOpenInExplorer,
     onRename: handleOpenRename,
     onToggleArchive: () => handleStatusChange(item.remoteId, archived ? "regular" : "archived"),
@@ -330,8 +333,7 @@ export function SidebarArchivedRow({
 }) {
   const copy = sidebarConfig.copy;
   const removeConversation = useDeleteConversation();
-  const openChat = useChatTabsStore((s) => s.openChat);
-  const openAgent = useChatTabsStore((s) => s.openAgent);
+  const requestSharedOpen = useChatTabsStore((s) => s.requestSharedOpen);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const handleDelete = (id: string) => {
@@ -361,7 +363,11 @@ export function SidebarArchivedRow({
     renameEnabled: false,
     archiveEnabled: historyConfig.archiveEnabled,
     deleteEnabled: historyConfig.deleteEnabled,
-    onOpen: () => (engine === "opencode" ? openAgent(remoteId) : openChat(remoteId)),
+    onOpen: () => {
+      const kind = engine === "opencode" ? "agent" : "chat";
+      void requestSharedOpen(remoteId, kind);
+      onOpenThread(remoteId, engine ?? null);
+    },
     onToggleArchive: () => handleUnarchive(remoteId),
     onCopyId: () => void navigator.clipboard?.writeText(remoteId),
     onCopyUrl: () =>

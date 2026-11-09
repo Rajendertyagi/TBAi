@@ -1,158 +1,114 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../../../app/adapter";
 import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
 import { ConversationNotFoundError } from "./conversationExistence";
-import { evictIfGone } from "./tabReconciliation";
 import { logger } from "../../../lib/logger";
 import { ROUTES } from "../../../config/routes";
+import { usePreferencesStore } from "../../preferences/state/preferencesStore";
+import { evictIfGone } from "./tabReconciliation";
 import {
   NEW_DRAFT_TAB_ID,
   activeTab,
-  agentKey,
-  chatKey,
   routeStillReferencesRef,
   threadUrl,
+  urlForTab,
   useChatTabsStore,
 } from "./chatTabs";
 import { useWelcomeEngineStore } from "./welcomeEngine";
 
 /**
- * Single home for route→tab binding with existence validation, consumed by
- * both conversation surfaces (`ChatView`, `OpenCodeView`) so the rule lives
- * in exactly one place. Opens the matching tab for the route id, then
- * verifies the conversation still exists server-side; a deleted/missing id
- * closes every tab pointing at it (both surfaces — closing by constructed
- * key alone once left poisoned agent tabs behind) and falls back to the
- * draft. Draft/undefined ids are never validated: nothing is persisted yet.
+ * Route?tab presentation binding with existence validation.
  *
- * Row-authoritative reconciliation: the route is a HINT, the conversation's
- * `engine` column decides the surface. When the fetched row disagrees with
- * the route (e.g. an `engine=opencode` row opened at `/chat/<id>`), the
- * wrong-kind tab is closed and navigation moves to the engine-correct route
- * — the other view's mount opens the matching tab. Temporary agreement is
- * never manufactured: nothing is written, only the surface follows the row.
- *
- * @param ref - thread/conversation id from the route, or undefined/draft.
- * @param kind - which surface owns the tab.
+ * Opens local presentation for the route id, then verifies the conversation
+ * still exists server-side. A deleted/missing id closes every tab pointing at
+ * it (confirmed-gone only). Presentation binding only: never mutates shared
+ * membership, never resurrects a closed shared tab. A valid existing
+ * conversation not in shared membership becomes a local detached presentation.
  */
-export function useConversationTab(ref: string | undefined, kind: "chat" | "agent"): void {
+export function useConversationTab(
+  ref: string | undefined,
+  kind: "chat" | "agent",
+): { isDraft: boolean } {
   const navigate = useNavigate();
   const location = useLocation();
-  // Read at COMPLETION time, not dispatch time: an async validation result
-  // must be judged against the route showing when it lands, never the route
-  // that started it. (Not an effect dep — validation must not refetch on
-  // every unrelated navigation.)
-  const pathnameRef = useRef(location.pathname);
-  pathnameRef.current = location.pathname;
+  const isDraft = kind === "chat" && (!ref || ref === NEW_DRAFT_TAB_ID);
 
   useEffect(() => {
-    // Draft routes must still open + activate the draft tab (the pre-hook
-    // ChatView effect always did): first-send routing keys off the ACTIVE
-    // tab being the draft, so leaving a stale tab active would strand an
-    // OpenCode-engine send on the Direct surface. Nothing to validate.
-    if (ref === NEW_DRAFT_TAB_ID) {
-      useChatTabsStore.getState().openChat(NEW_DRAFT_TAB_ID);
+    if (isDraft) {
+      useChatTabsStore.getState().presentChat(NEW_DRAFT_TAB_ID);
       return;
     }
     if (!ref) return;
     const state = useChatTabsStore.getState();
-    if (kind === "chat") state.openChat(ref);
-    else state.openAgent(ref);
+    if (kind === "chat") state.presentChat(ref);
+    else state.presentAgent(ref);
+
+    // Mark detached if not in shared membership (local presentation only).
+    const shared = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+    if (!shared.some((t) => t.ref === ref)) {
+      useChatTabsStore.getState().markDetached(ref);
+    } else {
+      useChatTabsStore.getState().clearDetached(ref);
+    }
+
     let cancelled = false;
-    threadListAdapter
-      .fetch(ref)
-      .then((meta) => {
+    void (async () => {
+      try {
+        const meta = await threadListAdapter.fetch(ref);
         if (cancelled) return;
-        // Row engine decides the surface. Unknown/absent engine reads as
-        // Direct (legacy conversations predate the engine column).
-        const rowEngine = threadEngine(meta);
-        const rowWantsAgent = rowEngine === "opencode";
-        const onAgentSurface = kind === "agent";
-        if (rowWantsAgent === onAgentSurface) return;
-        // Stale guard (Phase 8): reconcile only while this validation still
-        // owns the route. A validation for a conversation the user already
-        // left must never rewrite tabs/navigation behind the newer location.
-        if (!routeStillReferencesRef(pathnameRef.current, ref)) {
-          logger.info("app", "navigation.rejected", {
-            ref,
-            pathname: pathnameRef.current,
-            reason: "stale-engine-reconciliation",
+        const engine = threadEngine(meta);
+        if (kind === "agent" && engine !== "opencode") {
+          logger.info("chat", "tab_engine_mismatch", {
+            threadId: ref,
+            expected: "opencode",
+            actual: engine,
           });
+          useChatTabsStore.getState().presentChat(ref);
+          navigate(threadUrl(ref, engine), { replace: true });
           return;
         }
-        // Mismatch: the wrong-kind tab opened above must give way to the
-        // row's surface. Order matters: open the correct-kind tab FIRST so
-        // the active key already points at the destination when TabUrlSync
-        // reacts — closing first would drop the active key to a fresh draft
-        // and TabUrlSync would overwrite this redirect with /chat/new.
-        // Navigation is replace (the wrong URL was never a real location);
-        // the target view's mount re-opens the same tab idempotently.
-        const current = useChatTabsStore.getState();
-        if (rowWantsAgent) {
-          current.openAgent(ref);
-          current.close(chatKey(ref));
-        } else {
-          current.openChat(ref);
-          current.close(agentKey(ref));
+        if (kind === "chat" && engine === "opencode") {
+          logger.info("chat", "tab_engine_mismatch", {
+            threadId: ref,
+            expected: "direct",
+            actual: engine,
+          });
+          useChatTabsStore.getState().presentAgent(ref);
+          navigate(threadUrl(ref, engine), { replace: true });
+          return;
         }
-        logger.info("app", "navigation.redirect", {
-          ref,
-          to: threadUrl(ref, rowEngine),
-          reason: "engine-surface-mismatch",
-        });
-        navigate(threadUrl(ref, rowEngine), { replace: true });
-      })
-      .catch((err: unknown) => {
+      } catch (err) {
         if (cancelled) return;
-        // Only CONFIRMED server evidence (404) may destroy. A network failure /
-        // 5xx / indeterminate status means existence is UNKNOWN: keep the tab,
-        // keep the route, keep known data (marked stale by the global
-        // availability indicator). Never generic error-swallowing — the
-        // distinction lives in the shared existence contract's verdict.
         if (!(err instanceof ConversationNotFoundError)) {
-          logger.debug("chat", "conversation validation unknown, retaining", {
-            ref,
+          logger.debug("chat", "tab_reconcile_probe_failed", {
+            threadId: ref,
+            kind,
             errorType: err instanceof Error ? err.name : typeof err,
+            message: "conversation validation unknown, retaining",
           });
           return;
         }
-        // Eviction goes through the tab mirror's owner (and its single removal
-        // mutation), so this view no longer decides "404 means delete" on its
-        // own — the same rule the boot pass and the tab-strip probe obey.
+        logger.info("chat", "tab_reconcile_gone", { threadId: ref, kind });
         evictIfGone(ref, "gone");
-        // The draft is engine-agnostic (one route hosts both engines), so
-        // recovery preserves the dead tab's engine in the draft store: a
-        // Code tab that pointed at a deleted conversation falls back to a
-        // Code draft, not a Direct one. The row stays authoritative — nothing
-        // is created or re-bound here.
-        if (kind === "agent") {
-          useWelcomeEngineStore.getState().setEngine("opencode");
+        if (routeStillReferencesRef(location.pathname, ref)) {
+          const next = activeTab(useChatTabsStore.getState());
+          if (next) navigate(urlForTab(next), { replace: true });
+          else navigate(ROUTES.CHAT_NEW, { replace: true });
         }
-        // Stale guard (Phase 8): the tab store already moved the active key
-        // (TabUrlSync corrects the URL from there). Drive navigation ONLY
-        // when the dead route is still showing and no surviving conversation
-        // took over — otherwise this late 404 would overwrite newer state
-        // (e.g. delete-while-open racing TabUrlSync to the neighbor tab).
-        const survivor = activeTab(useChatTabsStore.getState());
-        const survivorIsDraft = !survivor || survivor.ref === NEW_DRAFT_TAB_ID;
-        if (routeStillReferencesRef(pathnameRef.current, ref) && survivorIsDraft) {
-          logger.info("app", "navigation.redirect", {
-            ref,
-            to: "/chat/new",
-            reason: "conversation-not-found",
-          });
-          navigate(ROUTES.CHAT_NEW, { replace: true });
-        } else {
-          logger.info("app", "navigation.rejected", {
-            ref,
-            pathname: pathnameRef.current,
-            reason: "stale-not-found",
-          });
-        }
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [ref, kind, navigate]);
+  }, [isDraft, kind, ref, navigate, location.pathname]);
+
+  useEffect(() => {
+    if (kind === "chat" && isDraft) {
+      // Reset welcome engine to defaults for a fresh draft (preserve autoApprove behavior as before).
+      useWelcomeEngineStore.setState({ engine: "direct", agent: "", model: "", variant: "" });
+    }
+  }, [kind, isDraft]);
+
+  return { isDraft };
 }

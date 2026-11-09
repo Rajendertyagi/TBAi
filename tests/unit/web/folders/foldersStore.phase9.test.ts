@@ -1,19 +1,30 @@
 /**
- * Phase 9 — frontend workspace registry state correctness.
+ * Folder/welcome soft-reference correctness (shared workspace architecture).
  *
- * Pure selection pruning + load-epoch convergence for the folders store, and
- * draft scope bind/unbind transitions for the welcome scope. Deterministic:
- * controlled promise barriers for the overlapping-load race — no sleeps.
+ * `navigation.selectedFolderId` and welcome project `folderId` are soft
+ * references: a missing folder during hydration/refresh must not erase the
+ * selection, substitute an unrelated folder, or trigger accidental CAS patches.
+ * Genuine deletion is handled only by explicit delete actions.
+ *
+ * Also preserves load-epoch convergence for the folders store and draft scope
+ * binding transitions. Deterministic: controlled promise barriers for
+ * overlapping-load races — no sleeps.
  */
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { pruneSelectedFolderId, useFoldersStore } from "@web/features/folders/state/foldersStore";
+import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
+import {
+  pruneSelectedFolderId,
+  resolveSelectedFolderId,
+  useFoldersStore,
+} from "@web/features/folders/state/foldersStore";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
 import type { Folder } from "@web/types";
 
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  mock.restore();
 });
 
 function folder(id: string): Folder {
@@ -60,20 +71,119 @@ beforeEach(() => {
   useWelcomeScopeStore.setState({
     scope: { mode: "simple", folderId: null },
   });
+  usePreferencesStore.setState({
+    patchPreferences: async () => null,
+  } as any);
+  try {
+    if (typeof window !== "undefined") window.localStorage.removeItem("tbai:selectedFolder");
+  } catch {
+    /* ignore */
+  }
 });
 
-describe("pruneSelectedFolderId — persisted selection converges on reload", () => {
+describe("resolveSelectedFolderId — soft reference (never prunes/substitutes)", () => {
   it("keeps a selection that still names a registered folder", () => {
-    expect(pruneSelectedFolderId([folder("a"), folder("b")], "b")).toBe("b");
+    expect(resolveSelectedFolderId([folder("a"), folder("b")], "b")).toBe("b");
   });
 
-  it("drops a selection whose folder is gone (removed or never existed)", () => {
-    expect(pruneSelectedFolderId([folder("a")], "gone")).toBeNull();
-    expect(pruneSelectedFolderId([], "gone")).toBeNull();
+  it("preserves a missing folder ID (no silent null, no unrelated fallback)", () => {
+    expect(resolveSelectedFolderId([folder("a")], "gone")).toBe("gone");
+    expect(resolveSelectedFolderId([], "gone")).toBe("gone");
   });
 
   it("null stays null (no selection invents one)", () => {
-    expect(pruneSelectedFolderId([folder("a")], null)).toBeNull();
+    expect(resolveSelectedFolderId([folder("a")], null)).toBeNull();
+  });
+
+  it("pruneSelectedFolderId compat alias preserves soft references", () => {
+    expect(pruneSelectedFolderId([folder("a")], "gone")).toBe("gone");
+  });
+});
+
+describe("loadFolders — soft references preserved across hydration/refresh", () => {
+  it("missing selected folder during initial folder loading is preserved", async () => {
+    globalThis.fetch = (async () => okFolders([folder("other")])) as unknown as typeof fetch;
+    useFoldersStore.setState({ selectedFolderId: "missing-id", foldersLoaded: false });
+    await useFoldersStore.getState().loadFolders();
+    const s = useFoldersStore.getState();
+    expect(s.selectedFolderId).toBe("missing-id");
+    expect(s.folders.map((f) => f.id)).toEqual(["other"]);
+    expect(s.foldersLoaded).toBe(true);
+  });
+
+  it("missing folder after successful folder-list refresh is preserved", async () => {
+    globalThis.fetch = (async () => okFolders([folder("a")])) as unknown as typeof fetch;
+    useFoldersStore.setState({ selectedFolderId: "a", foldersLoaded: true, folders: [folder("a")] });
+    await useFoldersStore.getState().loadFolders();
+    expect(useFoldersStore.getState().selectedFolderId).toBe("a");
+
+    globalThis.fetch = (async () => okFolders([folder("b")])) as unknown as typeof fetch;
+    await useFoldersStore.getState().loadFolders();
+    const s = useFoldersStore.getState();
+    expect(s.selectedFolderId).toBe("a"); // soft ref preserved, not substituted with b
+    expect(s.folders.map((f) => f.id)).toEqual(["b"]);
+  });
+
+  it("folder becoming available again resolves the same reference", async () => {
+    globalThis.fetch = (async () => okFolders([folder("other")])) as unknown as typeof fetch;
+    useFoldersStore.setState({ selectedFolderId: "target", foldersLoaded: false });
+    await useFoldersStore.getState().loadFolders();
+    expect(useFoldersStore.getState().selectedFolderId).toBe("target");
+
+    globalThis.fetch = (async () =>
+      okFolders([folder("other"), folder("target")])) as unknown as typeof fetch;
+    await useFoldersStore.getState().loadFolders();
+    const s = useFoldersStore.getState();
+    expect(s.selectedFolderId).toBe("target");
+    expect(s.folders.some((f) => f.id === "target")).toBe(true);
+  });
+
+  it("no unrelated folder selected as a fallback when selection is missing", async () => {
+    globalThis.fetch = (async () =>
+      okFolders([folder("x"), folder("y")])) as unknown as typeof fetch;
+    useFoldersStore.setState({ selectedFolderId: "missing" });
+    await useFoldersStore.getState().loadFolders();
+    expect(useFoldersStore.getState().selectedFolderId).toBe("missing");
+    expect(useFoldersStore.getState().selectedFolderId).not.toBe("x");
+    expect(useFoldersStore.getState().selectedFolderId).not.toBe("y");
+  });
+
+  it("no accidental CAS patch or localStorage erasure for missing reference during load", async () => {
+    const patchPreferences = mock(async () => null);
+    usePreferencesStore.setState({ patchPreferences } as any);
+    const ls = typeof window !== "undefined" ? window.localStorage : undefined;
+    ls?.setItem("tbai:selectedFolder", "missing");
+    globalThis.fetch = (async () => okFolders([folder("other")])) as unknown as typeof fetch;
+    useFoldersStore.setState({ selectedFolderId: "missing" });
+    await useFoldersStore.getState().loadFolders();
+    expect(useFoldersStore.getState().selectedFolderId).toBe("missing");
+    if (ls) expect(ls.getItem("tbai:selectedFolder")).toBe("missing");
+    expect(patchPreferences).not.toHaveBeenCalled();
+  });
+
+  it("server-to-local hydration applies selectedFolderId as soft reference (no pruning)", () => {
+    // Mirrors PreferencesNavigationSync: applies server value even if folder not loaded.
+    useFoldersStore.setState({ selectedFolderId: "local", folders: [], foldersLoaded: false });
+    const serverSelectedFolderId = "server-missing-folder";
+    // Sync behavior: set state directly (soft reference), no validation/pruning.
+    useFoldersStore.setState({ selectedFolderId: serverSelectedFolderId });
+    expect(useFoldersStore.getState().selectedFolderId).toBe("server-missing-folder");
+  });
+
+  it("explicit deletion clears selection (genuine delete contract only)", async () => {
+    const patchPreferences = mock(async () => null);
+    usePreferencesStore.setState({ patchPreferences } as any);
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") return { ok: true, status: 200, json: async () => ({}) } as Response;
+      return okFolders([folder("other")]);
+    }) as unknown as typeof fetch;
+    useFoldersStore.setState({
+      selectedFolderId: "to-delete",
+      folders: [folder("to-delete"), folder("other")],
+      foldersLoaded: true,
+    });
+    await useFoldersStore.getState().removeFolder("to-delete");
+    expect(useFoldersStore.getState().selectedFolderId).toBeNull();
   });
 });
 
@@ -90,7 +200,6 @@ describe("loadFolders — stale responses never overwrite newer state", () => {
     const store = () => useFoldersStore.getState();
     const p1 = store().loadFolders();
     const p2 = store().loadFolders();
-    // Newer resolves first, stale resolves last: stale must not win.
     second.resolve(okFolders([folder("new")]));
     await p2;
     first.resolve(okFolders([folder("stale")]));
@@ -119,17 +228,9 @@ describe("loadFolders — stale responses never overwrite newer state", () => {
 
     expect(store().folders.map((f) => f.id)).toEqual(["B"]);
   });
-
-  it("a stale selection is pruned when the fresh list arrives", async () => {
-    globalThis.fetch = (async () => okFolders([folder("kept")])) as unknown as typeof fetch;
-    useFoldersStore.setState({ selectedFolderId: "removed" });
-    await useFoldersStore.getState().loadFolders();
-    expect(useFoldersStore.getState().selectedFolderId).toBeNull();
-    expect(useFoldersStore.getState().folders.map((f) => f.id)).toEqual(["kept"]);
-  });
 });
 
-describe("welcome scope — project binding is explicit UI state", () => {
+describe("welcome scope — project binding is explicit UI state (soft refs preserved)", () => {
   it("simple has no workspace dependency", () => {
     useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
     expect(useWelcomeScopeStore.getState().scope).toEqual({
@@ -142,7 +243,6 @@ describe("welcome scope — project binding is explicit UI state", () => {
     const store = () => useWelcomeScopeStore.getState();
     store().setScope({ mode: "project", folderId: "proj-1" });
     expect(store().scope).toEqual({ mode: "project", folderId: "proj-1" });
-    // Switching to a second project ends on the second (rapid A→B).
     store().setScope({ mode: "project", folderId: "proj-2" });
     expect(store().scope).toEqual({ mode: "project", folderId: "proj-2" });
   });
@@ -160,5 +260,21 @@ describe("welcome scope — project binding is explicit UI state", () => {
     store().setScope({ mode: "project", folderId: "proj-1" });
     store().setScope({ mode: "simple", folderId: null });
     expect(store().scope).toEqual({ mode: "simple", folderId: null });
+  });
+
+  it("validateAgainstFolderIds preserves missing project folder soft reference", () => {
+    const store = () => useWelcomeScopeStore.getState();
+    store().setScope({ mode: "project", folderId: "missing-folder" });
+    store().validateAgainstFolderIds(["other-folder"]);
+    expect(store().scope).toEqual({ mode: "project", folderId: "missing-folder" });
+  });
+
+  it("validateAgainstFolderIds preserves project folder when it becomes available again", () => {
+    const store = () => useWelcomeScopeStore.getState();
+    store().setScope({ mode: "project", folderId: "target" });
+    store().validateAgainstFolderIds([]);
+    expect(store().scope).toEqual({ mode: "project", folderId: "target" });
+    store().validateAgainstFolderIds(["target"]);
+    expect(store().scope).toEqual({ mode: "project", folderId: "target" });
   });
 });

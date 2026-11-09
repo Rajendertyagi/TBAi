@@ -1,16 +1,15 @@
 /**
- * Typography configuration, storage, and DOM application for TBAi.
+ * Typography configuration and DOM application for TBAi.
  *
- * Follows the existing theme-storage.ts and theme-dom.ts conventions:
- * - Single persistent JSON object under `tbai-typography`
- * - Resilient total reads falling back safely to defaults
- * - Single framework-free DOM applicator writing root CSS custom properties and root rem font-size
- *
- * v3 (2026-11-06): Interface Size controls root rem scaling (12–24px).
- * Independent ownership per rendering context — Interface, Code, Terminal, and Reading.
- * `--font-mono` is the fixed generic monospace stack and is NEVER written by a setting;
- * code surfaces use `--code-font-family`, terminal output uses `--terminal-font-family`.
+ * SQLite is authoritative for shared appearance typography. localStorage
+ * `tbai-typography` is a passive pre-paint cache only (index.html may read it
+ * before first paint; usePreferencesSync writes it after authoritative state).
+ * This module does NOT read localStorage as authority and does NOT write
+ * localStorage; it maintains current in-memory config and patches SQLite.
  */
+
+import { consumeAppearancePatchSuppression } from "./appearance-patch-guard";
+import { usePreferencesStore } from "../preferences/state/preferencesStore";
 
 export interface TypographyConfig {
   version: 3;
@@ -251,21 +250,30 @@ export const LINE_HEIGHTS = [
   { id: "relaxed", value: 1.65, label: "Relaxed (1.65)" },
 ] as const;
 
-const STORAGE_KEY = "tbai-typography";
-
 // Minimal typed external store subscription for Interface Font changes only.
-// Used by components that need to re-render when the primary interface font changes (e.g. Mermaid).
 type FontListener = (fontId: string) => void;
 const fontListeners = new Set<FontListener>();
 
-// Initialized strictly from persisted configuration on startup so initial state matches storage.
-let lastNotifiedFontId: string | null = null;
+let currentConfig: TypographyConfig = DEFAULT_TYPOGRAPHY;
+let lastNotifiedFontId: string = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
 
 export function subscribeInterfaceFont(listener: FontListener): () => void {
   fontListeners.add(listener);
   return () => {
     fontListeners.delete(listener);
   };
+}
+
+function notifyFontIfChanged(nextFontId: string): void {
+  if (nextFontId === lastNotifiedFontId) return;
+  lastNotifiedFontId = nextFontId;
+  for (const listener of fontListeners) {
+    try {
+      listener(nextFontId);
+    } catch {
+      /* listener error ignored */
+    }
+  }
 }
 
 export function getFont(id: string): FontDefinition | undefined {
@@ -281,7 +289,6 @@ export function clampWeightForFont(weight: number, font: FontDefinition): number
     const max = font.maxWeight ?? 900;
     return Math.max(min, Math.min(max, weight));
   }
-  // Discrete static weights: find the closest weight in the array
   const weights = font.weights;
   if (!weights.length) return 400;
   return weights.reduce((prev, curr) =>
@@ -305,10 +312,6 @@ function isValidUiFontId(value: unknown): value is string {
   return typeof value === "string" && UI_FONTS.some((f) => f.id === value);
 }
 
-/**
- * Resolves a stored interface font size. A value outside 12-24 is discarded to the
- * default, exactly as before.
- */
 function normalizeInterfaceFontSize(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_TYPOGRAPHY.interfaceFontSize;
@@ -323,30 +326,21 @@ function isValidMonoFontId(value: unknown): value is string {
   return typeof value === "string" && MONO_FONTS.some((f) => f.id === value);
 }
 
-/**
- * Migrates either historical v1 record shape directly into the current v3 config.
- * The legacy `baseSize` is preserved as `interfaceFontSize` when it is within
- * the supported 12–24px range; invalid values fall back to the 15px default.
- */
 function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
   const legacyBase = isValidRange(parsed.baseSize, 12, 24)
     ? parsed.baseSize
     : DEFAULT_TYPOGRAPHY.interfaceFontSize;
-
   const legacyWeight = isValidWeight(parsed.fontWeight)
     ? parsed.fontWeight
     : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
-
   const legacyMonoWeight = isValidWeight(parsed.monoFontWeight)
     ? parsed.monoFontWeight
     : isValidWeight(parsed.fontWeight)
       ? parsed.fontWeight
       : DEFAULT_TYPOGRAPHY.codeFontWeight;
-
   const uiFont = (isValidUiFontId(parsed.fontFamily) && getFont(parsed.fontFamily)) || UI_FONTS[0]!;
   const codeFont =
     (isValidMonoFontId(parsed.monoFontFamily) && getFont(parsed.monoFontFamily)) || MONO_FONTS[0]!;
-
   return {
     version: 3,
     interfaceFontFamily: uiFont.id,
@@ -376,7 +370,6 @@ function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
   const normUi = normalizeInterfaceFontSize(parsed.interfaceFontSize);
   const appScale = isValidRange(parsed.appScale, 0.75, 1.5) ? parsed.appScale : 1;
   const effectiveSize = Math.min(24, Math.max(12, Math.round(normUi * appScale)));
-
   const uiFont =
     (isValidUiFontId(parsed.interfaceFontFamily) && getFont(parsed.interfaceFontFamily)) ||
     UI_FONTS[0]!;
@@ -385,7 +378,6 @@ function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
   const terminalFont =
     (isValidMonoFontId(parsed.terminalFontFamily) && getFont(parsed.terminalFontFamily)) ||
     MONO_FONTS[0]!;
-
   const reqUiWeight = isValidWeight(parsed.interfaceFontWeight)
     ? parsed.interfaceFontWeight
     : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
@@ -395,7 +387,6 @@ function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
   const reqTermWeight = isValidWeight(parsed.terminalFontWeight)
     ? parsed.terminalFontWeight
     : DEFAULT_TYPOGRAPHY.terminalFontWeight;
-
   return {
     version: 3,
     interfaceFontFamily: uiFont.id,
@@ -439,7 +430,6 @@ function readV3(parsed: Record<string, unknown>): TypographyConfig {
   const terminalFont =
     (isValidMonoFontId(parsed.terminalFontFamily) && getFont(parsed.terminalFontFamily)) ||
     MONO_FONTS[0]!;
-
   const reqUiWeight = isValidWeight(parsed.interfaceFontWeight)
     ? parsed.interfaceFontWeight
     : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
@@ -449,7 +439,6 @@ function readV3(parsed: Record<string, unknown>): TypographyConfig {
   const reqTermWeight = isValidWeight(parsed.terminalFontWeight)
     ? parsed.terminalFontWeight
     : DEFAULT_TYPOGRAPHY.terminalFontWeight;
-
   return {
     version: 3,
     interfaceFontFamily: uiFont.id,
@@ -495,74 +484,35 @@ export function migrateTypography(raw: unknown): TypographyConfig {
 }
 
 /**
- * Safely reads typography configuration from localStorage.
- * Handles v1 configurations (both historical shapes) and v2 configurations by migrating to v3.
+ * Returns current in-memory typography config (SQLite-authoritative after sync).
+ * Does NOT read localStorage.
  */
 export function readTypography(): TypographyConfig {
-  if (typeof window === "undefined") return DEFAULT_TYPOGRAPHY;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      if (lastNotifiedFontId === null) {
-        lastNotifiedFontId = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
-      }
-      return DEFAULT_TYPOGRAPHY;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    const config = migrateTypography(parsed);
-    // Initialize baseline tracking to the active interface font so migration doesn't falsely notify
-    if (lastNotifiedFontId === null) {
-      lastNotifiedFontId = config.interfaceFontFamily;
-    }
-    // If parsed was not already v3, persist migrated v3 once for idempotence
-    if (isRecord(parsed) && parsed.version !== 3) {
-      writeTypography(config);
-    }
-    return config;
-  } catch {
-    if (lastNotifiedFontId === null) {
-      lastNotifiedFontId = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
-    }
-    return DEFAULT_TYPOGRAPHY;
-  }
+  return currentConfig;
 }
 
 /**
- * Safely writes typography configuration to localStorage.
+ * Persists typography to SQLite (authoritative) and applies to DOM.
+ * Does NOT write localStorage; pre-paint cache is written by usePreferencesSync
+ * after authoritative state is received.
  */
 export function writeTypography(config: TypographyConfig): void {
-  const newFont = config.interfaceFontFamily;
-  const fontChanged = lastNotifiedFontId !== null ? newFont !== lastNotifiedFontId : false;
-  lastNotifiedFontId = newFont;
-
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch {
-      /* storage unavailable — live listeners still get notified */
-    }
-  }
-
-  if (fontChanged) {
-    for (const listener of fontListeners) {
-      try {
-        listener(newFont);
-      } catch {
-        /* listener error ignored */
-      }
-    }
+  currentConfig = config;
+  applyTypographyToDom(config);
+  if (!consumeAppearancePatchSuppression()) {
+    void usePreferencesStore
+      .getState()
+      .patchPreferences({ appearance: { typography: JSON.stringify(config) } })
+      .catch(() => {});
   }
 }
 
-/**
- * Applies typography configuration directly to the document root element.
- * Never writes `--font-mono` — that is the fixed generic monospace stack.
- */
 export function applyTypographyToDom(config: TypographyConfig): void {
+  currentConfig = config;
+  notifyFontIfChanged(config.interfaceFontFamily);
   if (typeof document === "undefined") return;
   const root = document.documentElement;
 
-  // Resolve fonts
   const uiFont =
     getFont(config.interfaceFontFamily) || getFont(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
   const codeFont = getFont(config.codeFontFamily) || getFont(DEFAULT_TYPOGRAPHY.codeFontFamily);
@@ -570,10 +520,7 @@ export function applyTypographyToDom(config: TypographyConfig): void {
     getFont(config.terminalFontFamily) || getFont(DEFAULT_TYPOGRAPHY.terminalFontFamily);
 
   if (uiFont) root.style.setProperty("--font-sans", uiFont.stack);
-
-  // Single Interface Size drives root font-size directly via rem scaling!
   root.style.fontSize = `${(config.interfaceFontSize / 16) * 100}%`;
-
   const clampedUiWeight = uiFont
     ? clampWeightForFont(config.interfaceFontWeight, uiFont)
     : config.interfaceFontWeight;
@@ -594,23 +541,16 @@ export function applyTypographyToDom(config: TypographyConfig): void {
   root.style.setProperty("--terminal-font-weight", String(clampedTerminalWeight));
 
   root.style.setProperty("--reading-line-height", String(config.readingLineHeight));
-
-  // No application-level zoom writers!
   root.style.removeProperty("zoom");
-
   root.setAttribute("data-code-wrap", config.codeWordWrap ? "on" : "off");
   root.setAttribute("data-terminal-wrap", config.terminalWrap ? "on" : "off");
 }
 
 function persist(updated: TypographyConfig): TypographyConfig {
   writeTypography(updated);
-  applyTypographyToDom(updated);
   return updated;
 }
 
-/**
- * Scoped reset: restores Interface Typography defaults, preserving all other groups.
- */
 export function resetInterfaceTypography(current: TypographyConfig): TypographyConfig {
   return persist({
     ...current,
@@ -620,9 +560,6 @@ export function resetInterfaceTypography(current: TypographyConfig): TypographyC
   });
 }
 
-/**
- * Scoped reset: restores Code Typography defaults, preserving all other groups.
- */
 export function resetCodeTypography(current: TypographyConfig): TypographyConfig {
   return persist({
     ...current,
@@ -633,9 +570,6 @@ export function resetCodeTypography(current: TypographyConfig): TypographyConfig
   });
 }
 
-/**
- * Scoped reset: restores Terminal Typography defaults, preserving all other groups.
- */
 export function resetTerminalTypography(current: TypographyConfig): TypographyConfig {
   return persist({
     ...current,
@@ -646,9 +580,6 @@ export function resetTerminalTypography(current: TypographyConfig): TypographyCo
   });
 }
 
-/**
- * Scoped reset: restores Reading Typography defaults, preserving all other groups.
- */
 export function resetReadingTypography(current: TypographyConfig): TypographyConfig {
   return persist({
     ...current,
@@ -656,9 +587,6 @@ export function resetReadingTypography(current: TypographyConfig): TypographyCon
   });
 }
 
-/**
- * Master reset: resets typography configuration to factory defaults.
- */
 export function resetTypography(): TypographyConfig {
   return persist(DEFAULT_TYPOGRAPHY);
 }

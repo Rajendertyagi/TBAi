@@ -1,79 +1,77 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import {
-  NEW_DRAFT_TAB_ID,
-  agentKey,
-  chatKey,
-  useChatTabsStore,
-} from "@web/features/chat/state/chatTabs.ts";
-import { threadEngine } from "@web/adapters/remoteThreadListAdapter.tsx";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
+import { agentKey, chatKey, useChatTabsStore } from "@web/features/chat/state/chatTabs";
 
-/**
- * First-send id binding (`resolveDraftId`) + row-engine read (`threadEngine`).
- *
- * The draft tab always starts as a chat tab; the row's engine decides the
- * destination: Direct rewrites the key in place, OpenCode swaps the draft
- * for an agent tab (which drives TabUrlSync to the Code surface).
- */
-function resetToDraft(): void {
+function reset() {
   useChatTabsStore.setState({
-    tabs: [{ key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID }],
-    activeKey: chatKey(NEW_DRAFT_TAB_ID),
+    localActiveKey: undefined,
+    hasLocalDraft: false,
+    detachedRefs: {},
+    membershipFailures: {},
+    suppressedDelayedAdds: {},
+  });
+  usePreferencesStore.setState({
+    snapshot: {
+      revision: 1,
+      sharedTabs: [],
+      preferences: {
+        appearance: {
+          themeMode: "system",
+          lightTheme: "default",
+          darkTheme: "default",
+          typography: "default",
+        },
+        desktop: {
+          sidebarVisible: true,
+          statusBarVisible: true,
+          chatWidth: "comfortable",
+          sidebarSort: "updated",
+          sectionOrder: [],
+          sectionCollapsed: {},
+          showCompleted: false,
+          spellCheck: true,
+        },
+        welcome: {
+          engine: "direct",
+          quickActionTab: "coding",
+          scopeMode: "simple",
+          folderId: null,
+        },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    },
+    hydration: "ready",
+    hydrationError: null,
   });
 }
 
 describe("resolveDraftId", () => {
-  beforeEach(resetToDraft);
+  beforeEach(reset);
 
-  it("binds a Direct first send by rewriting the draft key in place", () => {
+  it("resolves a local draft to a direct chat tab", () => {
+    useChatTabsStore.getState().openNewDraft();
     useChatTabsStore.getState().resolveDraftId("real-1", "direct");
-    const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([chatKey("real-1")]);
-    expect(state.tabs[0]).toMatchObject({ kind: "chat", ref: "real-1" });
-    expect(state.activeKey).toBe(chatKey("real-1"));
+    expect(useChatTabsStore.getState().localActiveKey).toBe(chatKey("real-1"));
+    expect(useChatTabsStore.getState().hasLocalDraft).toBe(false);
   });
 
-  it("binds an OpenCode first send by swapping the draft for an agent tab", () => {
+  it("resolves a local draft to an agent tab for opencode", () => {
+    useChatTabsStore.getState().openNewDraft();
     useChatTabsStore.getState().resolveDraftId("real-2", "opencode");
-    const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([agentKey("real-2")]);
-    expect(state.tabs[0]).toMatchObject({ kind: "agent", ref: "real-2" });
-    expect(state.activeKey).toBe(agentKey("real-2"));
+    expect(useChatTabsStore.getState().localActiveKey).toBe(agentKey("real-2"));
+    expect(useChatTabsStore.getState().hasLocalDraft).toBe(false);
   });
 
-  it("treats unknown engine as Direct (legacy rows predate the column)", () => {
-    useChatTabsStore.getState().resolveDraftId("real-3", null);
-    const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([chatKey("real-3")]);
-    expect(state.activeKey).toBe(chatKey("real-3"));
-  });
-
-  it("keeps other open tabs untouched in both branches", () => {
-    useChatTabsStore.setState((s) => ({
-      tabs: [...s.tabs, { key: chatKey("other"), kind: "chat", ref: "other" }],
-    }));
-    useChatTabsStore.getState().resolveDraftId("real-4", "opencode");
-    const keys = useChatTabsStore.getState().tabs.map((t) => t.key);
-    expect(keys).toContain(chatKey("other"));
-    expect(keys).toContain(agentKey("real-4"));
-    expect(keys).not.toContain(chatKey(NEW_DRAFT_TAB_ID));
-  });
-});
-
-describe("threadEngine", () => {
-  it("reads opencode from the row", () => {
-    expect(threadEngine({ custom: { engine: "opencode" } })).toBe("opencode");
-  });
-
-  it("reads direct from the row", () => {
-    expect(threadEngine({ custom: { engine: "direct" } })).toBe("direct");
-  });
-
-  it("defaults absent engine to direct (legacy rows)", () => {
-    expect(threadEngine({ custom: {} })).toBe("direct");
-    expect(threadEngine({})).toBe("direct");
-  });
-
-  it("defaults unexpected values to direct (never strand on a bad surface)", () => {
-    expect(threadEngine({ custom: { engine: "warp" } })).toBe("direct");
+  it("does not steal local active key when draft was not active", () => {
+    usePreferencesStore.getState().applySnapshot({
+      ...usePreferencesStore.getState().snapshot!,
+      revision: 2,
+      sharedTabs: [{ kind: "chat", ref: "keep" }],
+    });
+    useChatTabsStore.getState().presentChat("keep");
+    useChatTabsStore.getState().openNewDraft();
+    useChatTabsStore.getState().selectLocal(chatKey("keep"));
+    useChatTabsStore.getState().resolveDraftId("real-3", "direct");
+    expect(useChatTabsStore.getState().localActiveKey).toBe(chatKey("keep"));
   });
 });

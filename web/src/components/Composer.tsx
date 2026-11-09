@@ -371,6 +371,10 @@ function Composer({
       useSettingsStore.getState().revertChatTarget();
       clearComposerDraft(threadKey);
       useChatTabsStore.getState().resolveDraftId(created.id, snapshot.engine);
+      // Separate shared-membership operation after pending handoff is staged.
+      // Non-awaited, failure-isolated: never blocks/clears/duplicates/resends
+      // the first prompt and never reported as creation/send failure.
+      useChatTabsStore.getState().requestDelayedSharedOpen(created.id, "agent");
     } catch (err) {
       setCodeSendError(err instanceof Error ? err.message : String(err));
     } finally {

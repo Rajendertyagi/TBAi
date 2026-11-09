@@ -18,6 +18,7 @@ import {
   chatKey,
   useChatTabsStore,
 } from "@web/features/chat/state/chatTabs.ts";
+import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import {
   useWelcomeEngineStore,
@@ -108,9 +109,46 @@ function resetAll(): void {
   });
   useSettingsStore.getState().revertChatTarget();
   useChatTabsStore.setState({
-    tabs: [{ key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID }],
-    activeKey: chatKey(NEW_DRAFT_TAB_ID),
-  });
+    localActiveKey: chatKey(NEW_DRAFT_TAB_ID),
+    hasLocalDraft: true,
+    detachedRefs: {},
+    membershipFailures: {},
+    suppressedDelayedAdds: {},
+    requestDelayedSharedOpen: () => {},
+  } as any);
+  usePreferencesStore.setState({
+    snapshot: {
+      revision: 1,
+      sharedTabs: [],
+      preferences: {
+        appearance: {
+          themeMode: "system",
+          lightTheme: "default",
+          darkTheme: "default",
+          typography: "default",
+        },
+        desktop: {
+          sidebarVisible: true,
+          statusBarVisible: true,
+          chatWidth: "comfortable",
+          sidebarSort: "updated",
+          sectionOrder: [],
+          sectionCollapsed: {},
+          showCompleted: false,
+          spellCheck: true,
+        },
+        welcome: {
+          engine: "direct",
+          quickActionTab: "coding",
+          scopeMode: "simple",
+          folderId: null,
+        },
+        navigation: { selectedFolderId: null, folderExpanded: {} },
+      },
+    },
+    hydration: "ready",
+    hydrationError: null,
+  } as any);
 }
 
 const realFetch = globalThis.fetch;
@@ -158,8 +196,7 @@ describe("opencode draft flow — materialize, bind, stash, consume once (case 2
 
     // Agent tab bound (TabUrlSync navigates to /code/:id).
     const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([agentKey("conv-oc-flow")]);
-    expect(state.activeKey).toBe(agentKey("conv-oc-flow"));
+    expect(state.localActiveKey).toBe(agentKey("conv-oc-flow"));
 
     // Code surface binds the session AND the main thread settles on it →
     // consume fires once…
@@ -268,8 +305,7 @@ describe("direct first send never targets chat:new (case 4)", () => {
       .getState()
       .resolveDraftId(id, takeMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine);
     const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([chatKey("conv-direct-bound")]);
-    expect(state.activeKey).toBe(chatKey("conv-direct-bound"));
+    expect(state.localActiveKey).toBe(chatKey("conv-direct-bound"));
   });
 });
 
@@ -317,7 +353,7 @@ describe("failed materialization preserves the draft and sends nothing (case 11 
     expect(peekPendingFirstMessage("anything")).toBeNull();
     // Nothing bound: still on the draft tab; the text stays in the box.
     const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([chatKey(NEW_DRAFT_TAB_ID)]);
+    expect(state.localActiveKey).toBe(chatKey(NEW_DRAFT_TAB_ID));
     expect(text).toBe("precious draft text");
   });
 
@@ -390,7 +426,7 @@ describe("route/tab transition does not determine execution identity (case 15)",
       .resolveDraftId(created.id, ownerEngine ?? getWelcomeEngineSnapshot().engine);
 
     const state = useChatTabsStore.getState();
-    expect(state.tabs.map((t) => t.key)).toEqual([agentKey("conv-flip")]);
+    expect(state.localActiveKey).toBe(agentKey("conv-flip"));
   });
 });
 

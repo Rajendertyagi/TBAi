@@ -1,6 +1,7 @@
-import { useCallback } from "react";
+﻿import { useCallback } from "react";
 import { logger } from "@/lib/logger";
 import { apiFetch } from "@/lib/platform";
+import { usePreferencesStore } from "@/features/preferences/state/preferencesStore";
 import { useChatTabsStore } from "./chatTabs";
 import { readDirectResumableStreamId } from "./resumable-stream";
 
@@ -24,9 +25,6 @@ export async function cancelActiveRun(threadKey: string | null | undefined): Pro
   const streamId = readDirectResumableStreamId(threadKey);
   if (!streamId) return false;
   try {
-    // Cancellation is a lifecycle event, not just cleanup: it ends a run whose
-    // server side would otherwise keep burning tokens. Logged before the call
-    // so the request exists in the timeline even if the response never lands.
     logger.info("chat", "run.cancel_requested", { streamId });
     const res = await apiFetch(`/api/chat/cancel/${encodeURIComponent(streamId)}`, {
       method: "POST",
@@ -95,20 +93,30 @@ export async function deleteConversation(ref: string): Promise<DeleteConversatio
   if (!res.ok && res.status !== 404) {
     throw new Error(`Failed to delete conversation (${res.status})`);
   }
+
+  // Shared membership deletion cleanup (best effort, never affects result).
+  try {
+    await usePreferencesStore.getState().closeSharedTab(ref);
+  } catch {
+    /* best effort */
+  }
+
   return { conversationId: ref, runCancelled, opencodeTerminated };
 }
 
 /**
  * UI-side deletion flow (projection layer). Runs the server coordinator,
- * then closes every tab bound to the conversation on both surfaces. Route
- * correction follows structurally through TabUrlSync reacting to the
- * active-key change, so this hook never navigates. Rejects with the
- * coordinator error for the caller to surface.
+ * then closes every local presentation bound to the conversation on both
+ * surfaces. Route correction follows structurally through TabUrlSync reacting
+ * to the local active-key change. Rejects with the coordinator error for the
+ * caller to surface.
  */
 export function useDeleteConversation(): (ref: string) => Promise<DeleteConversationResult> {
   return useCallback(async (ref: string) => {
     const result = await deleteConversation(ref);
-    useChatTabsStore.getState().closeByRef(ref);
+    const tabs = useChatTabsStore.getState();
+    tabs.closeLocal(`chat:${ref}`);
+    tabs.closeLocal(`agent:${ref}`);
     return result;
   }, []);
 }

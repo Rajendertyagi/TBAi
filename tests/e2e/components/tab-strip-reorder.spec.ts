@@ -36,6 +36,13 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  *
  * DOM order is read from the tabs' `title` attribute, which is the resolved
  * conversation title, not from a screenshot.
+ *
+ * ## Shared workspace membership (2026-11-09)
+ *
+ * Tabs are server-authoritative shared membership. Tests add conversations to
+ * shared membership via the preferences API (CAS) so they appear in the strip,
+ * then navigate to establish local presentation. This preserves the reorder
+ * behavior under test while matching the current architecture.
  */
 
 /** The strip's own accessible name; every locator below is scoped to it. */
@@ -70,6 +77,23 @@ async function createConversation(request: APIRequestContext, marker: string): P
 
 async function deleteConversation(request: APIRequestContext, id: string): Promise<void> {
   await request.delete(`/api/conversations/${id}`).catch(() => {});
+}
+
+/** Add conversations to shared workspace membership in order (CAS). */
+async function addToSharedTabs(request: APIRequestContext, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const prefsRes = await request.get("/api/preferences");
+      expect(prefsRes.ok()).toBe(true);
+      const prefs = (await prefsRes.json()) as { revision: number };
+      const res = await request.post("/api/preferences/tabs/open", {
+        data: { baseRevision: prefs.revision, conversationId: id, kind: "chat" },
+      });
+      if (res.status() === 409) continue;
+      expect(res.ok()).toBe(true);
+      break;
+    }
+  }
 }
 
 async function waitDraftReady(page: Page): Promise<void> {
@@ -118,20 +142,12 @@ async function dragTab(page: Page, fromLabel: string, toLabel: string): Promise<
 
   await page.mouse.move(startX, startY);
   await page.mouse.down();
-  // Clear the activation distance before travelling, so the gesture is
-  // unambiguously a drag and not a click.
-  await page.mouse.move(startX + Math.min(16, from.width / 4), startY, { steps: 4 });
+  // Clear the activation distance, then travel to the target in steps so the
+  // collision detector sees the pointer cross the neighbour.
+  await page.mouse.move(startX + 18, startY, { steps: 4 });
   await page.mouse.move(endX, endY, { steps: 12 });
   await page.mouse.up();
 }
-
-test.describe.configure({ mode: "serial" });
-test.describe.configure({ timeout: 120000 });
-
-test.beforeEach(async ({ page }) => {
-  await page.goto("/#/chat/new");
-  await waitDraftReady(page);
-});
 
 test("a pointer drag moves a tab to the drop position and changes nothing else", async ({
   page,
@@ -140,21 +156,25 @@ test("a pointer drag moves a tab to the drop position and changes nothing else",
   const b = await createConversation(page.request, "e2e-drag-b");
   const c = await createConversation(page.request, "e2e-drag-c");
   try {
+    await addToSharedTabs(page.request, [a, b, c]);
+    // Establish local draft tab, then open shared tabs.
+    await page.goto("/#/chat/new");
+    await waitDraftReady(page);
     await openTab(page, a, "e2e-drag-a");
     await openTab(page, b, "e2e-drag-b");
     await openTab(page, c, "e2e-drag-c");
 
     const before = await stripOrder(page);
     expect(before[0], "the draft tab anchors the strip").toBe(DRAFT_LABEL);
-    expect(before).toHaveLength(4);
+    expect(before).toEqual([DRAFT_LABEL, "e2e-drag-a", "e2e-drag-b", "e2e-drag-c"]);
 
     // Drag the LAST tab onto the FIRST conversation tab.
     await dragTab(page, "e2e-drag-c", "e2e-drag-a");
 
-    const after = await stripOrder(page);
-    expect(after).toEqual([DRAFT_LABEL, "e2e-drag-c", "e2e-drag-a", "e2e-drag-b"]);
-    // A reorder is a permutation: nothing invented, nothing dropped.
-    expect(after.slice().sort()).toEqual(before.slice().sort());
+    // Reorder is server-authoritative (async CAS); wait for the UI to reflect it.
+    await expect
+      .poll(async () => stripOrder(page), { timeout: 10000 })
+      .toEqual([DRAFT_LABEL, "e2e-drag-c", "e2e-drag-a", "e2e-drag-b"]);
   } finally {
     for (const id of [a, b, c]) await deleteConversation(page.request, id);
   }
@@ -163,21 +183,19 @@ test("a pointer drag moves a tab to the drop position and changes nothing else",
 test("a drag that ends where it started leaves the order untouched", async ({ page }) => {
   const a = await createConversation(page.request, "e2e-noop-a");
   const b = await createConversation(page.request, "e2e-noop-b");
-  const c = await createConversation(page.request, "e2e-noop-c");
   try {
+    await addToSharedTabs(page.request, [a, b]);
+    await page.goto("/#/chat/new");
+    await waitDraftReady(page);
     await openTab(page, a, "e2e-noop-a");
     await openTab(page, b, "e2e-noop-b");
-    await openTab(page, c, "e2e-noop-c");
 
     const before = await stripOrder(page);
+    expect(before).toEqual([DRAFT_LABEL, "e2e-noop-a", "e2e-noop-b"]);
+
+    // A real drag that travels away and returns to its own slot.
     const box = await tab(page, "e2e-noop-b").boundingBox();
     if (!box) throw new Error("tab not laid out");
-
-    // A real gesture that returns to its origin. The legacy library compared
-    // the dragged id with the id under the pointer and skipped the commit; the
-    // new one compares the source's initialIndex with its index. Both must
-    // produce NO reorder — a commit here would move a different tab, because
-    // `reorder` is positional.
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
     await page.mouse.move(x, y);
@@ -188,7 +206,7 @@ test("a drag that ends where it started leaves the order untouched", async ({ pa
 
     expect(await stripOrder(page)).toEqual(before);
   } finally {
-    for (const id of [a, b, c]) await deleteConversation(page.request, id);
+    for (const id of [a, b]) await deleteConversation(page.request, id);
   }
 });
 
@@ -196,6 +214,9 @@ test("dragging a tab does not activate it", async ({ page }) => {
   const a = await createConversation(page.request, "e2e-click-a");
   const b = await createConversation(page.request, "e2e-click-b");
   try {
+    await addToSharedTabs(page.request, [a, b]);
+    await page.goto("/#/chat/new");
+    await waitDraftReady(page);
     await openTab(page, a, "e2e-click-a");
     await openTab(page, b, "e2e-click-b");
 
@@ -208,7 +229,9 @@ test("dragging a tab does not activate it", async ({ page }) => {
     // Now drag B, which is NOT the active tab. A reorder must not navigate.
     await dragTab(page, "e2e-click-b", "e2e-click-a");
 
-    expect(await stripOrder(page)).toEqual([DRAFT_LABEL, "e2e-click-b", "e2e-click-a"]);
+    await expect
+      .poll(async () => stripOrder(page), { timeout: 10000 })
+      .toEqual([DRAFT_LABEL, "e2e-click-b", "e2e-click-a"]);
     expect(await stripOrder(page)).not.toEqual(before);
     await expect(page).toHaveURL(new RegExp(`#/chat/${a}$`), { timeout: 10000 });
     expect(await activeTabLabel(page), "a drag must not activate the dragged tab").toBe(
@@ -223,6 +246,9 @@ test("Space picks a tab up, ArrowLeft moves it, Space drops it", async ({ page }
   const a = await createConversation(page.request, "e2e-keys-a");
   const b = await createConversation(page.request, "e2e-keys-b");
   try {
+    await addToSharedTabs(page.request, [a, b]);
+    await page.goto("/#/chat/new");
+    await waitDraftReady(page);
     await openTab(page, a, "e2e-keys-a");
     await openTab(page, b, "e2e-keys-b");
 
@@ -236,7 +262,9 @@ test("Space picks a tab up, ArrowLeft moves it, Space drops it", async ({ page }
     await page.keyboard.press("Space");
 
     // One press of ArrowLeft moves it exactly one slot, whatever the tab width.
-    expect(await stripOrder(page)).toEqual([DRAFT_LABEL, "e2e-keys-b", "e2e-keys-a"]);
+    await expect
+      .poll(async () => stripOrder(page), { timeout: 10000 })
+      .toEqual([DRAFT_LABEL, "e2e-keys-b", "e2e-keys-a"]);
   } finally {
     for (const id of [a, b]) await deleteConversation(page.request, id);
   }
