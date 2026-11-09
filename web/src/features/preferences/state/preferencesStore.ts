@@ -26,6 +26,8 @@ interface PreferencesState {
   refreshSeq: number;
   /** Same-window shared mutation serialization. */
   mutationQueue: Promise<void>;
+  /** Incremented when a failed optimistic patch requires authoritative UI reapply (same revision). */
+  authoritativeReapplySeq: number;
   start: () => void;
   stop: () => void;
   refresh: () => Promise<WorkspacePreferencesSnapshot | null>;
@@ -166,6 +168,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   hydrationError: null,
   refreshSeq: 0,
   mutationQueue: Promise.resolve(),
+  authoritativeReapplySeq: 0,
 
   start: () => {
     if (started) return;
@@ -256,6 +259,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
           throw err;
         }
         await get().refresh();
+        // Failed optimistic patch: restore authoritative UI even if revision unchanged.
+        set((s) => ({ authoritativeReapplySeq: s.authoritativeReapplySeq + 1 }));
         throw err;
       }
     }),
@@ -279,21 +284,30 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   closeSharedTab: (conversationId) =>
     runSerialized(async () => {
-      const base = await get().waitForHydratedSnapshot();
       try {
-        const snapshot = await apiCloseSharedTab({ baseRevision: base.revision, conversationId });
-        get().applySnapshot(snapshot);
-        return { ok: true, snapshot };
-      } catch (err) {
-        if (err instanceof PreferencesConflictError) {
-          get().applySnapshot(err.snapshot);
-          return { ok: false, reason: "conflict", snapshot: err.snapshot };
+        const base = await get().waitForHydratedSnapshot();
+        try {
+          const snapshot = await apiCloseSharedTab({ baseRevision: base.revision, conversationId });
+          get().applySnapshot(snapshot);
+          return { ok: true, snapshot };
+        } catch (err) {
+          if (err instanceof PreferencesConflictError) {
+            get().applySnapshot(err.snapshot);
+            return { ok: false, reason: "conflict", snapshot: err.snapshot };
+          }
+          await get().refresh();
+          return {
+            ok: false,
+            reason: "error",
+            error: err instanceof Error ? err.message : "Failed to close shared tab",
+            snapshot: get().snapshot ?? undefined,
+          };
         }
-        await get().refresh();
+      } catch (err) {
         return {
           ok: false,
           reason: "error",
-          error: err instanceof Error ? err.message : "Failed to close shared tab",
+          error: err instanceof Error ? err.message : "Preferences hydration failed",
           snapshot: get().snapshot ?? undefined,
         };
       }
@@ -301,21 +315,30 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   closeSharedTabsBatch: (input) =>
     runSerialized(async () => {
-      const base = await get().waitForHydratedSnapshot();
       try {
-        const snapshot = await apiCloseSharedTabsBatch({ baseRevision: base.revision, ...input });
-        get().applySnapshot(snapshot);
-        return { ok: true, snapshot };
-      } catch (err) {
-        if (err instanceof PreferencesConflictError) {
-          get().applySnapshot(err.snapshot);
-          return { ok: false, reason: "conflict", snapshot: err.snapshot };
+        const base = await get().waitForHydratedSnapshot();
+        try {
+          const snapshot = await apiCloseSharedTabsBatch({ baseRevision: base.revision, ...input });
+          get().applySnapshot(snapshot);
+          return { ok: true, snapshot };
+        } catch (err) {
+          if (err instanceof PreferencesConflictError) {
+            get().applySnapshot(err.snapshot);
+            return { ok: false, reason: "conflict", snapshot: err.snapshot };
+          }
+          await get().refresh();
+          return {
+            ok: false,
+            reason: "error",
+            error: err instanceof Error ? err.message : "Failed to close shared tabs",
+            snapshot: get().snapshot ?? undefined,
+          };
         }
-        await get().refresh();
+      } catch (err) {
         return {
           ok: false,
           reason: "error",
-          error: err instanceof Error ? err.message : "Failed to close shared tabs",
+          error: err instanceof Error ? err.message : "Preferences hydration failed",
           snapshot: get().snapshot ?? undefined,
         };
       }

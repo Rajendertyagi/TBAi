@@ -65,4 +65,10 @@ describe("corrective appearance: authoritative default typography", () => {
     expect(src).toContain("Invalid authoritative typography: apply safe canonical default (no DB migration)");
     expect(src).not.toContain("patchPreferences({ appearance: { typography");
   });
+
+  it("reapplies authoritative state on failed optimistic patch even when revision unchanged", () => {
+    const src = read("web/src/features/preferences/state/usePreferencesSync.ts");
+    expect(src).toContain("authoritativeReapplySeq");
+    expect(src).toContain("forceReapply");
+  });
 });

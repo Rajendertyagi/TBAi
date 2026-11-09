@@ -51,12 +51,16 @@ function writeAppearancePrepaintCache(input: {
 export function usePreferencesSync(): void {
   const snapshot = usePreferencesStore((s) => s.snapshot);
   const hydration = usePreferencesStore((s) => s.hydration);
+  const reapplySeq = usePreferencesStore((s) => s.authoritativeReapplySeq);
   const { theme, themeIds, setTheme, setThemeId } = useTheme();
   const appliedRevision = useRef<number>(-1);
+  const lastReapplySeq = useRef<number>(0);
 
   useEffect(() => {
     if (hydration !== "ready" || !snapshot) return;
-    if (snapshot.revision <= appliedRevision.current) return;
+    const forceReapply = reapplySeq !== lastReapplySeq.current;
+    if (!forceReapply && snapshot.revision <= appliedRevision.current) return;
+    lastReapplySeq.current = reapplySeq;
     appliedRevision.current = snapshot.revision;
 
     const { appearance: a, desktop: d, welcome: w, navigation: nav } = snapshot.preferences;
@@ -146,5 +150,5 @@ export function usePreferencesSync(): void {
     if (JSON.stringify(folders.folderExpanded) !== JSON.stringify(nav.folderExpanded)) {
       useFoldersStore.setState({ folderExpanded: nav.folderExpanded ?? {} });
     }
-  }, [hydration, snapshot, theme, themeIds, setTheme, setThemeId]);
+  }, [hydration, snapshot, reapplySeq, theme, themeIds, setTheme, setThemeId]);
 }

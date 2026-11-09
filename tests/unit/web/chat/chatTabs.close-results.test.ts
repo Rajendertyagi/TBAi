@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import { usePreferencesStore } from "@web/features/preferences/state/preferencesStore";
 import { useChatTabsStore, chatKey } from "@web/features/chat/state/chatTabs";
 
+const originalCloseSharedTab = usePreferencesStore.getState().closeSharedTab;
+const originalCloseSharedTabsBatch = usePreferencesStore.getState().closeSharedTabsBatch;
+const originalWaitForHydratedSnapshot = usePreferencesStore.getState().waitForHydratedSnapshot;
+
 function snap(sharedTabs: Array<{ kind: "chat" | "agent"; ref: string }>, revision = 2) {
   return {
     revision,
@@ -36,6 +40,10 @@ function reset() {
     snapshot: snap([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 1),
     hydration: "ready",
     hydrationError: null,
+    mutationQueue: Promise.resolve(),
+    closeSharedTab: originalCloseSharedTab,
+    closeSharedTabsBatch: originalCloseSharedTabsBatch,
+    waitForHydratedSnapshot: originalWaitForHydratedSnapshot,
   } as any);
 }
 
@@ -101,6 +109,53 @@ describe("requestSharedCloseBatch result semantics", () => {
       }),
     } as any);
     await useChatTabsStore.getState().requestSharedCloseBatch({ mode: "all" });
+    expect(useChatTabsStore.getState().localActiveKey).toBe(chatKey("a"));
+  });
+});
+
+describe("close methods return explicit error on hydration failure (no unhandled rejection)", () => {
+  beforeEach(reset);
+
+  it("closeSharedTab returns error result when hydration failed", async () => {
+    // Fix C: hydration wait is inside close error handling; returns explicit failure (no throw/navigation).
+    usePreferencesStore.setState({
+      waitForHydratedSnapshot: async () => {
+        throw new Error("prefs unavailable");
+      },
+      mutationQueue: Promise.resolve(),
+    } as any);
+    const result = await usePreferencesStore.getState().closeSharedTab("a");
+    expect(result.ok).toBe(false);
+    if (result.ok === false && result.reason === "error") {
+      expect(result.error).toContain("prefs unavailable");
+    }
+  });
+
+  it("closeSharedTabsBatch returns error result when hydration failed", async () => {
+    usePreferencesStore.setState({
+      waitForHydratedSnapshot: async () => {
+        throw new Error("prefs unavailable");
+      },
+      mutationQueue: Promise.resolve(),
+    } as any);
+    const result = await usePreferencesStore.getState().closeSharedTabsBatch({ mode: "all" });
+    expect(result.ok).toBe(false);
+    if (result.ok === false && result.reason === "error") {
+      expect(result.error).toContain("prefs unavailable");
+    }
+  });
+
+  it("chatTabs requestSharedClose handles hydration-failure error result without navigation", async () => {
+    useChatTabsStore.setState({ localActiveKey: chatKey("a") });
+    usePreferencesStore.setState({
+      closeSharedTab: async () => ({
+        ok: false,
+        reason: "error",
+        error: "prefs unavailable",
+        snapshot: undefined,
+      }),
+    } as any);
+    await useChatTabsStore.getState().requestSharedClose("a");
     expect(useChatTabsStore.getState().localActiveKey).toBe(chatKey("a"));
   });
 });

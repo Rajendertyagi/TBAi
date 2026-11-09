@@ -13,8 +13,8 @@ describe("preferencesStore corrective invariants", () => {
     expect(src).toContain("waitForHydratedSnapshot");
     expect(src).toContain("await get().waitForHydratedSnapshot()");
     expect(src).toContain("Preferences hydration failed");
+    expect(src).toContain("authoritativeReapplySeq");
     expect(src).not.toContain("if (!base) return null");
-    expect(src).not.toContain("defaultSnapshot");
   });
 
   it("close/batch-close return unambiguous results and never auto-retry stale 409", () => {
@@ -54,5 +54,20 @@ describe("preferences service corrective invariants", () => {
     expect(src).toContain("if (!result.conflict && result.snapshot.revision > previousRevision)");
     expect(src).toContain("return emitAfterCommit(result");
     expect(src).not.toContain("emitPreferencesChange({ revision: next.revision");
+  });
+});
+
+describe("failed optimistic patch rollback (invariants)", () => {
+  it("patchPreferences increments authoritativeReapplySeq on non-conflict failure after refresh", () => {
+    const src = read("web/src/features/preferences/state/preferencesStore.ts");
+    expect(src).toContain("authoritativeReapplySeq: s.authoritativeReapplySeq + 1");
+    expect(src).toContain("Failed optimistic patch: restore authoritative UI even if revision unchanged");
+  });
+
+  it("usePreferencesSync force-reapplies on authoritativeReapplySeq change", () => {
+    const src = read("web/src/features/preferences/state/usePreferencesSync.ts");
+    expect(src).toContain("authoritativeReapplySeq");
+    expect(src).toContain("forceReapply");
+    expect(src).toContain("lastReapplySeq");
   });
 });

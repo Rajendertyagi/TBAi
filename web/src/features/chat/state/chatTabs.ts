@@ -239,6 +239,29 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
   },
 
   requestSharedCloseBatch: async (input) => {
+    // Suppress delayed membership additions for tabs being removed (race: delayed add may enter after batch close).
+    const sharedBefore = usePreferencesStore.getState().snapshot?.sharedTabs ?? [];
+    let toSuppress: string[] = [];
+    if (input.mode === "all") {
+      toSuppress = sharedBefore.map((t) => t.ref);
+    } else if (input.anchorConversationId) {
+      const idx = sharedBefore.findIndex((t) => t.ref === input.anchorConversationId);
+      if (idx >= 0) {
+        toSuppress =
+          input.mode === "others"
+            ? sharedBefore.filter((t) => t.ref !== input.anchorConversationId).map((t) => t.ref)
+            : sharedBefore.slice(idx + 1).map((t) => t.ref);
+      }
+    }
+    if (toSuppress.length > 0) {
+      set((s) => {
+        const next = { ...s.suppressedDelayedAdds };
+        const now = Date.now();
+        for (const ref of toSuppress) next[ref] = now;
+        return { suppressedDelayedAdds: next };
+      });
+    }
+
     const result = await usePreferencesStore.getState().closeSharedTabsBatch(input);
     if (result.ok === false) {
       logger.debug("chat", "shared_tab_close_batch_failed", {
