@@ -1533,22 +1533,169 @@ export function createV2ThreadController(
     }
   }
 
+  async function reconcilePromptById(
+    messageId: string,
+    options: { generation?: OpenCodeV2Generation; signal?: AbortSignal } = {},
+  ): Promise<"admitted" | "absent" | "unresolved"> {
+    const generation = options.generation ?? currentAttempt?.generation ?? null;
+    if (!generation) return "unresolved";
+
+    const isGenerationCurrent = (): boolean =>
+      !disposed && generation === (currentAttempt?.generation ?? null);
+
+    const canMutatePromptState = (): boolean => {
+      if (!isGenerationCurrent()) return false;
+      const record = prompts.get(messageId);
+      return !!record && record.result !== "disposed" && record.result !== "definitive-failure";
+    };
+
+    // First check local state quickly
+    const localInbox = Object.values(state.inboxById).find(
+      (record) => record.id === messageId,
+    );
+    if (localInbox !== undefined) {
+      const record = prompts.get(messageId);
+      if (record && record.result !== "admitted" && canMutatePromptState()) {
+        prompts.settle(messageId, "admitted", {
+          messageId,
+          inboxId: localInbox.id,
+          delivery: localInbox.delivery,
+        });
+      }
+      return "admitted";
+    }
+    if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId)) {
+      const record = prompts.get(messageId);
+      if (record && record.result !== "admitted" && canMutatePromptState()) {
+        // Admitted via persisted message; inbox details may be unavailable
+        prompts.settle(messageId, "admitted", {
+          messageId,
+          inboxId: messageId,
+          delivery: "steer",
+        });
+      }
+      return "admitted";
+    }
+
+    try {
+      // Check inbox first (like scheduler)
+      const inboxResp = await generation.operations.inboxList({ sessionID: client.sessionId });
+      if (options.signal?.aborted) return "unresolved";
+      if (!isGenerationCurrent()) return "unresolved";
+      const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
+      const inboxItem = inboxItems.find((item: any) => item.id === messageId);
+      if (inboxItem) {
+        const record = prompts.get(messageId);
+        if (record && record.result !== "admitted" && canMutatePromptState()) {
+          const normalized = inboxItem?.type === "user" ? inboxRecordFromUser(inboxItem) : {
+            id: inboxItem.id,
+            sessionId: inboxItem.sessionID,
+            type: inboxItem.type,
+            delivery: inboxItem.delivery,
+          };
+          dispatch({ type: "inbox_recorded", record: normalized });
+          const activeMessageId =
+            state.execution.type === "submitting" || state.execution.type === "reconciling"
+              ? state.execution.userMessageId
+              : state.execution.type === "admitted" && state.execution.inboxId === normalized.id
+                ? state.execution.userMessageId
+                : state.execution.type === "cancelling"
+                  ? state.execution.userMessageId
+                  : undefined;
+          if (activeMessageId === messageId) {
+            const cancelOwed = cancelPending(state.execution);
+            dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: normalized });
+            if (cancelOwed) void cancelAdmittedPrompt(normalized.id);
+          }
+          prompts.settle(messageId, "admitted", {
+            messageId,
+            inboxId: normalized.id,
+            delivery: normalized.delivery,
+          });
+        }
+        return "admitted";
+      }
+
+      // Paginate messages like scheduler does
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      let incomplete = false;
+      for (let page = 0; page < 100; page++) {
+        if (options.signal?.aborted) return "unresolved";
+        if (!isGenerationCurrent()) return "unresolved";
+        const params: any = { sessionID: client.sessionId, limit: 100 };
+        if (cursor) {
+          params.cursor = cursor;
+        } else {
+          params.order = "asc";
+        }
+        try {
+          const msgResp: any = await generation.history.list(params);
+          if (options.signal?.aborted) return "unresolved";
+          if (!isGenerationCurrent()) return "unresolved";
+          const messages = msgResp?.data ?? msgResp?.messages ?? [];
+          if (messages.some((msg: any) => msg.id === messageId)) {
+            const record = prompts.get(messageId);
+            if (record && record.result !== "admitted" && canMutatePromptState()) {
+              const activeMessageId =
+                state.execution.type === "submitting" || state.execution.type === "reconciling"
+                  ? state.execution.userMessageId
+                  : state.execution.type === "cancelling"
+                    ? state.execution.userMessageId
+                    : undefined;
+              if (activeMessageId === messageId) {
+                const cancelOwed = cancelPending(state.execution);
+                const syntheticInbox = { id: messageId, sessionId: client.sessionId, type: "user" as const, delivery: "steer" as const };
+                dispatch({ type: "inbox_recorded", record: syntheticInbox });
+                dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: syntheticInbox });
+                if (cancelOwed) void cancelAdmittedPrompt(messageId);
+              }
+              prompts.settle(messageId, "admitted", {
+                messageId,
+                inboxId: messageId,
+                delivery: "steer",
+              });
+            }
+            return "admitted";
+          }
+          const next = msgResp?.cursor?.next;
+          if (!next) break;
+          if (seen.has(next)) {
+            incomplete = true;
+            break;
+          }
+          if (messages.length === 0) {
+            incomplete = true;
+            break;
+          }
+          if (page === 99) {
+            incomplete = true;
+            break;
+          }
+          seen.add(next);
+          cursor = next;
+        } catch {
+          incomplete = true;
+          break;
+        }
+      }
+      if (incomplete) {
+        return "unresolved";
+      }
+      // A complete scan found no evidence, but the request may still be in-flight
+      // on the server in edge cases; preserve ambiguity rather than claiming
+      // definitive absence.
+      return "unresolved";
+    } catch {
+      return "unresolved";
+    }
+  }
+
   async function reconcilePendingPrompt(
     messageId: string,
   ): Promise<"admitted" | "absent" | "unresolved"> {
     await awaitReady();
-    const inbox = Object.values(state.inboxById).find(
-      (record) => record.id === messageId || record.id === state.inboxById[messageId]?.id,
-    );
-    if (inbox !== undefined) return "admitted";
-    if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId))
-      return "admitted";
-    const record = prompts.get(messageId);
-    if (record?.result === "ambiguous") {
-      prompts.settle(messageId, "definitive-failure");
-      return "absent";
-    }
-    return "unresolved";
+    return reconcilePromptById(messageId);
   }
 
   function awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult> {
@@ -1650,6 +1797,29 @@ export function createV2ThreadController(
           cancelRequested: state.execution.type === "cancelling",
         });
         prompts.markAmbiguous(messageId);
+        // Attempt authoritative reconciliation (bounded). Never infer absence from
+        // incomplete/unreliable scans; keep ambiguous if unresolved.
+        void (async () => {
+          const deadline = Date.now() + cfg.promptAdmissionTimeoutMs;
+          while (Date.now() < deadline) {
+            if (disposed) return;
+            const currentRecord = prompts.get(messageId);
+            if (!currentRecord || currentRecord.result === "admitted" || currentRecord.result === "disposed" || currentRecord.result === "definitive-failure") {
+              return;
+            }
+            const gen = currentAttempt?.generation ?? null;
+            if (!gen) {
+              await new Promise((resolve) => setTimeout(resolve, 250));
+              continue;
+            }
+            const result = await reconcilePromptById(messageId, { generation: gen });
+            if (result === "admitted") {
+              return;
+            }
+            // unresolved: wait a bit and retry if time remains
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+        })();
       });
     // The request remains owned by this generation after an inbox event admits
     // the prompt. Its eventual response is observed and ignored safely; it is
