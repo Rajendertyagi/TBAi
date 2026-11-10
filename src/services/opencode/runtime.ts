@@ -50,9 +50,15 @@ export function resolveManagedBinary(
   return { path, source: "path" };
 }
 
+/** Strips ANSI escape sequences from CLI output before parsing. */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 /** Parses an OpenCode CLI version without accepting arbitrary output. */
 export function parseOpenCodeVersion(output: string): string | null {
-  const match = versionPattern.exec(output.trim());
+  const clean = stripAnsi(output).trim();
+  const match = versionPattern.exec(clean);
   return match ? match[1] : null;
 }
 

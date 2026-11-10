@@ -39,7 +39,16 @@ import * as realOpenCodeClient from "@/services/opencode/client.ts";
 // (including the user's). This file is about session identity and the model on
 // the wire, not storage, so it uses an in-memory database and never touches the
 // machine's real OpenCode data.
+const previousOpenCodeDb = process.env.OPENCODE_DB;
 process.env.OPENCODE_DB = ":memory:";
+
+afterEach(() => {
+  if (previousOpenCodeDb === undefined) {
+    delete process.env.OPENCODE_DB;
+  } else {
+    process.env.OPENCODE_DB = previousOpenCodeDb;
+  }
+});
 
 /** The server's advertised default in every case that needs one. */
 const SERVER_DEFAULT = {
@@ -172,6 +181,8 @@ afterEach(async () => {
   for (const row of threads) {
     if (row.title === "code-view-boundary") await conversationService.delete(row.id);
   }
+  const { resetConnectionStateForTests } = await import("@/services/opencode/connectionState.ts");
+  resetConnectionStateForTests();
 });
 
 /**

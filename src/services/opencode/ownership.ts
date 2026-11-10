@@ -349,23 +349,24 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
       );
     }
 
-    // Process enumeration guard: if dbPath matches default OpenCode database,
-    // verify no foreign OpenCode server process other than childPid is running.
-    const defaultDb = path
-      .resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
-      .toLowerCase();
-    const localAppDb = process.env.LOCALAPPDATA
-      ? path.resolve(process.env.LOCALAPPDATA, "opencode", "opencode.db").toLowerCase()
-      : null;
-    const normalizedDb = path.resolve(dbPath).toLowerCase();
+    // If the database files already exist, Restart Manager provides authoritative
+    // detection of processes that actually hold or share open handles on them.
+    // If the database files do not exist yet (first-time initialization),
+    // and dbPath is the default database, we check whether any running OpenCode
+    // processes exist as a safeguard.
+    if (files.length === 0) {
+      const defaultDb = (
+        process.env.XDG_DATA_HOME
+          ? path.resolve(process.env.XDG_DATA_HOME, "opencode", "opencode.db")
+          : path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
+      ).toLowerCase();
+      const normalizedDb = path.resolve(dbPath).toLowerCase();
 
-    if (
-      (normalizedDb === defaultDb || (localAppDb && normalizedDb === localAppDb)) &&
-      this.deps.findRunningOpenCodePids
-    ) {
-      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid, childPid]);
-      for (const pid of runningOpenCodePids) {
-        if (!pids.includes(pid)) pids.push(pid);
+      if (normalizedDb === defaultDb && this.deps.findRunningOpenCodePids) {
+        const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid, childPid]);
+        for (const pid of runningOpenCodePids) {
+          if (!pids.includes(pid)) pids.push(pid);
+        }
       }
     }
 
@@ -401,23 +402,24 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
       }
     }
 
-    // Process enumeration guard: if dbPath matches default OpenCode database,
-    // verify no foreign OpenCode server process is already running.
-    const defaultDb = path
-      .resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
-      .toLowerCase();
-    const localAppDb = process.env.LOCALAPPDATA
-      ? path.resolve(process.env.LOCALAPPDATA, "opencode", "opencode.db").toLowerCase()
-      : null;
-    const normalizedDb = path.resolve(dbPath).toLowerCase();
+    // If the database files already exist, Restart Manager provides authoritative
+    // detection of processes that actually hold or share open handles on them.
+    // If the database files do not exist yet (first-time initialization),
+    // and dbPath is the default database, we check whether any running OpenCode
+    // processes exist as a safeguard.
+    if (files.length === 0) {
+      const defaultDb = (
+        process.env.XDG_DATA_HOME
+          ? path.resolve(process.env.XDG_DATA_HOME, "opencode", "opencode.db")
+          : path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
+      ).toLowerCase();
+      const normalizedDb = path.resolve(dbPath).toLowerCase();
 
-    if (
-      (normalizedDb === defaultDb || (localAppDb && normalizedDb === localAppDb)) &&
-      this.deps.findRunningOpenCodePids
-    ) {
-      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid]);
-      for (const pid of runningOpenCodePids) {
-        if (!pids.includes(pid)) pids.push(pid);
+      if (normalizedDb === defaultDb && this.deps.findRunningOpenCodePids) {
+        const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid]);
+        for (const pid of runningOpenCodePids) {
+          if (!pids.includes(pid)) pids.push(pid);
+        }
       }
     }
 

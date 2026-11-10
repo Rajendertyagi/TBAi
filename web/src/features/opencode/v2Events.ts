@@ -688,14 +688,24 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
     }
     case "session.execution.failed": {
       const observed = withActivity(withRetryCleared(state), "not-running");
+      const mappedErr = mapEventError(event.data.error);
+      const assistantMessageId =
+        state.execution.type === "streaming" ? state.execution.assistantMessageId : null;
+      let nextState = observed;
+      if (assistantMessageId) {
+        const msg = getMessage(observed, assistantMessageId);
+        nextState = withMessage(observed, {
+          ...msg,
+          error: mappedErr,
+        });
+      }
       return {
-        ...observed,
+        ...nextState,
         execution: {
           type: "error",
           userMessageId: currentUserAndInbox(state).userMessageId,
-          assistantMessageId:
-            state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
-          error: mapEventError(event.data.error),
+          assistantMessageId,
+          error: mappedErr,
         },
       };
     }
@@ -845,27 +855,41 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
       // "unknown" for the rest of the session after one compaction.
       const occupancyTokens = event.data.tokens ?? state.occupancyTokens;
       if (part?.kind !== "step") {
+        if (event.type === "session.step.failed" && event.data.error) {
+          const withErr = withMessage(state, {
+            ...message,
+            error: mapEventError(event.data.error),
+          });
+          return event.data.tokens ? { ...withErr, occupancyTokens, occupancyStale: false } : withErr;
+        }
         return event.data.tokens ? { ...state, occupancyTokens, occupancyStale: false } : state;
       }
       const next = updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
         status: event.type === "session.step.failed" ? "error" : "finished",
       });
+      const nextWithErr =
+        event.type === "session.step.failed" && event.data.error
+          ? withMessage(next, {
+              ...getMessage(next, event.data.assistantMessageID),
+              error: mapEventError(event.data.error),
+            })
+          : next;
       const usage =
         event.type === "session.step.ended"
           ? { cost: event.data.cost, tokens: event.data.tokens }
           : event.data.cost !== undefined && event.data.tokens !== undefined
             ? { cost: event.data.cost, tokens: event.data.tokens }
-            : next.usage;
+            : nextWithErr.usage;
       // A step's usage is measured against the CURRENT prompt, so it clears any
       // compaction invalidation. Without this the meter would stay unknown for
       // the rest of the session after one compaction.
-      const measured = usage !== next.usage;
+      const measured = usage !== nextWithErr.usage;
       // A step's tokens describe the prompt THIS response was given, so they are
       // the occupancy. The last step of a turn supersedes its earlier steps, and
       // the last turn supersedes earlier turns - which is exactly OpenChamber's
       // "newest assistant response that reported tokens".
-      const endMsg = getMessage(next, event.data.assistantMessageID);
+      const endMsg = getMessage(nextWithErr, event.data.assistantMessageID);
       const endSource = endMsg.source;
       const finalSource =
         endSource?.type === "assistant"
@@ -877,7 +901,7 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
             }
           : endSource;
       const finalNext =
-        finalSource !== endSource ? withMessage(next, { ...endMsg, source: finalSource }) : next;
+        finalSource !== endSource ? withMessage(nextWithErr, { ...endMsg, source: finalSource }) : nextWithErr;
 
       return {
         ...finalNext,

@@ -191,6 +191,22 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
 }
 
 /**
+ * Extracts a terminal error description from an assistant message, or undefined.
+ */
+function errorForMessage(
+  source: SessionMessageInfo,
+): string | { readonly message: string; readonly type?: string } | undefined {
+  if (source.type !== "assistant") return undefined;
+  if ("error" in source && source.error) {
+    return source.error;
+  }
+  if ("finish" in source && source.finish === "error") {
+    return "The model encountered an error during generation.";
+  }
+  return undefined;
+}
+
+/**
  * Projects one official history snapshot into normalized chronological state.
  *
  * @param snapshot - The history snapshot.
@@ -199,6 +215,7 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
 export function projectV2History(snapshot: V2HistorySnapshot): V2HistoryProjection {
   let parentId: string | null = null;
   const messages = snapshot.messages.map((source) => {
+    const error = errorForMessage(source);
     const message: V2MessageState = {
       id: source.id,
       parentId,
@@ -206,6 +223,7 @@ export function projectV2History(snapshot: V2HistorySnapshot): V2HistoryProjecti
       createdAt: messageTime(source),
       parts: partsForMessage(source),
       source,
+      ...(error !== undefined ? { error } : {}),
     };
     parentId = source.id;
     return message;

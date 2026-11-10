@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { createOpenCodeClient, lastStatusForSessionLookup, type OpenCodeClient } from "./client";
 import {
   OpenCodeDirectoryUnavailableError,
@@ -15,7 +16,6 @@ import { resolveOpenCodeModelRef } from "./capabilities";
 import { fetchServerDefaultModel, pickSessionModel, resolveStoredModel } from "./sessionModel";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
-import { generateId } from "../../lib/utils";
 import {
   extractSessionId,
   lazyCapabilityRegistry,
@@ -64,7 +64,43 @@ export const READ_ONLY_PERMISSIONS = [
 ] as const;
 
 /** Prefix every TBAi-minted OpenCode session id carries. */
-const SESSION_ID_PREFIX = "ses_";
+export const SESSION_ID_PREFIX = "ses_";
+const ID_TOTAL_LENGTH = 26;
+const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let lastIdMs = 0;
+let idCounter = 0;
+
+/**
+ * OpenCode 2.2.6 official descending session ID generator.
+ * Matches upstream TR(true) exactly: 12-char descending hex + 14-char CSPRNG base62.
+ */
+export function generateOpenCodeSessionId(descending = true, nowMs = Date.now()): string {
+  if (nowMs !== lastIdMs) {
+    lastIdMs = nowMs;
+    idCounter = 0;
+  }
+  idCounter++;
+
+  const raw = BigInt(nowMs) * 0x1000n + BigInt(idCounter);
+  const timeValue = descending ? ~raw : raw;
+
+  // 6 bytes = 12 hex characters
+  let hexTime = "";
+  for (let b = 0; b < 6; b++) {
+    const byte = Number((timeValue >> BigInt(40 - 8 * b)) & 0xffn);
+    hexTime += byte.toString(16).padStart(2, "0");
+  }
+
+  // 14 cryptographically random base62 characters
+  const randomBytes = new Uint8Array(ID_TOTAL_LENGTH - 12);
+  crypto.getRandomValues(randomBytes);
+  let randomSuffix = "";
+  for (let i = 0; i < randomBytes.length; i++) {
+    randomSuffix += BASE62_CHARS[randomBytes[i] % 62];
+  }
+
+  return `ses_${hexTime}${randomSuffix}`;
+}
 
 /**
  * Caller error: the conversation row is not an OpenCode row. The row is
@@ -888,11 +924,9 @@ async function ensureOpenCodeSessionInner(
   //
   // RT-001: the id is minted HERE, not read off the response. OpenCode honours
   // a caller-supplied `ses_...` id and treats a repeat create for that id as
-  // idempotent (verified against 2.1.2: the second create returns the first
-  // session unchanged). That makes the id a correlation key that exists in
-  // TBAi's hands BEFORE the request, so a crash after the server commits the
-  // session but before any response is durable is still recoverable.
-  const sessionId = `${SESSION_ID_PREFIX}${generateId()}`;
+  // idempotent. Generated using OpenCode 2.2.6's official descending identifier
+  // algorithm to pass upstream proxy validation.
+  const sessionId = generateOpenCodeSessionId();
   const params: SessionCreateParams = { id: sessionId, location: { directory: sessionDirectory } };
   if (options?.permissions) {
     params.permissions = options.permissions;

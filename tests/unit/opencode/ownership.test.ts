@@ -218,12 +218,11 @@ describe("OpenCodeDatabaseOwnership", () => {
     }
   });
 
-  it("refuses when another independent OpenCode server process is running on the default database", async () => {
+  it("refuses when an independent OpenCode process holds an open file handle on the default database", async () => {
     const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
     const { deps, released } = fakeDeps({
       resolveDatabasePath: async () => defaultDb,
-      findProcessesUsingFiles: () => [],
-      findRunningOpenCodePids: () => [17064],
+      findProcessesUsingFiles: () => [17064],
     });
     const lease = new OpenCodeDatabaseOwnership({ deps });
     const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);

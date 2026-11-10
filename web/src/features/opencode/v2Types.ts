@@ -118,6 +118,7 @@ export interface V2MessageState {
   readonly createdAt: number;
   readonly parts: readonly V2MessagePartState[];
   readonly source: SessionMessageInfo | null;
+  readonly error?: string | { readonly message: string; readonly type?: string };
 }
 
 export interface V2InboxRecord {

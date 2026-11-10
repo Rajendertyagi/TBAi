@@ -317,16 +317,37 @@ function messageToAssistant(
     return Array.isArray(projected) ? projected : [projected];
   });
   const pendingPatches = pendingPatchMap(permissions);
+  const messageError =
+    message.error !== undefined
+      ? formatOpenCodeErrorNotice(message.error)
+      : source?.finish === "error"
+        ? formatOpenCodeErrorNotice(
+            "error" in (source as Record<string, unknown>)
+              ? ((source as Record<string, unknown>).error as string)
+              : "Generation failed with an error.",
+          )
+        : undefined;
+
   return {
     id: message.id,
     role: message.role,
     content,
     createdAt: new Date(message.createdAt),
-    ...(message.role === "assistant" && (source !== null || openCodeParts.length > 0)
+    ...(messageError !== undefined
+      ? {
+          status: {
+            type: "incomplete" as const,
+            reason: "error" as const,
+            error: messageError,
+          },
+        }
+      : {}),
+    ...(message.role === "assistant" && (source !== null || openCodeParts.length > 0 || messageError !== undefined)
       ? {
           metadata: {
             custom: {
               ...(source === null ? {} : assistantTurnFields(source)),
+              ...(messageError !== undefined ? { error: messageError } : {}),
               ...(openCodeParts.length === 0
                 ? {}
                 : {
