@@ -405,7 +405,8 @@ export function createGeneration(
       interruptInputs.push(input);
       return { interrupted: true };
     },
-    inboxList: async (input) => options.inboxList?.(input, connectionSignal) ?? [],
+    inboxList: async (input, requestOptions) =>
+      options.inboxList?.(input, requestOptions?.signal ?? connectionSignal) ?? [],
     inboxCancel: async (input) => {
       inboxCancelInputs.push(input);
     },
@@ -440,7 +441,8 @@ export function createGeneration(
     history: {
       [V2_HISTORY_READER_BRAND]: true,
       sessionId: SESSION_ID,
-      list: async (input) => options.historyList?.(input, connectionSignal) ?? EMPTY_HISTORY,
+      list: async (input, requestOptions) =>
+        options.historyList?.(input, requestOptions?.signal ?? connectionSignal) ?? EMPTY_HISTORY,
     },
     operations,
     promptInputs,

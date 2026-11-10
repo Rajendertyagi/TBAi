@@ -363,6 +363,7 @@ export function createV2ThreadController(
   const liveTouchedMessageIds = new Set<string>();
   const listeners = new Set<() => void>();
   const prompts = createPromptsInFlight();
+  const activePromptReconciliations = new Set<string>();
   /**
    * The retention policy, applied per collection.
    *
@@ -1533,6 +1534,57 @@ export function createV2ThreadController(
     }
   }
 
+  function startPromptReconciliation(messageId: string): void {
+    if (disposed) return;
+    const record = prompts.get(messageId);
+    if (!record || record.result === "admitted" || record.result === "disposed" || record.result === "definitive-failure") {
+      return;
+    }
+    prompts.markAmbiguous(messageId);
+    const activeMessageId =
+      state.execution.type === "submitting" || state.execution.type === "reconciling"
+        ? state.execution.userMessageId
+        : state.execution.type === "cancelling"
+          ? state.execution.userMessageId
+          : undefined;
+    if (activeMessageId === messageId && state.execution.type !== "reconciling") {
+      dispatch({
+        type: "prompt_reconciling",
+        userMessageId: messageId,
+        cancelRequested: state.execution.type === "cancelling",
+      });
+    }
+    if (activePromptReconciliations.has(messageId)) return;
+    activePromptReconciliations.add(messageId);
+    // Attempt authoritative reconciliation (bounded). Never infer absence from
+    // incomplete/unreliable scans; keep ambiguous if unresolved.
+    void (async () => {
+      try {
+        const deadline = Date.now() + Math.max(cfg.promptAdmissionTimeoutMs, 5_000);
+        while (Date.now() < deadline) {
+          if (disposed) return;
+          const currentRecord = prompts.get(messageId);
+          if (!currentRecord || currentRecord.result === "admitted" || currentRecord.result === "disposed" || currentRecord.result === "definitive-failure") {
+            return;
+          }
+          const gen = currentAttempt?.generation ?? null;
+          if (!gen) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            continue;
+          }
+          const result = await reconcilePromptById(messageId, { generation: gen });
+          if (result === "admitted") {
+            return;
+          }
+          // unresolved: wait a bit and retry if time remains
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      } finally {
+        activePromptReconciliations.delete(messageId);
+      }
+    })();
+  }
+
   async function reconcilePromptById(
     messageId: string,
     options: { generation?: OpenCodeV2Generation; signal?: AbortSignal } = {},
@@ -1549,6 +1601,25 @@ export function createV2ThreadController(
       return !!record && record.result !== "disposed" && record.result !== "definitive-failure";
     };
 
+    const withRequestDeadline = async <T>(
+      operation: (signal: AbortSignal) => Promise<T>,
+      timeoutMs = Math.min(2_000, Math.max(100, cfg.promptAdmissionTimeoutMs)),
+    ): Promise<T> => {
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      if (options.signal) {
+        if (options.signal.aborted) controller.abort();
+        else options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await operation(controller.signal);
+      } finally {
+        clearTimeout(timer);
+        if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      }
+    };
+
     // First check local state quickly
     const localInbox = Object.values(state.inboxById).find(
       (record) => record.id === messageId,
@@ -1556,6 +1627,20 @@ export function createV2ThreadController(
     if (localInbox !== undefined) {
       const record = prompts.get(messageId);
       if (record && record.result !== "admitted" && canMutatePromptState()) {
+        const activeMessageId =
+          state.execution.type === "submitting" || state.execution.type === "reconciling"
+            ? state.execution.userMessageId
+            : state.execution.type === "admitted" && state.execution.inboxId === localInbox.id
+              ? state.execution.userMessageId
+              : state.execution.type === "cancelling"
+                ? state.execution.userMessageId
+                : undefined;
+        if (activeMessageId === messageId) {
+          const cancelOwed = cancelPending(state.execution);
+          dispatch({ type: "inbox_recorded", record: localInbox });
+          dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: localInbox });
+          if (cancelOwed) void cancelAdmittedPrompt(localInbox.id);
+        }
         prompts.settle(messageId, "admitted", {
           messageId,
           inboxId: localInbox.id,
@@ -1567,7 +1652,20 @@ export function createV2ThreadController(
     if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId)) {
       const record = prompts.get(messageId);
       if (record && record.result !== "admitted" && canMutatePromptState()) {
-        // Admitted via persisted message; inbox details may be unavailable
+        // Admitted via persisted message; inbox details may be unavailable.
+        // Do not fabricate an inbox ID or issue an invalid inbox cancellation.
+        const activeMessageId =
+          state.execution.type === "submitting" || state.execution.type === "reconciling"
+            ? state.execution.userMessageId
+            : state.execution.type === "cancelling"
+              ? state.execution.userMessageId
+              : undefined;
+        if (activeMessageId === messageId) {
+          // Settle admission state without inventing a cancellable inbox item.
+          // If cancel was requested, we cannot safely cancel via inbox from
+          // history-only evidence; do not issue inbox cancellation.
+          dispatch({ type: "execution_settled" });
+        }
         prompts.settle(messageId, "admitted", {
           messageId,
           inboxId: messageId,
@@ -1579,7 +1677,9 @@ export function createV2ThreadController(
 
     try {
       // Check inbox first (like scheduler)
-      const inboxResp = await generation.operations.inboxList({ sessionID: client.sessionId });
+      const inboxResp = await withRequestDeadline((signal) =>
+        generation.operations.inboxList({ sessionID: client.sessionId }, { signal }),
+      );
       if (options.signal?.aborted) return "unresolved";
       if (!isGenerationCurrent()) return "unresolved";
       const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
@@ -1630,7 +1730,9 @@ export function createV2ThreadController(
           params.order = "asc";
         }
         try {
-          const msgResp: any = await generation.history.list(params);
+          const msgResp: any = await withRequestDeadline((signal) =>
+            generation.history.list(params, { signal }),
+          );
           if (options.signal?.aborted) return "unresolved";
           if (!isGenerationCurrent()) return "unresolved";
           const messages = msgResp?.data ?? msgResp?.messages ?? [];
@@ -1644,11 +1746,9 @@ export function createV2ThreadController(
                     ? state.execution.userMessageId
                     : undefined;
               if (activeMessageId === messageId) {
-                const cancelOwed = cancelPending(state.execution);
-                const syntheticInbox = { id: messageId, sessionId: client.sessionId, type: "user" as const, delivery: "steer" as const };
-                dispatch({ type: "inbox_recorded", record: syntheticInbox });
-                dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: syntheticInbox });
-                if (cancelOwed) void cancelAdmittedPrompt(messageId);
+                // History-only evidence: settle admission without inventing a
+                // cancellable inbox item or issuing inbox cancellation.
+                dispatch({ type: "execution_settled" });
               }
               prompts.settle(messageId, "admitted", {
                 messageId,
@@ -1791,35 +1891,7 @@ export function createV2ThreadController(
           prompts.settle(messageId, "definitive-failure");
           return;
         }
-        dispatch({
-          type: "prompt_reconciling",
-          userMessageId: messageId,
-          cancelRequested: state.execution.type === "cancelling",
-        });
-        prompts.markAmbiguous(messageId);
-        // Attempt authoritative reconciliation (bounded). Never infer absence from
-        // incomplete/unreliable scans; keep ambiguous if unresolved.
-        void (async () => {
-          const deadline = Date.now() + cfg.promptAdmissionTimeoutMs;
-          while (Date.now() < deadline) {
-            if (disposed) return;
-            const currentRecord = prompts.get(messageId);
-            if (!currentRecord || currentRecord.result === "admitted" || currentRecord.result === "disposed" || currentRecord.result === "definitive-failure") {
-              return;
-            }
-            const gen = currentAttempt?.generation ?? null;
-            if (!gen) {
-              await new Promise((resolve) => setTimeout(resolve, 250));
-              continue;
-            }
-            const result = await reconcilePromptById(messageId, { generation: gen });
-            if (result === "admitted") {
-              return;
-            }
-            // unresolved: wait a bit and retry if time remains
-            await new Promise((resolve) => setTimeout(resolve, 250));
-          }
-        })();
+        startPromptReconciliation(messageId);
       });
     // The request remains owned by this generation after an inbox event admits
     // the prompt. Its eventual response is observed and ignored safely; it is
@@ -1829,10 +1901,10 @@ export function createV2ThreadController(
     if (result === "admitted" && record.submission !== null) return record.submission;
     if (result === "disposed") throw { kind: "disposed" } satisfies V2PromptSendError;
     if (result === "ambiguous") {
-      // The request failed in a way that cannot prove the server refused it.
-      // The prompt may still be running there, so this is NOT a rejection and
-      // must not be reported as one: the reader's message stays in the thread
-      // and the run continues server-side.
+      // Admission deadline elapsed or transport became ambiguous. Start the
+      // idempotent reconciliation lifecycle (covers timeout while HTTP request
+      // is still pending). Never abort/resubmit the original prompt.
+      startPromptReconciliation(messageId);
       throw {
         kind: "ambiguous",
         error: definitiveError ?? {

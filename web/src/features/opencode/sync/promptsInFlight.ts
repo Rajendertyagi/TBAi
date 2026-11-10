@@ -109,7 +109,8 @@ export interface PromptsInFlight {
    *
    * The prompt is NOT settled by this: the server may still admit it, and an
    * admission that arrives afterwards is the real answer. What this records is
-   * that the request itself failed, so a waiter can give up on it.
+   * that the request itself failed or its admission deadline elapsed, so a
+   * waiter can give up on it.
    *
    * @param messageId - The local message id of the prompt.
    */
@@ -301,23 +302,24 @@ export function createPromptsInFlight(): PromptsInFlight {
 
   function markAmbiguous(messageId: string): void {
     const record = admissions.get(messageId);
-    if (!record || record.result !== null) return;
+    if (!record || (record.result !== null && record.result !== "ambiguous")) return;
     // The request failed in a way that cannot prove the server refused it. The
     // prompt may still be running there, so this is NOT a settlement: the
-    // record stays open, and a later admission still settles it (the server
-    // admits a repeated message id as the SAME prompt, so the answer can
-    // arrive after the request died).
+    // record stays open, and a later admission still settles it.
     //
     // What this does settle is the OUTCOME watch: a waiter that asked "did
     // the server take it?" is told "not provably", and a caller with a
     // deadline stops waiting. The ADMISSION watch is left waiting, because
     // for it "ambiguous" is not an answer but a question.
-    record.result = "ambiguous";
-    for (const waiter of record.waiters) waiter("ambiguous");
-    record.waiters.clear();
+    if (record.result === null) {
+      record.result = "ambiguous";
+      for (const waiter of record.waiters) waiter("ambiguous");
+      record.waiters.clear();
+    }
     // The ADMISSION watch may still be waiting, so the record stays PROTECTED
     // until that watcher is gone. A record with no watcher left is evictable.
-    if (record.admissionWaiters.size === 0) protectedIds.delete(messageId);
+    if (record.waiters.size === 0 && record.admissionWaiters.size === 0)
+      protectedIds.delete(messageId);
     // Bound the registry even when records never settle (all-ambiguous during
     // a network outage). Sweep runs here too, not only on settle().
     sweep(Date.now());
@@ -339,6 +341,7 @@ export function createPromptsInFlight(): PromptsInFlight {
     const record = ensure(messageId);
     if (record.result !== null && record.result !== "ambiguous")
       return Promise.resolve(record.result);
+    if (record.result === "ambiguous") return Promise.resolve("ambiguous");
     // Protected for the same reason as `awaitAdmission`: a waiter is on it.
     protectedIds.add(messageId);
     return new Promise((resolve) => {
@@ -348,10 +351,18 @@ export function createPromptsInFlight(): PromptsInFlight {
       };
       const timer = setTimeout(() => {
         record.admissionWaiters.delete(wait);
+        // Admission deadline elapsed: the prompt's admission cannot be proven
+        // within the bounded wait. Mark ambiguous so outcome waiters (including
+        // awaitPromptAdmission) do not hang indefinitely; the server may still
+        // admit the prompt later and settle it.
+        if (record.result === null) {
+          record.result = "ambiguous";
+          for (const waiter of record.waiters) waiter("ambiguous");
+          record.waiters.clear();
+        }
         resolve("ambiguous");
-        // The deadline fired, so the waiter is gone. If it was the last one,
-        // the record is settled as far as the client is concerned and becomes
-        // evictable.
+        // The deadline fired, so this admission waiter is gone. If no waiters
+        // remain, the record becomes evictable.
         if (record.waiters.size === 0 && record.admissionWaiters.size === 0)
           protectedIds.delete(messageId);
       }, timeoutMs);
