@@ -860,7 +860,9 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
             ...message,
             error: mapEventError(event.data.error),
           });
-          return event.data.tokens ? { ...withErr, occupancyTokens, occupancyStale: false } : withErr;
+          return event.data.tokens
+            ? { ...withErr, occupancyTokens, occupancyStale: false }
+            : withErr;
         }
         return event.data.tokens ? { ...state, occupancyTokens, occupancyStale: false } : state;
       }
@@ -901,7 +903,9 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
             }
           : endSource;
       const finalNext =
-        finalSource !== endSource ? withMessage(nextWithErr, { ...endMsg, source: finalSource }) : nextWithErr;
+        finalSource !== endSource
+          ? withMessage(nextWithErr, { ...endMsg, source: finalSource })
+          : nextWithErr;
 
       return {
         ...finalNext,
@@ -1192,22 +1196,21 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       };
     }
     case "prompt_admitted": {
-      const next = recordInbox(state, action.inbox);
-      return isTerminalExecution(next.execution) || next.execution.type === "reverting"
-        ? next
-        : {
-            ...next,
-            execution: {
-              type: "admitted",
-              userMessageId: action.userMessageId,
-              inboxId: action.inbox.id,
-              delivery: action.inbox.delivery,
-              cancelRequested:
-                next.execution.type === "cancelling"
-                  ? true
-                  : executionCancelRequested(next.execution),
-            },
-          };
+      const next = action.inbox ? recordInbox(state, action.inbox) : state;
+      if (isTerminalExecution(next.execution) || next.execution.type === "reverting") return next;
+      const inboxId = action.inbox?.id ?? action.inboxId ?? null;
+      const delivery = action.inbox?.delivery ?? action.delivery ?? null;
+      return {
+        ...next,
+        execution: {
+          type: "admitted",
+          userMessageId: action.userMessageId,
+          inboxId,
+          delivery,
+          cancelRequested:
+            next.execution.type === "cancelling" ? true : executionCancelRequested(next.execution),
+        },
+      };
     }
     case "prompt_removed": {
       const { [action.messageId]: _removed, ...messages } = state.messages;

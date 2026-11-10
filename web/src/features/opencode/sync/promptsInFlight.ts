@@ -65,8 +65,10 @@ export type V2PromptAdmissionResult = "admitted" | "definitive-failure" | "ambig
 /** What the server admitted a prompt as. */
 export type V2PromptSubmission = {
   readonly messageId: string;
-  readonly inboxId: string;
-  readonly delivery: "steer" | "queue";
+  /** Null when admission is proven from history but inbox metadata is unavailable. */
+  readonly inboxId: string | null;
+  /** Null when admission is proven from history but delivery is unknown. */
+  readonly delivery: "steer" | "queue" | null;
 };
 
 /**

@@ -223,8 +223,10 @@ export type V2ExecutionState =
   | {
       readonly type: "admitted";
       readonly userMessageId: string;
-      readonly inboxId: string;
-      readonly delivery: "steer" | "queue";
+      /** Null when admission is proven from history but inbox metadata is unavailable. */
+      readonly inboxId: string | null;
+      /** Null when admission is proven from history but delivery is unknown. */
+      readonly delivery: "steer" | "queue" | null;
       readonly cancelRequested: boolean;
     }
   | {
@@ -449,7 +451,10 @@ export type V2ThreadAction =
   | {
       readonly type: "prompt_admitted";
       readonly userMessageId: string;
-      readonly inbox: V2InboxRecord;
+      readonly inbox: V2InboxRecord | null;
+      /** When inbox is null, admission was proven from history without inbox metadata. */
+      readonly inboxId?: string | null;
+      readonly delivery?: "steer" | "queue" | null;
     }
   | { readonly type: "prompt_removed"; readonly messageId: string }
   | {

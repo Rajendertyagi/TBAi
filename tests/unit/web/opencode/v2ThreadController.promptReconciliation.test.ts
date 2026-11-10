@@ -1,12 +1,12 @@
-import { describe, expect, it } from "bun:test";
-import type { SessionInboxUser, SessionMessageInfo, SessionMessagesResponse } from "@opencode/client";
+﻿import { describe, expect, it } from "bun:test";
+import type {
+  SessionInboxUser,
+  SessionMessageInfo,
+  SessionMessagesResponse,
+} from "@opencode/client";
+import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
-  createV2ThreadController,
-} from "@web/features/opencode/v2ThreadController.ts";
-import {
-  DIRECTORY,
   LOCAL_MESSAGE_ID,
-  SESSION,
   SESSION_ID,
   USER_MESSAGE,
   createClient,
@@ -114,8 +114,19 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       prompt.reject(new TypeError("prompt response was lost"));
 
       const submission = await sending;
-      expect(submission.messageId).toBe(LOCAL_MESSAGE_ID);
+      expect(submission).toEqual({
+        messageId: LOCAL_MESSAGE_ID,
+        inboxId: null,
+        delivery: null,
+      });
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      expect(controller.getState().execution.type).toBe("admitted");
+      expect(controller.getState().execution).toMatchObject({
+        type: "admitted",
+        userMessageId: LOCAL_MESSAGE_ID,
+        inboxId: null,
+        delivery: null,
+      });
       expect(historyCalls).toBeGreaterThanOrEqual(3);
     } finally {
       controller.dispose();
@@ -132,10 +143,16 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         historyCalls += 1;
         if (historyCalls === 1) return { data: [], cursor: {} };
         if (!input.cursor) {
-          return { data: [userMessage("msg_other_1")], cursor: { next: "cursor-a" } } as SessionMessagesResponse;
+          return {
+            data: [userMessage("msg_other_1")],
+            cursor: { next: "cursor-a" },
+          } as SessionMessagesResponse;
         }
         if (input.cursor === "cursor-a") {
-          return { data: [userMessage("msg_other_2")], cursor: { next: "cursor-a" } } as SessionMessagesResponse;
+          return {
+            data: [userMessage("msg_other_2")],
+            cursor: { next: "cursor-a" },
+          } as SessionMessagesResponse;
         }
         return { data: [], cursor: {} };
       },
@@ -247,7 +264,6 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
   });
 
   it("does not duplicate submission when HTTP response and reconciliation both observe admission", async () => {
-    const prompt = deferred<SessionInboxUser>();
     const promptCalled = deferred<void>();
     const inbox = userInbox(LOCAL_MESSAGE_ID, "steer");
     let promptCalls = 0;
@@ -461,7 +477,7 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
     }
   });
 
-  it("settles admission from locally hydrated persisted-history evidence without inbox cancellation", async () => {
+  it("settles admission from locally hydrated persisted-history evidence without inbox cancellation or fabricated metadata", async () => {
     const prompt = deferred<SessionInboxUser>();
     const promptCalled = deferred<void>();
     let historyCalls = 0;
@@ -492,22 +508,19 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
       await waitForState(
         controller,
-        (state) =>
-          state.execution.type === "reconciling" ||
-          state.execution.type === "admitted" ||
-          state.execution.type === "idle",
+        (state) => state.execution.type === "reconciling" || state.execution.type === "admitted",
       );
 
       // Refresh/history hydration provides local persisted-message evidence.
       await controller.refresh();
-      await waitForState(
-        controller,
-        (state) => state.messages[LOCAL_MESSAGE_ID] !== undefined,
-      );
-      await waitForState(
-        controller,
-        (state) => state.execution.type !== "reconciling" && state.execution.type !== "submitting",
-      );
+      await waitForState(controller, (state) => state.messages[LOCAL_MESSAGE_ID] !== undefined);
+      await waitForState(controller, (state) => state.execution.type === "admitted");
+      expect(controller.getState().execution).toMatchObject({
+        type: "admitted",
+        userMessageId: LOCAL_MESSAGE_ID,
+        inboxId: null,
+        delivery: null,
+      });
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       expect(generation.inboxCancelInputs).toHaveLength(0);
     } finally {
@@ -597,6 +610,244 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
       expect(historyCalls).toBeGreaterThanOrEqual(2);
       expect(generation.promptInputs).toHaveLength(1);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("bounds a multi-page reconciliation scan by the overall deadline, including a never-resolving page request", async () => {
+    const prompt = deferred<SessionInboxUser>();
+    const promptCalled = deferred<void>();
+    const pageAbort = deferred<void>();
+    let historyCalls = 0;
+    const generation = createGeneration(1, {
+      inboxList: async () => [],
+      historyList: async (input, signal) => {
+        historyCalls += 1;
+        if (historyCalls === 1) return { data: [], cursor: {} };
+        if (!input.cursor) {
+          return {
+            data: [userMessage("msg_other_1")],
+            cursor: { next: "cursor-2" },
+          } as SessionMessagesResponse;
+        }
+        // Second reconciliation page never resolves; overall deadline must abort it.
+        signal.addEventListener("abort", () => pageAbort.resolve(undefined), { once: true });
+        return await new Promise<any>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+    });
+    generation.setPromptHandler(async () => {
+      promptCalled.resolve(undefined);
+      return await prompt.promise;
+    });
+    const controller = createV2ThreadController(createClient([generation]), {
+      promptAdmissionTimeoutMs: 250,
+    });
+    await controller.awaitReady();
+
+    try {
+      const sending = controller.sendMessage(USER_MESSAGE, {
+        messageId: LOCAL_MESSAGE_ID,
+        delivery: "steer",
+      });
+      await promptCalled.promise;
+      prompt.reject(new TypeError("prompt response was lost"));
+
+      await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
+      await pageAbort.promise;
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
+      expect(historyCalls).toBeGreaterThanOrEqual(3);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("preserves accurate inbox admission metadata for queue delivery", async () => {
+    const prompt = deferred<SessionInboxUser>();
+    const promptCalled = deferred<void>();
+    const inbox = userInbox(LOCAL_MESSAGE_ID, "queue");
+    let inboxCalls = 0;
+    const generation = createGeneration(1, {
+      inboxList: async () => {
+        inboxCalls += 1;
+        return inboxCalls >= 2 ? [inbox] : [];
+      },
+    });
+    generation.setPromptHandler(async () => {
+      promptCalled.resolve(undefined);
+      return await prompt.promise;
+    });
+    const controller = createV2ThreadController(createClient([generation]), {
+      promptAdmissionTimeoutMs: 2_000,
+    });
+    await controller.awaitReady();
+
+    try {
+      const sending = controller.sendMessage(USER_MESSAGE, {
+        messageId: LOCAL_MESSAGE_ID,
+        delivery: "queue",
+      });
+      await promptCalled.promise;
+      prompt.reject(new TypeError("prompt response was lost"));
+
+      const submission = await sending;
+      expect(submission).toEqual({
+        messageId: LOCAL_MESSAGE_ID,
+        inboxId: LOCAL_MESSAGE_ID,
+        delivery: "queue",
+      });
+      expect(controller.getState().execution).toMatchObject({
+        type: "admitted",
+        inboxId: LOCAL_MESSAGE_ID,
+        delivery: "queue",
+      });
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("history-only admission preserves pending execution state and does not fabricate inbox metadata", async () => {
+    const prompt = deferred<SessionInboxUser>();
+    const promptCalled = deferred<void>();
+    let historyCalls = 0;
+    const generation = createGeneration(1, {
+      inboxList: async () => [],
+      historyList: async () => {
+        historyCalls += 1;
+        if (historyCalls === 1) return { data: [], cursor: {} };
+        return { data: [userMessage(LOCAL_MESSAGE_ID)], cursor: {} } as SessionMessagesResponse;
+      },
+    });
+    generation.setPromptHandler(async () => {
+      promptCalled.resolve(undefined);
+      return await prompt.promise;
+    });
+    const controller = createV2ThreadController(createClient([generation]), {
+      promptAdmissionTimeoutMs: 2_000,
+    });
+    await controller.awaitReady();
+
+    try {
+      const sending = controller.sendMessage(USER_MESSAGE, {
+        messageId: LOCAL_MESSAGE_ID,
+        delivery: "queue",
+      });
+      await promptCalled.promise;
+      prompt.reject(new TypeError("prompt response was lost"));
+
+      const submission = await sending;
+      expect(submission).toEqual({ messageId: LOCAL_MESSAGE_ID, inboxId: null, delivery: null });
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      expect(controller.getState().execution).toMatchObject({
+        type: "admitted",
+        userMessageId: LOCAL_MESSAGE_ID,
+        inboxId: null,
+        delivery: null,
+      });
+      expect(controller.getState().execution.type).not.toBe("idle");
+      expect(generation.inboxCancelInputs).toHaveLength(0);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("history-only admission while execution is running preserves running execution state", async () => {
+    const prompt = deferred<SessionInboxUser>();
+    const promptCalled = deferred<void>();
+    let historyCalls = 0;
+    const generation = createGeneration(1, {
+      inboxList: async () => [],
+      historyList: async () => {
+        historyCalls += 1;
+        if (historyCalls <= 2) return { data: [], cursor: {} };
+        return { data: [userMessage(LOCAL_MESSAGE_ID)], cursor: {} } as SessionMessagesResponse;
+      },
+    });
+    generation.setPromptHandler(async () => {
+      promptCalled.resolve(undefined);
+      return await prompt.promise;
+    });
+    const controller = createV2ThreadController(createClient([generation]), {
+      promptAdmissionTimeoutMs: 120,
+    });
+    await controller.awaitReady();
+
+    try {
+      const sending = controller.sendMessage(USER_MESSAGE, {
+        messageId: LOCAL_MESSAGE_ID,
+        delivery: "steer",
+      });
+      await promptCalled.promise;
+      prompt.reject(new TypeError("prompt response was lost"));
+      await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
+      await waitForState(controller, (state) => state.execution.type === "reconciling");
+
+      // Execution evidence arrives while admission is still being reconciled.
+      generation.events.emit({
+        id: "evt_exec_started",
+        created: 100,
+        type: "session.execution.started",
+        durable: { aggregateID: SESSION_ID, seq: 11, version: 1 },
+        data: { sessionID: SESSION_ID },
+      } as any);
+      await waitForState(controller, (state) => state.execution.type === "executing");
+
+      const result = await controller.reconcilePendingPrompt(LOCAL_MESSAGE_ID);
+      expect(result).toBe("admitted");
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      expect(controller.getState().execution.type).toBe("executing");
+      expect(generation.inboxCancelInputs).toHaveLength(0);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("history-only admission with cancellation requested does not report cancellation completed", async () => {
+    const prompt = deferred<SessionInboxUser>();
+    const promptCalled = deferred<void>();
+    let historyCalls = 0;
+    const generation = createGeneration(1, {
+      inboxList: async () => [],
+      historyList: async () => {
+        historyCalls += 1;
+        if (historyCalls === 1) return { data: [], cursor: {} };
+        return { data: [userMessage(LOCAL_MESSAGE_ID)], cursor: {} } as SessionMessagesResponse;
+      },
+    });
+    generation.setPromptHandler(async () => {
+      promptCalled.resolve(undefined);
+      return await prompt.promise;
+    });
+    const controller = createV2ThreadController(createClient([generation]), {
+      promptAdmissionTimeoutMs: 2_000,
+    });
+    await controller.awaitReady();
+
+    try {
+      const sending = controller.sendMessage(USER_MESSAGE, {
+        messageId: LOCAL_MESSAGE_ID,
+        delivery: "steer",
+      });
+      await promptCalled.promise;
+      // Request cancel while prompt is still submitting (before transport ambiguity settles).
+      await controller.cancel();
+      prompt.reject(new TypeError("prompt response was lost"));
+
+      const submission = await sending;
+      expect(submission).toEqual({ messageId: LOCAL_MESSAGE_ID, inboxId: null, delivery: null });
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      // Cancellation cannot be performed from history-only evidence; must not be reported completed.
+      expect(controller.getState().execution.type).not.toBe("idle");
+      expect(controller.getState().execution).toMatchObject({
+        type: "admitted",
+        userMessageId: LOCAL_MESSAGE_ID,
+        inboxId: null,
+        delivery: null,
+        cancelRequested: true,
+      });
+      expect(generation.inboxCancelInputs).toHaveLength(0);
     } finally {
       controller.dispose();
     }

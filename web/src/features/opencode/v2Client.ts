@@ -309,7 +309,8 @@ export function createOpenCodeV2Client(
       inboxList: (input, options) =>
         connectionOperation(
           input,
-          (scopedInput, requestOptions) => officialClient.session.inbox.list(scopedInput, requestOptions),
+          (scopedInput, requestOptions) =>
+            officialClient.session.inbox.list(scopedInput, requestOptions),
           options?.signal,
         ),
       inboxCancel: (input) =>

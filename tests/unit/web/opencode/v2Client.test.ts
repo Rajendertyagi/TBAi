@@ -490,4 +490,241 @@ describe("createOpenCodeV2Client", () => {
       await generation.events.close();
     }
   });
+
+  it("aborts inbox/history HTTP requests via extra per-request signal and generation connection signal", async () => {
+    const requests: Array<{ url: string; signal: AbortSignal }> = [];
+    const pending: Array<{
+      resolve: () => void;
+      reject: (e: unknown) => void;
+      signal: AbortSignal;
+    }> = [];
+    let eventController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetch = Object.assign(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/event")) {
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              eventController = controller;
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        requests.push({ url: request.url, signal: request.signal });
+        return await new Promise<Response>((resolve, reject) => {
+          const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+          request.signal.addEventListener("abort", onAbort, { once: true });
+          pending.push({
+            resolve: () => {
+              request.signal.removeEventListener("abort", onAbort);
+              if (url.pathname.endsWith("/message")) resolve(Response.json(EMPTY_HISTORY));
+              else if (url.pathname.includes("/inbox")) resolve(Response.json([]));
+              else if (url.pathname.endsWith("/api/info")) resolve(Response.json(SERVER_INFO));
+              else resolve(Response.json({}));
+            },
+            reject: (e) => {
+              request.signal.removeEventListener("abort", onAbort);
+              reject(e);
+            },
+            signal: request.signal,
+          });
+        });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, { fetch });
+    const connectionController = new AbortController();
+    const connection = client.connect({
+      connectionSignal: connectionController.signal,
+      lifecycleSignal: new AbortController().signal,
+      onActivity: () => undefined,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    eventController?.enqueue(eventFrame(CONNECTED_EVENT));
+    const generation = await connection;
+
+    try {
+      const extra = new AbortController();
+      const inboxPromise = generation.operations.inboxList(
+        { sessionID: SESSION_ID },
+        { signal: extra.signal },
+      );
+      await new Promise((r) => setTimeout(r, 0));
+      const inboxReq = requests.find((r) => r.url.includes("/inbox"));
+      expect(inboxReq).toBeDefined();
+      extra.abort();
+      await expect(inboxPromise).rejects.toThrow();
+
+      const historyPromise = generation.history.list({ sessionID: SESSION_ID });
+      await new Promise((r) => setTimeout(r, 0));
+      const historyReq = requests.find(
+        (r) => r.url.endsWith("/message") || r.url.includes("/message?"),
+      );
+      expect(historyReq).toBeDefined();
+      connectionController.abort();
+      await expect(historyPromise).rejects.toThrow();
+    } finally {
+      for (const p of pending) p.resolve();
+      await generation.events.close().catch(() => undefined);
+    }
+  });
+
+  it("handles already-aborted and near-simultaneous abort signals without leaking listeners", async () => {
+    const requests: Array<{ url: string; signal: AbortSignal }> = [];
+    let eventController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetch = Object.assign(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/event")) {
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              eventController = controller;
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        requests.push({ url: request.url, signal: request.signal });
+        if (request.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        return await new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, { fetch });
+    const connectionController = new AbortController();
+    const connection = client.connect({
+      connectionSignal: connectionController.signal,
+      lifecycleSignal: new AbortController().signal,
+      onActivity: () => undefined,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    eventController?.enqueue(eventFrame(CONNECTED_EVENT));
+    const generation = await connection;
+
+    try {
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(
+        generation.operations.inboxList({ sessionID: SESSION_ID }, { signal: aborted.signal }),
+      ).rejects.toThrow();
+
+      const extra = new AbortController();
+      const p = generation.history.list({ sessionID: SESSION_ID }, { signal: extra.signal });
+      await new Promise((r) => setTimeout(r, 0));
+      extra.abort();
+      connectionController.abort();
+      await expect(p).rejects.toThrow();
+
+      // Successful completion removes listeners from extra/connection signals.
+      const extra2 = new AbortController();
+      const conn2 = new AbortController();
+      let adds = 0;
+      let removes = 0;
+      const origAdd = extra2.signal.addEventListener.bind(extra2.signal);
+      const origRemove = extra2.signal.removeEventListener.bind(extra2.signal);
+      (extra2.signal as any).addEventListener = (type: string, listener: any, options?: any) => {
+        if (type === "abort") adds += 1;
+        return origAdd(type, listener, options);
+      };
+      (extra2.signal as any).removeEventListener = (type: string, listener: any, options?: any) => {
+        if (type === "abort") removes += 1;
+        return origRemove(type, listener, options);
+      };
+
+      // New generation/client for clean success path
+      let eventController2: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const fetch2 = Object.assign(
+        async (input: URL | RequestInfo, init?: RequestInit) => {
+          const request = new Request(input, init);
+          const url = new URL(request.url);
+          if (url.pathname.endsWith("/event")) {
+            const stream = new ReadableStream<Uint8Array>({
+              start(c) {
+                eventController2 = c;
+              },
+            });
+            return new Response(stream, {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            });
+          }
+          if (url.pathname.includes("/inbox")) return Response.json([]);
+          if (url.pathname.endsWith("/message") || url.pathname.includes("/message?"))
+            return Response.json(EMPTY_HISTORY);
+          if (url.pathname.endsWith("/api/info")) return Response.json(SERVER_INFO);
+          return Response.json({});
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      );
+      const client2 = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, { fetch: fetch2 });
+      const gen2 = await (async () => {
+        const c = client2.connect({
+          connectionSignal: conn2.signal,
+          lifecycleSignal: new AbortController().signal,
+          onActivity: () => undefined,
+        });
+        await new Promise((r) => setTimeout(r, 0));
+        eventController2?.enqueue(eventFrame(CONNECTED_EVENT));
+        return await c;
+      })();
+      await gen2.operations.inboxList({ sessionID: SESSION_ID }, { signal: extra2.signal });
+      await gen2.history.list({ sessionID: SESSION_ID }, { signal: extra2.signal });
+      expect(adds).toBeGreaterThan(0);
+      expect(removes).toBe(adds);
+      await gen2.events.close();
+    } finally {
+      await generation.events.close().catch(() => undefined);
+    }
+  });
+
+  it("preserves session-scope and generation-ownership protections for inbox/history with extra signals", async () => {
+    const fixture = makeFixture();
+    const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, { fetch: fixture.fetch });
+    const generation = await connectAfterMarker(client, fixture);
+    const requestCount = fixture.requests.length;
+    const extra = new AbortController();
+
+    try {
+      await expect(
+        generation.operations.inboxList({ sessionID: OTHER_SESSION_ID } as any, {
+          signal: extra.signal,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        generation.history.list({ sessionID: OTHER_SESSION_ID }, { signal: extra.signal }),
+      ).rejects.toThrow();
+      expect(fixture.requests).toHaveLength(requestCount);
+
+      await generation.events.close();
+      await expect(
+        generation.operations.inboxList(
+          { sessionID: SESSION_ID },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toThrow();
+      await expect(
+        generation.history.list(
+          { sessionID: SESSION_ID },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await generation.events.close().catch(() => undefined);
+    }
+  });
 });

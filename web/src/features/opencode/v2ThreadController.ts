@@ -1,4 +1,4 @@
-import type { AppendMessage } from "@assistant-ui/react";
+﻿import type { AppendMessage } from "@assistant-ui/react";
 import {
   isFormAlreadySettledError,
   isFormNotFoundError,
@@ -92,10 +92,11 @@ export type V2PromptSendError =
       /**
        * The server may have taken the prompt, and the wire cannot say which.
        *
-       * This is NOT a rejection: a retry would deliver the prompt twice, and
-       * the server admits a repeated message id as the SAME prompt (upstream
-       * `SessionInbox.admit` reconciles by id), so the honest answer is "it is
-       * still in flight" rather than "it failed".
+       * This is NOT a rejection. TBAi does not automatically resubmit the
+       * original prompt because delivery/admission is unproven and a retry
+       * could duplicate side effects; server-side same-ID idempotency is
+       * unverified and not relied upon. The honest answer is "admission is
+       * unknown / still being reconciled" rather than "it failed".
        */
       readonly kind: "ambiguous";
       readonly error: V2SafeError;
@@ -342,7 +343,7 @@ export function createV2ThreadController(
    *
    * `null` means there is no live attempt: it was superseded, retired for a
    * reconnect, or disposed. Every continuation captures the attempt it started
-   * for and calls `isLive` before it commits anything — state, readiness, a
+   * for and calls `isLive` before it commits anything â€” state, readiness, a
    * load slot or the retry budget.
    */
   let currentAttempt: Attempt | null = null;
@@ -623,7 +624,7 @@ export function createV2ThreadController(
    * Opens a history-read scope and records the transcript as it stands.
    *
    * The returned ids are the merge's `held` set: a held message the snapshot no
-   * longer contains was deleted server-side. An optimistic prompt is excluded —
+   * longer contains was deleted server-side. An optimistic prompt is excluded â€”
    * the server has not admitted it yet, so its absence from the snapshot says
    * nothing.
    *
@@ -748,7 +749,7 @@ export function createV2ThreadController(
    *
    * Deliberately NOT awaited: the event loop must never block on a permission
    * round-trip. Unlike the drain, this also covers requests with no linked tool
-   * card — those render only in the fallback panel, so a user may have no other
+   * card â€” those render only in the fallback panel, so a user may have no other
    * way to answer them.
    *
    * **FAILS CLOSED.** The policy is read live on every event, never captured, so
@@ -807,7 +808,7 @@ export function createV2ThreadController(
       .catch((error: unknown) => {
         if (disposed) return;
         // Definitive failure (already settled / not found): release protection.
-        // Ambiguous (network): keep protected — the request may still be pending.
+        // Ambiguous (network): keep protected â€” the request may still be pending.
         if (isAlreadySettled(error) || isPermissionNotFoundError(error)) {
           autoApproveAttempted.release(event.data.id);
         }
@@ -1052,7 +1053,7 @@ export function createV2ThreadController(
    * The two filters close a race the event stream does not cover: a reply
    * dispatched moments before this snapshot was taken would otherwise re-add a
    * form or permission the reader has already answered. A locally-resolved
-   * record is authoritative — we know it is settled, regardless of what the
+   * record is authoritative â€” we know it is settled, regardless of what the
    * list still returns.
    */
   function applyAuxiliary(snapshot: V2AuxiliarySnapshot): void {
@@ -1101,7 +1102,7 @@ export function createV2ThreadController(
   /**
    * Projects the attempt's first history into the transcript.
    *
-   * Returns early — never resolving readiness — as soon as the attempt it was
+   * Returns early â€” never resolving readiness â€” as soon as the attempt it was
    * started for stops owning the runtime. The caller decides whether the
    * attempt completed; an early return is not a completion.
    *
@@ -1212,7 +1213,7 @@ export function createV2ThreadController(
    * the reader waits for a restart. This is the backstop for precisely that
    * failure, and the reason it is a poll rather than a fix to the stream.
    *
-   * Bounded to one in-flight request — a caller arriving while a re-sync is
+   * Bounded to one in-flight request â€” a caller arriving while a re-sync is
    * running is a no-op, not a second round of three GETs. Never rejects: this
    * runs from a timer and from a visibility handler, where there is no caller
    * to hand an error to.
@@ -1278,8 +1279,8 @@ export function createV2ThreadController(
    * Establishes one connection attempt and hydrates it.
    *
    * The attempt is minted synchronously and the returned promise is recorded as
-   * THAT attempt's load, so every caller — the retry timer, `ensureLoaded`, a
-   * manual `load()` — either joins the attempt in flight or starts one only
+   * THAT attempt's load, so every caller â€” the retry timer, `ensureLoaded`, a
+   * manual `load()` â€” either joins the attempt in flight or starts one only
    * after it has failed. Recording the load here rather than at each call site
    * is what keeps a retry-started attempt from being duplicated by a concurrent
    * `load()`.
@@ -1326,8 +1327,8 @@ export function createV2ThreadController(
    * (M2, L4).
    *
    * A hydration that fails is routed to the same retry path as a connection
-   * that fails, so a failed history read reaches a defined state — reconnect
-   * within the budget, or terminal failure — instead of freezing (M4).
+   * that fails, so a failed history read reaches a defined state â€” reconnect
+   * within the budget, or terminal failure â€” instead of freezing (M4).
    *
    * @param live - The attempt this call owns.
    */
@@ -1450,8 +1451,8 @@ export function createV2ThreadController(
    *
    * A wait is about the RUNTIME, not about one attempt: if the attempt it was
    * waiting on is superseded, it waits for the attempt that replaced it rather
-   * than reporting the replacement as a failure. Only a real failure — a
-   * terminal one, or a disposed runtime — is thrown.
+   * than reporting the replacement as a failure. Only a real failure â€” a
+   * terminal one, or a disposed runtime â€” is thrown.
    *
    * The wait is BOUNDED, and the bound covers the WHOLE wait: establishing the
    * connection and hydrating it are the readiness work, so waiting for those
@@ -1537,7 +1538,12 @@ export function createV2ThreadController(
   function startPromptReconciliation(messageId: string): void {
     if (disposed) return;
     const record = prompts.get(messageId);
-    if (!record || record.result === "admitted" || record.result === "disposed" || record.result === "definitive-failure") {
+    if (
+      !record ||
+      record.result === "admitted" ||
+      record.result === "disposed" ||
+      record.result === "definitive-failure"
+    ) {
       return;
     }
     prompts.markAmbiguous(messageId);
@@ -1559,27 +1565,47 @@ export function createV2ThreadController(
     // Attempt authoritative reconciliation (bounded). Never infer absence from
     // incomplete/unreliable scans; keep ambiguous if unresolved.
     void (async () => {
+      const overallDeadline = Date.now() + Math.max(cfg.promptAdmissionTimeoutMs, 5_000);
+      const overallController = new AbortController();
+      const overallTimer = setTimeout(
+        () => overallController.abort(),
+        Math.max(0, overallDeadline - Date.now()),
+      );
       try {
-        const deadline = Date.now() + Math.max(cfg.promptAdmissionTimeoutMs, 5_000);
-        while (Date.now() < deadline) {
+        while (Date.now() < overallDeadline && !overallController.signal.aborted) {
           if (disposed) return;
           const currentRecord = prompts.get(messageId);
-          if (!currentRecord || currentRecord.result === "admitted" || currentRecord.result === "disposed" || currentRecord.result === "definitive-failure") {
+          if (
+            !currentRecord ||
+            currentRecord.result === "admitted" ||
+            currentRecord.result === "disposed" ||
+            currentRecord.result === "definitive-failure"
+          ) {
             return;
           }
           const gen = currentAttempt?.generation ?? null;
           if (!gen) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            const remaining = overallDeadline - Date.now();
+            if (remaining <= 0) break;
+            await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
             continue;
           }
-          const result = await reconcilePromptById(messageId, { generation: gen });
+          const result = await reconcilePromptById(messageId, {
+            generation: gen,
+            signal: overallController.signal,
+            deadline: overallDeadline,
+          });
           if (result === "admitted") {
             return;
           }
+          const remaining = overallDeadline - Date.now();
+          if (remaining <= 0 || overallController.signal.aborted) break;
           // unresolved: wait a bit and retry if time remains
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
         }
       } finally {
+        clearTimeout(overallTimer);
+        overallController.abort();
         activePromptReconciliations.delete(messageId);
       }
     })();
@@ -1587,7 +1613,7 @@ export function createV2ThreadController(
 
   async function reconcilePromptById(
     messageId: string,
-    options: { generation?: OpenCodeV2Generation; signal?: AbortSignal } = {},
+    options: { generation?: OpenCodeV2Generation; signal?: AbortSignal; deadline?: number } = {},
   ): Promise<"admitted" | "absent" | "unresolved"> {
     const generation = options.generation ?? currentAttempt?.generation ?? null;
     if (!generation) return "unresolved";
@@ -1601,17 +1627,31 @@ export function createV2ThreadController(
       return !!record && record.result !== "disposed" && record.result !== "definitive-failure";
     };
 
+    const overallDeadline = options.deadline;
+    const overallRemaining = (): number =>
+      overallDeadline === undefined ? Number.POSITIVE_INFINITY : overallDeadline - Date.now();
+    const overallExpired = (): boolean =>
+      options.signal?.aborted === true || overallRemaining() <= 0;
+
     const withRequestDeadline = async <T>(
       operation: (signal: AbortSignal) => Promise<T>,
-      timeoutMs = Math.min(2_000, Math.max(100, cfg.promptAdmissionTimeoutMs)),
     ): Promise<T> => {
+      const remaining = overallRemaining();
+      if (remaining <= 0 || options.signal?.aborted) {
+        throw new Error("reconciliation deadline exceeded");
+      }
+      const perRequestTimeoutMs = Math.min(
+        2_000,
+        Math.max(100, cfg.promptAdmissionTimeoutMs),
+        remaining,
+      );
       const controller = new AbortController();
       const onAbort = () => controller.abort();
       if (options.signal) {
         if (options.signal.aborted) controller.abort();
         else options.signal.addEventListener("abort", onAbort, { once: true });
       }
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(() => controller.abort(), perRequestTimeoutMs);
       try {
         return await operation(controller.signal);
       } finally {
@@ -1621,9 +1661,7 @@ export function createV2ThreadController(
     };
 
     // First check local state quickly
-    const localInbox = Object.values(state.inboxById).find(
-      (record) => record.id === messageId,
-    );
+    const localInbox = Object.values(state.inboxById).find((record) => record.id === messageId);
     if (localInbox !== undefined) {
       const record = prompts.get(messageId);
       if (record && record.result !== "admitted" && canMutatePromptState()) {
@@ -1649,11 +1687,14 @@ export function createV2ThreadController(
       }
       return "admitted";
     }
-    if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId)) {
+    if (
+      state.messages[messageId] !== undefined &&
+      !state.optimisticMessageIds.includes(messageId)
+    ) {
       const record = prompts.get(messageId);
       if (record && record.result !== "admitted" && canMutatePromptState()) {
         // Admitted via persisted message; inbox details may be unavailable.
-        // Do not fabricate an inbox ID or issue an invalid inbox cancellation.
+        // Do not fabricate inbox metadata or issue invalid inbox cancellation.
         const activeMessageId =
           state.execution.type === "submitting" || state.execution.type === "reconciling"
             ? state.execution.userMessageId
@@ -1661,38 +1702,44 @@ export function createV2ThreadController(
               ? state.execution.userMessageId
               : undefined;
         if (activeMessageId === messageId) {
-          // Settle admission state without inventing a cancellable inbox item.
-          // If cancel was requested, we cannot safely cancel via inbox from
-          // history-only evidence; do not issue inbox cancellation.
-          dispatch({ type: "execution_settled" });
+          dispatch({
+            type: "prompt_admitted",
+            userMessageId: messageId,
+            inbox: null,
+            inboxId: null,
+            delivery: null,
+          });
         }
         prompts.settle(messageId, "admitted", {
           messageId,
-          inboxId: messageId,
-          delivery: "steer",
+          inboxId: null,
+          delivery: null,
         });
       }
       return "admitted";
     }
 
     try {
+      if (overallExpired()) return "unresolved";
       // Check inbox first (like scheduler)
       const inboxResp = await withRequestDeadline((signal) =>
         generation.operations.inboxList({ sessionID: client.sessionId }, { signal }),
       );
-      if (options.signal?.aborted) return "unresolved";
-      if (!isGenerationCurrent()) return "unresolved";
+      if (overallExpired() || !isGenerationCurrent()) return "unresolved";
       const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
       const inboxItem = inboxItems.find((item: any) => item.id === messageId);
       if (inboxItem) {
         const record = prompts.get(messageId);
         if (record && record.result !== "admitted" && canMutatePromptState()) {
-          const normalized = inboxItem?.type === "user" ? inboxRecordFromUser(inboxItem) : {
-            id: inboxItem.id,
-            sessionId: inboxItem.sessionID,
-            type: inboxItem.type,
-            delivery: inboxItem.delivery,
-          };
+          const normalized =
+            inboxItem?.type === "user"
+              ? inboxRecordFromUser(inboxItem)
+              : {
+                  id: inboxItem.id,
+                  sessionId: inboxItem.sessionID,
+                  type: inboxItem.type,
+                  delivery: inboxItem.delivery,
+                };
           dispatch({ type: "inbox_recorded", record: normalized });
           const activeMessageId =
             state.execution.type === "submitting" || state.execution.type === "reconciling"
@@ -1721,8 +1768,7 @@ export function createV2ThreadController(
       const seen = new Set<string>();
       let incomplete = false;
       for (let page = 0; page < 100; page++) {
-        if (options.signal?.aborted) return "unresolved";
-        if (!isGenerationCurrent()) return "unresolved";
+        if (overallExpired() || !isGenerationCurrent()) return "unresolved";
         const params: any = { sessionID: client.sessionId, limit: 100 };
         if (cursor) {
           params.cursor = cursor;
@@ -1733,8 +1779,7 @@ export function createV2ThreadController(
           const msgResp: any = await withRequestDeadline((signal) =>
             generation.history.list(params, { signal }),
           );
-          if (options.signal?.aborted) return "unresolved";
-          if (!isGenerationCurrent()) return "unresolved";
+          if (overallExpired() || !isGenerationCurrent()) return "unresolved";
           const messages = msgResp?.data ?? msgResp?.messages ?? [];
           if (messages.some((msg: any) => msg.id === messageId)) {
             const record = prompts.get(messageId);
@@ -1746,14 +1791,18 @@ export function createV2ThreadController(
                     ? state.execution.userMessageId
                     : undefined;
               if (activeMessageId === messageId) {
-                // History-only evidence: settle admission without inventing a
-                // cancellable inbox item or issuing inbox cancellation.
-                dispatch({ type: "execution_settled" });
+                dispatch({
+                  type: "prompt_admitted",
+                  userMessageId: messageId,
+                  inbox: null,
+                  inboxId: null,
+                  delivery: null,
+                });
               }
               prompts.settle(messageId, "admitted", {
                 messageId,
-                inboxId: messageId,
-                delivery: "steer",
+                inboxId: null,
+                delivery: null,
               });
             }
             return "admitted";
@@ -1779,7 +1828,7 @@ export function createV2ThreadController(
           break;
         }
       }
-      if (incomplete) {
+      if (incomplete || overallExpired()) {
         return "unresolved";
       }
       // A complete scan found no evidence, but the request may still be in-flight
@@ -1974,11 +2023,15 @@ export function createV2ThreadController(
         inboxId: current.inboxId,
         assistantMessageId: null,
       });
-      await generation.operations.inboxCancel({
-        sessionID: client.sessionId,
-        inboxID: current.inboxId,
-      });
-      dispatch({ type: "execution_settled" });
+      if (current.inboxId) {
+        await generation.operations.inboxCancel({
+          sessionID: client.sessionId,
+          inboxID: current.inboxId,
+        });
+        dispatch({ type: "execution_settled" });
+      }
+      // History-only admission: inbox metadata unavailable, so cancellation cannot
+      // be performed authoritatively here. Preserve honest non-completed state.
       return;
     }
     dispatch({
