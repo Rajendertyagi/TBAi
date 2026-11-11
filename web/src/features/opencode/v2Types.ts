@@ -22,6 +22,7 @@ export interface V2DesiredSelection {
 export interface V2SafeError {
   readonly kind:
     | "aborted"
+    | "capacity"
     | "incompatible-server"
     | "invalid-response"
     | "network"
@@ -216,55 +217,16 @@ export type V2ActivityState = "running" | "not-running" | "unknown";
 export type V2ExecutionState =
   | { readonly type: "idle" }
   | {
-      readonly type: "submitting";
-      readonly userMessageId: string;
-      readonly cancelRequested: boolean;
-    }
-  | {
-      readonly type: "admitted";
-      readonly userMessageId: string;
-      /** Null when admission is proven from history but inbox metadata is unavailable. */
-      readonly inboxId: string | null;
-      /** Null when admission is proven from history but delivery is unknown. */
-      readonly delivery: "steer" | "queue" | null;
-      readonly cancelRequested: boolean;
-    }
-  | {
-      readonly type: "reconciling";
-      readonly userMessageId: string;
-      readonly cancelRequested: boolean;
-    }
-  | {
       readonly type: "executing";
       readonly userMessageId: string | null;
       readonly inboxId: string | null;
-      readonly assistantMessageId: null;
-      readonly cancelRequested: boolean;
+      readonly assistantMessageId: string | null;
     }
   | {
       readonly type: "streaming";
       readonly userMessageId: string | null;
       readonly inboxId: string | null;
       readonly assistantMessageId: string;
-      readonly cancelRequested: boolean;
-    }
-  | {
-      readonly type: "cancelling";
-      readonly phase: "prompt-request" | "queued" | "execution";
-      readonly userMessageId: string | null;
-      readonly inboxId: string | null;
-      readonly assistantMessageId: string | null;
-      /**
-       * Whether a cancel is still owed.
-       *
-       * The `cancelling` state IS a pending cancel, so this is what the state
-       * is ABOUT - and it is the only way the reader can tell a cancel that has
-       * been honoured from one that is still waiting for the prompt to be
-       * admitted. It is `true` from the moment the cancel is requested, and it
-       * is cleared when the cancel has been issued against the admitted inbox
-       * id (M7).
-       */
-      readonly cancelRequested: boolean;
     }
   | { readonly type: "reverting"; readonly userMessageId: string | null }
   | {
@@ -448,29 +410,18 @@ export type V2ThreadAction =
       readonly held: readonly string[];
     }
   | { readonly type: "prompt_submitting"; readonly message: V2MessageState }
-  | {
-      readonly type: "prompt_admitted";
-      readonly userMessageId: string;
-      readonly inbox: V2InboxRecord | null;
-      /** When inbox is null, admission was proven from history without inbox metadata. */
-      readonly inboxId?: string | null;
-      readonly delivery?: "steer" | "queue" | null;
-    }
   | { readonly type: "prompt_removed"; readonly messageId: string }
   | {
-      readonly type: "prompt_reconciling";
-      readonly userMessageId: string;
-      readonly cancelRequested: boolean;
+      readonly type: "execution_started";
+      readonly userMessageId?: string | null;
+      readonly inboxId?: string | null;
     }
   | {
-      readonly type: "cancel_requested";
-      readonly phase: "prompt-request" | "queued" | "execution";
-      readonly userMessageId: string | null;
-      readonly inboxId: string | null;
-      readonly assistantMessageId: string | null;
+      readonly type: "execution_streaming";
+      readonly assistantMessageId: string;
+      readonly userMessageId?: string | null;
+      readonly inboxId?: string | null;
     }
-  | { readonly type: "execution_started" }
-  | { readonly type: "execution_streaming"; readonly assistantMessageId: string }
   | { readonly type: "execution_settled" }
   | {
       /**

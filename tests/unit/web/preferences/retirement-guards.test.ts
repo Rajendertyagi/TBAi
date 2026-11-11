@@ -61,10 +61,12 @@ describe("preferences retirement guards (canonical contract)", () => {
   });
 
   it("preserves OpenCode Import Chat paths (separate from Legacy Import Open Tabs)", () => {
-    expect(existsSync(path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeImportDialog.tsx"))).toBe(
+    expect(
+      existsSync(path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeImportDialog.tsx")),
+    ).toBe(true);
+    expect(existsSync(path.join(REPO_ROOT, "web/src/features/opencode/opencodeImportApi.ts"))).toBe(
       true,
     );
-    expect(existsSync(path.join(REPO_ROOT, "web/src/features/opencode/opencodeImportApi.ts"))).toBe(true);
     expect(existsSync(path.join(REPO_ROOT, "src/services/opencode/import.ts"))).toBe(true);
     const opencodeRoutes = read("src/routes/opencode.ts");
     expect(opencodeRoutes).toContain('/importable"');

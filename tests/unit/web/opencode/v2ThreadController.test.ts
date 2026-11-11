@@ -32,7 +32,7 @@ import { resetClientTransportForTests } from "@web/lib/log-transport";
 import { stripComments } from "@web/testing/source-scope";
 import {
   ASSISTANT_TOOL_MESSAGE,
-  EVENT_INBOX_ID,
+  // EVENT_INBOX_ID,
   FORM_CANCEL,
   FORM_CANCEL_ID,
   FORM_REPLY,
@@ -473,7 +473,7 @@ describe("native V2 retry budget and disposal", () => {
 });
 
 describe("native V2 prompt admission", () => {
-  it("keeps a prompt submitting until the HTTP response admits it", async () => {
+  it("keeps prompt admission pending until the HTTP response admits it without conflating execution", async () => {
     const prompt = deferred<SessionInboxUser>();
     const promptCalled = deferred<void>();
     const generation = createGeneration(1);
@@ -492,11 +492,9 @@ describe("native V2 prompt admission", () => {
       });
       await promptCalled.promise;
 
-      expect(controller.getState().execution).toEqual({
-        type: "submitting",
-        userMessageId: LOCAL_MESSAGE_ID,
-        cancelRequested: false,
-      });
+      // Admission/submission is lifecycle state, not execution state.
+      expect(controller.getState().execution.type).toBe("idle");
+      expect(controller.getProjection().pendingLifecycle.submissionPending).toBe(true);
 
       prompt.resolve(userInbox(HTTP_INBOX_ID, "queue"));
       expect(await sending).toEqual({
@@ -506,6 +504,7 @@ describe("native V2 prompt admission", () => {
       });
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       expect(Object.keys(controller.getState().inboxById)).toEqual([HTTP_INBOX_ID]);
+      expect(controller.getProjection().pendingLifecycle.submissionPending).toBe(false);
     } finally {
       controller.dispose();
     }
@@ -535,30 +534,225 @@ describe("native V2 prompt admission", () => {
           return submission;
         });
       await promptCalled.promise;
-      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "queue"));
-      await waitForState(controller, (state) => state.inboxById[EVENT_INBOX_ID] !== undefined);
+      generation.events.emit(inboxEvent(LOCAL_MESSAGE_ID, LOCAL_MESSAGE_ID, "queue"));
+      await waitForState(controller, (state) => state.inboxById[LOCAL_MESSAGE_ID] !== undefined);
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       await new Promise<void>((resolve) => queueMicrotask(resolve));
       const settledByInboxEvent = sendSettled;
 
-      expect(controller.getState().execution.type).toBe("admitted");
-      expect(Object.keys(controller.getState().inboxById)).toEqual([EVENT_INBOX_ID]);
+      expect(Object.keys(controller.getState().inboxById)).toEqual([LOCAL_MESSAGE_ID]);
+      expect(controller.getState().execution.type).toBe("idle");
 
-      prompt.resolve(userInbox(EVENT_INBOX_ID, "queue"));
+      prompt.resolve(userInbox(LOCAL_MESSAGE_ID, "queue"));
       expect(await sending).toEqual({
         messageId: LOCAL_MESSAGE_ID,
-        inboxId: EVENT_INBOX_ID,
+        inboxId: LOCAL_MESSAGE_ID,
         delivery: "queue",
       });
-      expect(Object.keys(controller.getState().inboxById)).toEqual([EVENT_INBOX_ID]);
-      expect(controller.getState().execution.type).toBe("admitted");
+      expect(Object.keys(controller.getState().inboxById)).toEqual([LOCAL_MESSAGE_ID]);
       expect(settledByInboxEvent).toBe(true);
     } finally {
       controller.dispose();
     }
   });
 
-  it("cancels an ambiguous request locally and recovers admission without aborting the prompt", async () => {
+  it("cancels a queued prompt B without interrupting active execution A (A/B isolation)", async () => {
+    const promptA = deferred<SessionInboxUser>();
+    const promptACalled = deferred<void>();
+    const promptB = deferred<SessionInboxUser>();
+    const promptBCalled = deferred<void>();
+    const generation = createGeneration(1);
+    let promptCalls = 0;
+    generation.setPromptHandler(async (_input) => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        promptACalled.resolve(undefined);
+        return await promptA.promise;
+      }
+      promptBCalled.resolve(undefined);
+      return await promptB.promise;
+    });
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
+    await controller.awaitReady();
+
+    try {
+      // 1) Establish active execution A.
+      const sendingA = controller.sendMessage(USER_MESSAGE, {
+        messageId: "msg_a",
+        delivery: "steer",
+      });
+      await promptACalled.promise;
+      promptA.resolve(userInbox("inbox_a", "steer"));
+      await expect(sendingA).resolves.toEqual({
+        messageId: "msg_a",
+        inboxId: "inbox_a",
+        delivery: "steer",
+      });
+      generation.events.emit({
+        id: "evt_exec_a_started",
+        created: 10,
+        type: "session.execution.started",
+        durable: { aggregateID: SESSION_ID, seq: 10, version: 1 },
+        data: { sessionID: SESSION_ID },
+      } as V2Event);
+      await waitForState(controller, (s) => s.execution.type === "executing");
+      await waitForState(controller, () => controller.getProjection().hasActiveSessionWork);
+
+      // 2) Create admitted queued prompt B with valid corroborated inbox ID.
+      const sendingB = controller.sendMessage(USER_MESSAGE, {
+        messageId: "msg_b",
+        delivery: "queue",
+      });
+      await promptBCalled.promise;
+      promptB.resolve(userInbox("inbox_b", "queue"));
+      await expect(sendingB).resolves.toEqual({
+        messageId: "msg_b",
+        inboxId: "inbox_b",
+        delivery: "queue",
+      });
+      await waitForState(controller, () =>
+        controller.getProjection().queuedPromptActions.some((a) => a.promptId === "msg_b"),
+      );
+
+      // 4) Capture Composer Stop availability/target for A.
+      const projectionBefore = controller.getProjection();
+      expect(projectionBefore.composerStopAvailable).toBe(true);
+      expect(projectionBefore.hasActiveSessionWork).toBe(true);
+      const stopOpBefore = projectionBefore.composerStopOperation;
+      expect(stopOpBefore.kind).toBe("stop-current-execution");
+
+      // 5) Cancel queued prompt B.
+      await controller.cancelQueuedPrompt("msg_b");
+      await new Promise((r) => setTimeout(r, 20));
+
+      // 6) Verify dispatch and isolation.
+      expect(generation.inboxCancelInputs).toHaveLength(1);
+      expect(generation.inboxCancelInputs[0]?.inboxID).toBe("inbox_b");
+      expect(generation.interruptInputs).toHaveLength(0);
+
+      const projectionAfterCancel = controller.getProjection();
+      expect(projectionAfterCancel.hasActiveSessionWork).toBe(true);
+      expect(projectionAfterCancel.composerStopAvailable).toBe(true);
+      expect(projectionAfterCancel.composerStopOperation).toEqual(stopOpBefore);
+      expect(controller.getState().execution.type).toBe("executing");
+
+      const bAction = projectionAfterCancel.queuedPromptActions.find((a) => a.promptId === "msg_b");
+      expect(bAction).toBeDefined();
+      expect(["requested", "dispatching", "pending-confirmation", "unknown"]).toContain(
+        bAction?.state,
+      );
+
+      // Duplicate cancellation request must not produce duplicate dispatch.
+      await controller.cancelQueuedPrompt("msg_b");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(generation.inboxCancelInputs).toHaveLength(1);
+      expect(generation.interruptInputs).toHaveLength(0);
+
+      // Valid cancellation event for B confirms B only; A unchanged.
+      generation.events.emit({
+        id: "evt_b_cancelled",
+        created: 20,
+        type: "session.inbox.cancelled",
+        durable: { aggregateID: SESSION_ID, seq: 11, version: 1 },
+        data: { sessionID: SESSION_ID, inboxID: "inbox_b" },
+      } as V2Event);
+      await new Promise((r) => setTimeout(r, 20));
+
+      const projectionAfterEvidence = controller.getProjection();
+      expect(projectionAfterEvidence.hasActiveSessionWork).toBe(true);
+      expect(projectionAfterEvidence.composerStopAvailable).toBe(true);
+      expect(projectionAfterEvidence.composerStopOperation).toEqual(stopOpBefore);
+      expect(controller.getState().execution.type).toBe("executing");
+      expect(generation.interruptInputs).toHaveLength(0);
+      // B's cancellation evidence must not modify A's execution outcome/activity.
+      expect(projectionAfterEvidence.pendingLifecycle.cancellationPending).toBe(false);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("does not interrupt active execution A when queued prompt B has no safe inbox ID", async () => {
+    const promptA = deferred<SessionInboxUser>();
+    const promptACalled = deferred<void>();
+    const promptB = deferred<SessionInboxUser>();
+    const promptBCalled = deferred<void>();
+    const generation = createGeneration(1, {
+      inboxList: async () => [],
+      historyList: async () => ({ data: [], cursor: {} }),
+    });
+    let promptCalls = 0;
+    generation.setPromptHandler(async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        promptACalled.resolve(undefined);
+        return await promptA.promise;
+      }
+      promptBCalled.resolve(undefined);
+      return await promptB.promise;
+    });
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
+    await controller.awaitReady();
+
+    try {
+      const sendingA = controller.sendMessage(USER_MESSAGE, {
+        messageId: "msg_a",
+        delivery: "steer",
+      });
+      await promptACalled.promise;
+      promptA.resolve(userInbox("inbox_a", "steer"));
+      await sendingA;
+      generation.events.emit({
+        id: "evt_exec_a_started_2",
+        created: 10,
+        type: "session.execution.started",
+        durable: { aggregateID: SESSION_ID, seq: 20, version: 1 },
+        data: { sessionID: SESSION_ID },
+      } as V2Event);
+      await waitForState(controller, () => controller.getProjection().hasActiveSessionWork);
+
+      // B becomes ambiguous with no safe inbox ID while A is active.
+      const sendingB = controller.sendMessage(USER_MESSAGE, {
+        messageId: "msg_b",
+        delivery: "queue",
+      });
+      const sendingBOutcome = sendingB.then(
+        (v) => ({ ok: true as const, v }),
+        (e) => ({ ok: false as const, e }),
+      );
+      await promptBCalled.promise;
+      promptB.reject(new TypeError("prompt response was lost"));
+      const outcome = await sendingBOutcome;
+      if (outcome.ok === false) expect(outcome.e).toMatchObject({ kind: "ambiguous" });
+
+      expect(await controller.awaitPromptAdmission("msg_b")).toBe("ambiguous");
+      expect(controller.getState().inboxById.msg_b).toBeUndefined();
+      // No safe inbox target must be actionable for B.
+      const bAction = controller
+        .getProjection()
+        .queuedPromptActions.find((a) => a.promptId === "msg_b");
+      expect(bAction?.inboxId ?? null).toBeNull();
+
+      const projectionBefore = controller.getProjection();
+      expect(projectionBefore.hasActiveSessionWork).toBe(true);
+      expect(projectionBefore.composerStopAvailable).toBe(true);
+
+      await controller.cancelQueuedPrompt("msg_b");
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Must not interrupt A as fallback and must not dispatch inbox cancel without safe target.
+      expect(generation.inboxCancelInputs).toHaveLength(0);
+      expect(generation.interruptInputs).toHaveLength(0);
+      expect(controller.getProjection().hasActiveSessionWork).toBe(true);
+      expect(controller.getState().execution.type).toBe("executing");
+      expect(controller.getProjection().composerStopAvailable).toBe(true);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("honours a queued-prompt cancel requested before admission after ambiguous transport and later admission", async () => {
     const prompt = deferred<SessionInboxUser>();
     const promptCalled = deferred<void>();
     const generation = createGeneration(1);
@@ -578,44 +772,38 @@ describe("native V2 prompt admission", () => {
         messageId: LOCAL_MESSAGE_ID,
         delivery: "queue",
       });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
       await promptCalled.promise;
-      await controller.cancel();
-      expect(controller.getState().execution).toEqual({
-        type: "cancelling",
-        phase: "prompt-request",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        assistantMessageId: null,
-        cancelRequested: true,
-      });
+      await controller.cancelQueuedPrompt(LOCAL_MESSAGE_ID);
 
       prompt.reject(new TypeError("prompt response was lost"));
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
       // The in-flight request is NOT aborted: its outcome is genuinely
       // unknown, and aborting it would not stop the server having taken it.
       expect(generation.inboxCancelInputs).toHaveLength(0);
       expect(generation.interruptInputs).toHaveLength(0);
 
-      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "queue"));
-      await waitForState(controller, (state) => state.execution.type === "admitted");
-      const admittedState = controller.getState().execution;
-      expect(await sending).toEqual({
-        messageId: LOCAL_MESSAGE_ID,
-        inboxId: EVENT_INBOX_ID,
-        delivery: "queue",
-      });
-      // M7 CHANGED THIS. The cancel requested BEFORE the admission is now
-      // honoured against the admitted inbox id, exactly once - previously the
-      // flag was carried into the `admitted` state and nothing read it, so the
-      // queued prompt executed while the reader was told it was cancelled.
+      generation.events.emit(inboxEvent(LOCAL_MESSAGE_ID, LOCAL_MESSAGE_ID, "queue"));
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      await expect(controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).resolves.toBe("admitted");
+      await new Promise((r) => setTimeout(r, 20));
+      const outcome = await sendingOutcome;
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      }
+      // The queued-prompt cancel requested before admission/target resolution is
+      // honoured against the admitted inbox id, exactly once.
       expect(generation.inboxCancelInputs).toHaveLength(1);
-      expect(generation.inboxCancelInputs[0]?.inboxID).toBe(EVENT_INBOX_ID);
-      // The run is over: the prompt was admitted and then removed from the
-      // queue, so the execution settles exactly as an admitted-prompt cancel
-      // does.
+      expect(generation.inboxCancelInputs[0]?.inboxID).toBe(LOCAL_MESSAGE_ID);
       expect(generation.interruptInputs).toHaveLength(0);
-      expect(admittedState.type).toBe("idle");
+      expect(controller.getState().execution.type).toBe("idle");
     } finally {
       controller.dispose();
     }

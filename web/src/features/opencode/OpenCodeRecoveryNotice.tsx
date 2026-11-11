@@ -71,6 +71,7 @@ export function OpenCodeRecoveryNotice({
   if (!reusedExistingSession || hiddenFor === sessionId) return null;
 
   const state = extras?.state;
+  const projection = extras?.projection;
   // A failed inbox read is not an authoritative empty queue and is not a
   // confirmed queue either.
   const queued =
@@ -78,7 +79,8 @@ export function OpenCodeRecoveryNotice({
     Object.values(state.inboxById).some(
       (record) => record.type === "user" && record.delivery === "queue",
     );
-  const activity = state?.activity ?? "unknown";
+  const activity: "running" | "not-running" | "unknown" =
+    projection?.hasActiveSessionWork === true ? "running" : (state?.activity ?? "unknown");
 
   let announcement: string;
   if (activity === "running") {

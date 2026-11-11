@@ -39,7 +39,7 @@
  * The kill is deliberate: it is the restart being tested.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -52,9 +52,12 @@ import {
   type RuntimeOpenCodeServer,
 } from "../../harness/opencodeRuntimeHarness.ts";
 import {
-  buildStubOpenCodeConfig,
+  OPENCODE_V2_COMPATIBLE_PACKAGE,
+  STUB_CONTEXT_LIMIT,
   STUB_MODEL_ID,
+  STUB_OUTPUT_LIMIT,
   STUB_PROVIDER_ID,
+  STUB_UPSTREAM_MODEL_ID,
 } from "../../harness/opencodeStubConfig.ts";
 import {
   startStubProvider,
@@ -74,7 +77,7 @@ if (runtimeTestsRequested() && reason) {
 }
 
 /** Enough failures that the run is still waiting when the kill lands. */
-const RETRY_FAILURES = 8;
+const RETRY_FAILURES = 50;
 
 /** Message placed in the provider's 429 body. */
 const RETRY_ERROR_MESSAGE = "tbai-retry-restart-fixture";
@@ -100,291 +103,24 @@ interface SessionMessageRow {
   readonly retry?: DurableRetry;
 }
 
-describeRuntime("real OpenCode: a restarted process does not restore a retry", () => {
-  let isolation: RuntimeIsolation;
-  let stub: StubProvider;
-  let serverA: RuntimeOpenCodeServer | undefined;
-  let serverB: RuntimeOpenCodeServer | undefined;
-  let stopA: (() => void) | undefined;
-  let stopB: (() => void) | undefined;
-  let failuresRemaining = RETRY_FAILURES;
+interface MidRetryState {
+  isolation: RuntimeIsolation;
+  stub: StubProvider;
+  resetFailures: () => void;
+  serverA: RuntimeOpenCodeServer;
+  stopA: () => void;
+  eventsA: RuntimeWireEvent[];
+  sessionId: string;
+  assistantMessageId: string;
+  retryDeadline: number;
+  retryAttempt: number;
+  durableRetry: DurableRetry;
+  messageIdsBeforeKill: string[];
+  headers: () => Record<string, string>;
+  dataHome: string;
+  dbPath: string;
+}
 
-  let sessionId = "";
-  let assistantMessageId = "";
-  let retryDeadline = 0;
-  let retryAttempt = 0;
-  let durableRetry: DurableRetry | undefined;
-  let messageIdsBeforeKill: string[] = [];
-  let killedAt = 0;
-  let requestsAtKill = 0;
-
-  const eventsA: RuntimeWireEvent[] = [];
-  const eventsB: RuntimeWireEvent[] = [];
-
-  const headers = (): Record<string, string> => ({
-    "content-type": "application/json",
-    "x-opencode-directory": isolation.homeDir,
-  });
-
-  /** Events on a server that belong to this session and happened after the kill. */
-  const sessionEventsAfterKill = (events: readonly RuntimeWireEvent[]): RuntimeWireEvent[] =>
-    events.filter(
-      (event) =>
-        (event.created ?? 0) >= killedAt &&
-        (event.data?.sessionID as string | undefined) === sessionId,
-    );
-
-  beforeAll(async () => {
-    stub = await startStubProvider({
-      model: STUB_MODEL_ID,
-      error: { status: 429, message: RETRY_ERROR_MESSAGE, retryAfterSeconds: 1 },
-      respond: (request) => {
-        if (summariseStubRequest(request) === "summary") return "summary";
-        // The title generator carries no tools; failing it proves nothing.
-        if (!request.offersTools) return "text";
-        if (failuresRemaining > 0) {
-          failuresRemaining -= 1;
-          return "retryable-error";
-        }
-        return "text";
-      },
-    });
-
-    isolation = createRuntimeIsolation(`retry-restart-${Date.now()}`);
-    fs.writeFileSync(
-      isolation.configFile,
-      JSON.stringify(buildStubOpenCodeConfig(stub.baseURL), null, 2),
-      "utf8",
-    );
-
-    const dataHome = path.join(isolation.root, "xdg-data");
-    fs.mkdirSync(dataHome, { recursive: true });
-    serverA = await startRuntimeOpenCodeServer(
-      undefined,
-      {
-        XDG_DATA_HOME: dataHome,
-        OPENCODE_DB: path.join(isolation.root, "opencode-retry-restart.db"),
-      },
-      { isolation },
-    );
-
-    const controller = new AbortController();
-    stopA = () => controller.abort();
-    void subscribeRuntimeEvents(serverA, controller.signal, eventsA);
-    await waitFor(
-      () => eventsA.some((event) => event.type === "server.connected"),
-      "event stream did not report server.connected",
-      TURN_TIMEOUT_MS,
-    );
-  }, 180_000);
-
-  afterAll(async () => {
-    stopB?.();
-    stopA?.();
-    await serverB?.stop();
-    await serverA?.stop();
-    stub?.stop();
-    fs.rmSync(isolation?.root ?? "", { recursive: true, force: true });
-  });
-
-  it("records a live retry and its durable message state before the restart", async () => {
-    const a = serverA;
-    if (!a) throw new Error("first server is not running");
-
-    const created = await a.json<{ data: { id: string } }>("/api/session", {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({}),
-    });
-    sessionId = created.data.id;
-    expect(typeof sessionId).toBe("string");
-
-    await a.json(`/api/session/${sessionId}/model`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ model: { id: STUB_MODEL_ID, providerID: STUB_PROVIDER_ID } }),
-    });
-    await a.json(`/api/session/${sessionId}/prompt`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ text: "start a retry, then get restarted" }),
-    });
-
-    await waitFor(
-      () =>
-        eventsA.some(
-          (event) =>
-            event.type === "session.retry.scheduled" &&
-            (event.data?.sessionID as string | undefined) === sessionId,
-        ),
-      "the first turn never scheduled a retry",
-      TURN_TIMEOUT_MS,
-    );
-
-    const firstRetry = eventsA.find(
-      (event) =>
-        event.type === "session.retry.scheduled" &&
-        (event.data?.sessionID as string | undefined) === sessionId,
-    );
-    const data = firstRetry?.data ?? {};
-    retryAttempt = data.attempt as number;
-    retryDeadline = data.at as number;
-    assistantMessageId = data.assistantMessageID as string;
-
-    // Absolute deadline on the same clock as the event, not a duration.
-    expect(typeof retryAttempt).toBe("number");
-    expect(retryAttempt).toBeGreaterThan(1);
-    expect(typeof retryDeadline).toBe("number");
-    expect(Number.isFinite(retryDeadline)).toBe(true);
-    expect(retryDeadline).toBeGreaterThan(firstRetry?.created as number);
-
-    const active = await a.json<{ data: Record<string, unknown> }>("/api/session/active");
-    expect(active.data[sessionId]).toEqual({ type: "running" });
-
-    // The retry state is durable on the assistant message BEFORE the kill.
-    // Without this, "history still shows it" after restart would prove nothing.
-    const projectionDeadline = Date.now() + 5_000;
-    let assistant: SessionMessageRow | undefined;
-    while (Date.now() < projectionDeadline) {
-      const messages = await a.json<{ data: SessionMessageRow[] }>(
-        `/api/session/${sessionId}/message`,
-        { headers: headers() },
-      );
-      assistant = messages.data.find((message) => message.id === assistantMessageId);
-      messageIdsBeforeKill = messages.data.map((message) => message.id ?? "");
-      if (assistant?.retry !== undefined) break;
-      await Bun.sleep(100);
-    }
-
-    expect(assistant?.retry?.attempt).toBe(retryAttempt);
-    expect(assistant?.retry?.at).toBe(retryDeadline);
-    durableRetry = assistant?.retry;
-
-    console.log(
-      `[retry-restart] before kill attempt=${retryAttempt} at=${retryDeadline} messages=${messageIdsBeforeKill.length}`,
-    );
-  }, 120_000);
-
-  it("does not resume the wait or restore a countdown after the restart", async () => {
-    const a = serverA;
-    if (!a) throw new Error("first server is not running");
-    if (!sessionId || !durableRetry) throw new Error("the retry was not recorded");
-
-    stopA?.();
-    // Stop ONLY the child this harness spawned. Nothing else is touched.
-    await a.stop();
-    serverA = undefined;
-    killedAt = Date.now();
-    requestsAtKill = stub.requests.length;
-    expect(requestsAtKill).toBeGreaterThan(0);
-
-    serverB = await startRuntimeOpenCodeServer(
-      undefined,
-      {
-        XDG_DATA_HOME: path.join(isolation.root, "xdg-data"),
-        OPENCODE_DB: path.join(isolation.root, "opencode-retry-restart.db"),
-      },
-      { isolation },
-    );
-    const controller = new AbortController();
-    stopB = () => controller.abort();
-    void subscribeRuntimeEvents(serverB, controller.signal, eventsB);
-    await waitFor(
-      () => eventsB.some((event) => event.type === "server.connected"),
-      "restarted event stream did not report server.connected",
-      TURN_TIMEOUT_MS,
-    );
-
-    // Hold past the original deadline. The deadline is the thing that would
-    // have fired if a scheduler had been restored.
-    const holdUntil = Math.max(retryDeadline + HOLD_PAST_DEADLINE_MS, Date.now() + 2_000);
-    while (Date.now() < holdUntil) await Bun.sleep(100);
-    expect(Date.now()).toBeGreaterThan(retryDeadline);
-
-    const resumed = sessionEventsAfterKill(eventsB).filter(
-      (event) =>
-        event.type === "session.retry.scheduled" || event.type === "session.execution.started",
-    );
-    expect(resumed).toEqual([]);
-    // No upstream request means no hidden resumption behind the event stream.
-    expect(stub.requests.length).toBe(requestsAtKill);
-
-    const active = await serverB.json<{ data: Record<string, unknown> }>("/api/session/active");
-    expect(active.data[sessionId]).toBeUndefined();
-
-    // The session and its history survive, and the durable retry is unchanged.
-    const session = await serverB.json<{ data: { id?: string } }>(`/api/session/${sessionId}`, {
-      headers: headers(),
-    });
-    expect(session.data.id).toBe(sessionId);
-
-    const messages = await serverB.json<{ data: SessionMessageRow[] }>(
-      `/api/session/${sessionId}/message`,
-      { headers: headers() },
-    );
-    expect(messages.data.map((message) => message.id)).toEqual(messageIdsBeforeKill);
-    const assistant = messages.data.find((message) => message.id === assistantMessageId);
-    expect(assistant?.retry).toEqual(durableRetry);
-    // The interrupted turn did not settle successfully while we were gone.
-    expect(
-      messages.data.some((message) => message.type === "idle" && message.outcome === "succeeded"),
-    ).toBe(false);
-
-    console.log(
-      `[retry-restart] after restart: sessionEvents=${sessionEventsAfterKill(eventsB).length} requests=${stub.requests.length} active=absent durableRetry=preserved`,
-    );
-  }, 180_000);
-
-  it("establishes a fresh deadline only after a new prompt", async () => {
-    const b = serverB;
-    if (!b) throw new Error("restarted server is not running");
-    if (!sessionId || !durableRetry) throw new Error("the retry was not recorded");
-
-    const mark = eventsB.length;
-    await b.json(`/api/session/${sessionId}/prompt`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ text: "second prompt after the restart" }),
-    });
-
-    await waitFor(
-      () =>
-        eventsB
-          .slice(mark)
-          .some(
-            (event) =>
-              event.type === "session.retry.scheduled" &&
-              (event.data?.sessionID as string | undefined) === sessionId,
-          ),
-      "the new prompt did not establish a new retry",
-      TURN_TIMEOUT_MS,
-    );
-
-    const fresh = eventsB
-      .slice(mark)
-      .find(
-        (event) =>
-          event.type === "session.retry.scheduled" &&
-          (event.data?.sessionID as string | undefined) === sessionId,
-      );
-    const data = fresh?.data ?? {};
-    const freshDeadline = data.at as number;
-
-    // A new live event, after the kill, with its own deadline. This is the
-    // positive control: the hold window above was not merely a dead stream.
-    expect(fresh?.created as number).toBeGreaterThan(killedAt);
-    expect(freshDeadline).toBeGreaterThan(fresh?.created as number);
-    expect(freshDeadline).not.toBe(retryDeadline);
-    expect(data.attempt as number).toBeGreaterThan(1);
-    expect(stub.requests.length).toBeGreaterThan(requestsAtKill);
-
-    console.log(
-      `[retry-restart] fresh wait after new prompt: attempt=${data.attempt} at=${freshDeadline} oldAt=${retryDeadline}`,
-    );
-  }, 120_000);
-});
-
-/** Polls `predicate` until true, or throws `message` after `timeoutMs`. */
 async function waitFor(
   predicate: () => boolean,
   message: string,
@@ -397,3 +133,344 @@ async function waitFor(
   }
   throw new Error(message);
 }
+
+async function createStub(): Promise<{
+  stub: StubProvider;
+  resetFailures: () => void;
+}> {
+  let failuresRemaining = RETRY_FAILURES;
+  const stub = await startStubProvider({
+    model: STUB_MODEL_ID,
+    error: { status: 429, message: RETRY_ERROR_MESSAGE, retryAfterSeconds: 1 },
+    respond: (request) => {
+      if (summariseStubRequest(request) === "summary") return "summary";
+      // The title generator carries no tools; failing it proves nothing.
+      if (!request.offersTools) return "text";
+      if (failuresRemaining > 0) {
+        failuresRemaining -= 1;
+        return "retryable-error";
+      }
+      return "text";
+    },
+  });
+  return {
+    stub,
+    resetFailures: () => {
+      failuresRemaining = RETRY_FAILURES;
+    },
+  };
+}
+
+async function driveToMidRetry(label: string): Promise<MidRetryState> {
+  const { stub, resetFailures } = await createStub();
+  const isolation = createRuntimeIsolation(`retry-restart-${label}-${Date.now()}`);
+  // Disable auto-compaction: this suite proves retry timing/restart behavior.
+  // Auto-compaction can trigger on the post-restart prompt and, if its request
+  // is misclassified by the stub, fail the turn before a retry is scheduled.
+  fs.writeFileSync(
+    isolation.configFile,
+    JSON.stringify(
+      {
+        $schema: "https://opencode.ai/config.json",
+        model: `${STUB_PROVIDER_ID}/${STUB_MODEL_ID}`,
+        providers: {
+          [STUB_PROVIDER_ID]: {
+            name: "Stub",
+            package: OPENCODE_V2_COMPATIBLE_PACKAGE,
+            settings: { baseURL: stub.baseURL, apiKey: "tbai-stub-no-auth-required" },
+            models: {
+              [STUB_MODEL_ID]: {
+                modelID: STUB_UPSTREAM_MODEL_ID,
+                name: "Stub Tiny",
+                capabilities: { tools: true, input: ["text"], output: ["text"] },
+                limit: { context: STUB_CONTEXT_LIMIT, output: STUB_OUTPUT_LIMIT },
+              },
+            },
+          },
+        },
+        compaction: { auto: false },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const dataHome = path.join(isolation.root, "xdg-data");
+  fs.mkdirSync(dataHome, { recursive: true });
+  const dbPath = path.join(isolation.root, "opencode-retry-restart.db");
+  const serverA = await startRuntimeOpenCodeServer(
+    undefined,
+    { XDG_DATA_HOME: dataHome, OPENCODE_DB: dbPath },
+    { isolation },
+  );
+
+  const eventsA: RuntimeWireEvent[] = [];
+  const controller = new AbortController();
+  const stopA = () => controller.abort();
+  void subscribeRuntimeEvents(serverA, controller.signal, eventsA);
+  await waitFor(
+    () => eventsA.some((event) => event.type === "server.connected"),
+    "event stream did not report server.connected",
+    TURN_TIMEOUT_MS,
+  );
+
+  const headers = (): Record<string, string> => ({
+    "content-type": "application/json",
+    "x-opencode-directory": isolation.homeDir,
+  });
+
+  const created = await serverA.json<{ data: { id: string } }>("/api/session", {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({}),
+  });
+  const sessionId = created.data.id;
+
+  await serverA.json(`/api/session/${sessionId}/model`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ model: { id: STUB_MODEL_ID, providerID: STUB_PROVIDER_ID } }),
+  });
+  await serverA.json(`/api/session/${sessionId}/prompt`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ text: "start a retry, then get restarted" }),
+  });
+
+  await waitFor(
+    () =>
+      eventsA.some(
+        (event) =>
+          event.type === "session.retry.scheduled" &&
+          (event.data?.sessionID as string | undefined) === sessionId,
+      ),
+    "the first turn never scheduled a retry",
+    TURN_TIMEOUT_MS,
+  );
+
+  const firstRetry = eventsA.find(
+    (event) =>
+      event.type === "session.retry.scheduled" &&
+      (event.data?.sessionID as string | undefined) === sessionId,
+  );
+  const data = firstRetry?.data ?? {};
+  const retryAttempt = data.attempt as number;
+  const retryDeadline = data.at as number;
+  const assistantMessageId = data.assistantMessageID as string;
+
+  const projectionDeadline = Date.now() + 5_000;
+  let assistant: SessionMessageRow | undefined;
+  let messageIdsBeforeKill: string[] = [];
+  while (Date.now() < projectionDeadline) {
+    const messages = await serverA.json<{ data: SessionMessageRow[] }>(
+      `/api/session/${sessionId}/message`,
+      { headers: headers() },
+    );
+    assistant = messages.data.find((message) => message.id === assistantMessageId);
+    messageIdsBeforeKill = messages.data.map((message) => message.id ?? "");
+    if (assistant?.retry !== undefined) break;
+    await Bun.sleep(100);
+  }
+  if (!assistant?.retry) throw new Error("durable retry was not recorded before kill");
+
+  return {
+    isolation,
+    stub,
+    resetFailures,
+    serverA,
+    stopA,
+    eventsA,
+    sessionId,
+    assistantMessageId,
+    retryDeadline,
+    retryAttempt,
+    durableRetry: assistant.retry,
+    messageIdsBeforeKill,
+    headers,
+    dataHome,
+    dbPath,
+  };
+}
+
+async function cleanupMidRetry(state: MidRetryState): Promise<void> {
+  state.stopA();
+  await state.serverA.stop().catch(() => undefined);
+  state.stub.stop();
+  fs.rmSync(state.isolation.root, { recursive: true, force: true });
+}
+
+describeRuntime("real OpenCode: a restarted process does not restore a retry", () => {
+  it("records a live retry and its durable message state before the restart", async () => {
+    const state = await driveToMidRetry("record");
+    try {
+      expect(typeof state.sessionId).toBe("string");
+      expect(typeof state.retryAttempt).toBe("number");
+      expect(state.retryAttempt).toBeGreaterThan(1);
+      expect(typeof state.retryDeadline).toBe("number");
+      expect(Number.isFinite(state.retryDeadline)).toBe(true);
+      const firstRetry = state.eventsA.find(
+        (event) =>
+          event.type === "session.retry.scheduled" &&
+          (event.data?.sessionID as string | undefined) === state.sessionId,
+      );
+      expect(state.retryDeadline).toBeGreaterThan(firstRetry?.created as number);
+
+      const active = await state.serverA.json<{ data: Record<string, unknown> }>(
+        "/api/session/active",
+      );
+      expect(active.data[state.sessionId]).toEqual({ type: "running" });
+
+      expect(state.durableRetry.attempt).toBe(state.retryAttempt);
+      expect(state.durableRetry.at).toBe(state.retryDeadline);
+    } finally {
+      await cleanupMidRetry(state);
+    }
+  }, 180_000);
+
+  it("does not resume the wait or restore a countdown after the restart", async () => {
+    const state = await driveToMidRetry("no-resume");
+    let serverB: RuntimeOpenCodeServer | undefined;
+    let stopB: (() => void) | undefined;
+    const eventsB: RuntimeWireEvent[] = [];
+    try {
+      state.stopA();
+      await state.serverA.stop();
+      const killedAt = Date.now();
+      const requestsAtKill = state.stub.requests.length;
+      expect(requestsAtKill).toBeGreaterThan(0);
+
+      serverB = await startRuntimeOpenCodeServer(
+        undefined,
+        { XDG_DATA_HOME: state.dataHome, OPENCODE_DB: state.dbPath },
+        { isolation: state.isolation },
+      );
+      const controller = new AbortController();
+      stopB = () => controller.abort();
+      void subscribeRuntimeEvents(serverB, controller.signal, eventsB);
+      await waitFor(
+        () => eventsB.some((event) => event.type === "server.connected"),
+        "restarted event stream did not report server.connected",
+        TURN_TIMEOUT_MS,
+      );
+
+      const holdUntil = Math.max(state.retryDeadline + HOLD_PAST_DEADLINE_MS, Date.now() + 2_000);
+      while (Date.now() < holdUntil) await Bun.sleep(100);
+      expect(Date.now()).toBeGreaterThan(state.retryDeadline);
+
+      const sessionEventsAfterKill = eventsB.filter(
+        (event) =>
+          (event.created ?? 0) >= killedAt &&
+          (event.data?.sessionID as string | undefined) === state.sessionId,
+      );
+      const resumed = sessionEventsAfterKill.filter(
+        (event) =>
+          event.type === "session.retry.scheduled" || event.type === "session.execution.started",
+      );
+      expect(resumed).toEqual([]);
+      expect(state.stub.requests.length).toBe(requestsAtKill);
+
+      const active = await serverB.json<{ data: Record<string, unknown> }>("/api/session/active");
+      expect(active.data[state.sessionId]).toBeUndefined();
+
+      const session = await serverB.json<{ data: { id?: string } }>(
+        `/api/session/${state.sessionId}`,
+        { headers: state.headers() },
+      );
+      expect(session.data.id).toBe(state.sessionId);
+
+      const messages = await serverB.json<{ data: SessionMessageRow[] }>(
+        `/api/session/${state.sessionId}/message`,
+        { headers: state.headers() },
+      );
+      expect(messages.data.map((message) => message.id)).toEqual(state.messageIdsBeforeKill);
+      const assistant = messages.data.find((message) => message.id === state.assistantMessageId);
+      expect(assistant?.retry).toEqual(state.durableRetry);
+      expect(
+        messages.data.some((message) => message.type === "idle" && message.outcome === "succeeded"),
+      ).toBe(false);
+    } finally {
+      stopB?.();
+      await serverB?.stop().catch(() => undefined);
+      state.stub.stop();
+      fs.rmSync(state.isolation.root, { recursive: true, force: true });
+    }
+  }, 240_000);
+
+  it("establishes a fresh deadline only after a new prompt", async () => {
+    const state = await driveToMidRetry("fresh");
+    let serverB: RuntimeOpenCodeServer | undefined;
+    let stopB: (() => void) | undefined;
+    const eventsB: RuntimeWireEvent[] = [];
+    try {
+      state.stopA();
+      await state.serverA.stop();
+      const killedAt = Date.now();
+      const requestsAtKill = state.stub.requests.length;
+
+      serverB = await startRuntimeOpenCodeServer(
+        undefined,
+        { XDG_DATA_HOME: state.dataHome, OPENCODE_DB: state.dbPath },
+        { isolation: state.isolation },
+      );
+      const controller = new AbortController();
+      stopB = () => controller.abort();
+      void subscribeRuntimeEvents(serverB, controller.signal, eventsB);
+      await waitFor(
+        () => eventsB.some((event) => event.type === "server.connected"),
+        "restarted event stream did not report server.connected",
+        TURN_TIMEOUT_MS,
+      );
+
+      // Hold past the original deadline to prove no restored countdown, then
+      // issue a new prompt which must establish a fresh live retry.
+      const holdUntil = Math.max(state.retryDeadline + HOLD_PAST_DEADLINE_MS, Date.now() + 2_000);
+      while (Date.now() < holdUntil) await Bun.sleep(100);
+      expect(Date.now()).toBeGreaterThan(state.retryDeadline);
+
+      // Replenish the stub's failure budget for the post-restart prompt: the
+      // pre-kill mid-retry phase may have consumed failures while waiting.
+      state.resetFailures();
+      const mark = eventsB.length;
+      await serverB.json(`/api/session/${state.sessionId}/prompt`, {
+        method: "POST",
+        headers: state.headers(),
+        body: JSON.stringify({ text: "second prompt after the restart" }),
+      });
+
+      await waitFor(
+        () =>
+          eventsB
+            .slice(mark)
+            .some(
+              (event) =>
+                event.type === "session.retry.scheduled" &&
+                (event.data?.sessionID as string | undefined) === state.sessionId,
+            ),
+        "the new prompt did not establish a new retry",
+        TURN_TIMEOUT_MS,
+      );
+
+      const fresh = eventsB
+        .slice(mark)
+        .find(
+          (event) =>
+            event.type === "session.retry.scheduled" &&
+            (event.data?.sessionID as string | undefined) === state.sessionId,
+        );
+      const data = fresh?.data ?? {};
+      const freshDeadline = data.at as number;
+
+      expect(fresh?.created as number).toBeGreaterThan(killedAt);
+      expect(freshDeadline).toBeGreaterThan(fresh?.created as number);
+      expect(freshDeadline).not.toBe(state.retryDeadline);
+      expect(data.attempt as number).toBeGreaterThan(1);
+      expect(state.stub.requests.length).toBeGreaterThan(requestsAtKill);
+    } finally {
+      stopB?.();
+      await serverB?.stop().catch(() => undefined);
+      state.stub.stop();
+      fs.rmSync(state.isolation.root, { recursive: true, force: true });
+    }
+  }, 300_000);
+});

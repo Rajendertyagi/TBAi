@@ -33,7 +33,11 @@ export function IndexRedirect() {
     setTarget(ROUTES.CHAT_NEW);
   }, [hydration, target]);
 
-  if (hydration === "idle" || hydration === "loading" || (hydration === "ready" && target === null)) {
+  if (
+    hydration === "idle" ||
+    hydration === "loading" ||
+    (hydration === "ready" && target === null)
+  ) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         Loading workspace.

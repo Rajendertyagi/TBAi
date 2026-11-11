@@ -351,7 +351,10 @@ export async function executeOpenCodeScheduledTurn(
   parentSignal?.addEventListener("abort", onParentAbort, { once: true });
 
   try {
-    await client.session.wait({ sessionID: sessionId }, { signal: timeoutController.signal });
+    await client.experimental.session.wait(
+      { sessionID: sessionId },
+      { signal: timeoutController.signal },
+    );
   } catch {
     // Wait may reject if aborted or if unsupported on server
   } finally {

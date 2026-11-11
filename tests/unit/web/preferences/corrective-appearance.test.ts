@@ -45,7 +45,9 @@ describe("corrective appearance: system theme", () => {
 
   it("pre-paint resolves cached system via matchMedia and keeps logical cache semantics", () => {
     const html = read("web/index.html");
-    expect(html).toContain('var logical = t === "light" || t === "dark" || t === "system" ? t : "system"');
+    expect(html).toContain(
+      'var logical = t === "light" || t === "dark" || t === "system" ? t : "system"',
+    );
     expect(html).toContain('logical === "system"');
     expect(html).toContain('window.matchMedia("(prefers-color-scheme: dark)").matches');
   });
@@ -62,7 +64,9 @@ describe("corrective appearance: authoritative default typography", () => {
 
   it("handles invalid authoritative typography safely without DB migration", () => {
     const src = read("web/src/features/preferences/state/usePreferencesSync.ts");
-    expect(src).toContain("Invalid authoritative typography: apply safe canonical default (no DB migration)");
+    expect(src).toContain(
+      "Invalid authoritative typography: apply safe canonical default (no DB migration)",
+    );
     expect(src).not.toContain("patchPreferences({ appearance: { typography");
   });
 

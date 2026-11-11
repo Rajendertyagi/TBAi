@@ -50,7 +50,10 @@ function readSnapshotRow(): SnapshotRead {
     return { state: "valid", snapshot: parseStoredSnapshot(parsed) };
   } catch (err) {
     if (err instanceof WorkspacePreferencesCorruptError) return { state: "corrupt", error: err };
-    return { state: "corrupt", error: new WorkspacePreferencesCorruptError("snapshot JSON is malformed") };
+    return {
+      state: "corrupt",
+      error: new WorkspacePreferencesCorruptError("snapshot JSON is malformed"),
+    };
   }
 }
 
@@ -118,7 +121,11 @@ export function patchWorkspacePreferences(input: {
   preferences: unknown;
   originWindowId?: string;
 }): PreferencesPatchResult {
-  if (input.preferences === null || typeof input.preferences !== "object" || Array.isArray(input.preferences)) {
+  if (
+    input.preferences === null ||
+    typeof input.preferences !== "object" ||
+    Array.isArray(input.preferences)
+  ) {
     throw new Error("preferences must be an object");
   }
   const patch = input.preferences as Record<string, unknown>;
@@ -231,7 +238,9 @@ export function closeSharedTabsBatch(input: {
       const idx = current.sharedTabs.findIndex((t) => t.ref === input.anchorConversationId);
       if (idx >= 0) {
         sharedTabs =
-          input.mode === "others" ? [current.sharedTabs[idx]!] : current.sharedTabs.slice(0, idx + 1);
+          input.mode === "others"
+            ? [current.sharedTabs[idx]!]
+            : current.sharedTabs.slice(0, idx + 1);
       } else {
         // Anchor not found: no-op (authoritative state wins).
         return { conflict: false, snapshot: current };

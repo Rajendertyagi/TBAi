@@ -111,7 +111,9 @@ test("opening the same conversation through two paths yields no duplicate visibl
     // No duplicate visible tab for this conversation ref.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
     await expect(strip).toBeVisible();
-    const tabsForRef = strip.locator(`[data-tab-ref="${created}"], [data-conversation-id="${created}"]`);
+    const tabsForRef = strip.locator(
+      `[data-tab-ref="${created}"], [data-conversation-id="${created}"]`,
+    );
     // Fallback: count tabs whose accessible name/title contains the marker.
     const namedTabs = strip.getByRole("tab", { name: /p8-dup-conv/i });
     const count = (await tabsForRef.count()) || (await namedTabs.count());
@@ -166,7 +168,9 @@ test("first send from the draft creates exactly ONE row and one tab", async ({ p
   }
 });
 
-test("closing an inactive shared tab leaves the active conversation unchanged", async ({ page }) => {
+test("closing an inactive shared tab leaves the active conversation unchanged", async ({
+  page,
+}) => {
   const a = await createConversation(page.request, "p8-close-a");
   const b = await createConversation(page.request, "p8-close-b");
   try {

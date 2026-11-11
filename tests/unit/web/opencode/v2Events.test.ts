@@ -555,42 +555,21 @@ describe("V2 revert recovery transitions", () => {
   });
 });
 
-describe("V2 prompt admission and idempotence", () => {
-  it("inserts an optimistic message and records the same inbox admission only once", () => {
+describe("V2 prompt submission and inbox recording", () => {
+  it("inserts an optimistic message without conflating admission into execution state", () => {
     const submitting = reduceV2ThreadState(createInitialV2ThreadState(SESSION_ID), {
       type: "prompt_submitting",
       message: OPTIMISTIC_MESSAGE,
     });
-    const admitted = reduceV2ThreadState(submitting, {
-      type: "prompt_admitted",
-      userMessageId: OPTIMISTIC_MESSAGE_ID,
-      inbox: INBOX_RECORD,
-    });
-    const duplicate = reduceV2ThreadState(admitted, {
-      type: "prompt_admitted",
-      userMessageId: OPTIMISTIC_MESSAGE_ID,
-      inbox: INBOX_RECORD,
-    });
 
     expect(submitting.messages[OPTIMISTIC_MESSAGE_ID]).toEqual(OPTIMISTIC_MESSAGE);
     expect(submitting.messageOrder).toEqual([OPTIMISTIC_MESSAGE_ID]);
-    expect(submitting.execution).toEqual({
-      type: "submitting",
-      userMessageId: OPTIMISTIC_MESSAGE_ID,
-      cancelRequested: false,
-    });
-    expect(admitted.inboxById).toEqual({ [INBOX_ID]: INBOX_RECORD });
-    expect(admitted.execution).toEqual({
-      type: "admitted",
-      userMessageId: OPTIMISTIC_MESSAGE_ID,
-      inboxId: INBOX_ID,
-      delivery: "queue",
-      cancelRequested: false,
-    });
-    expect(duplicate.inboxById).toEqual(admitted.inboxById);
+    expect(submitting.optimisticMessageIds).toEqual([OPTIMISTIC_MESSAGE_ID]);
+    // Admission/submission lifecycle is owned by PromptsInFlight, not execution state.
+    expect(submitting.execution).toEqual({ type: "idle" });
   });
 
-  it("accepts enqueue before the HTTP response without regressing a terminal execution state", () => {
+  it("records inbox enqueue events idempotently without regressing terminal execution state", () => {
     const submitting = reduceV2ThreadState(createInitialV2ThreadState(SESSION_ID), {
       type: "prompt_submitting",
       message: OPTIMISTIC_MESSAGE,
@@ -615,18 +594,13 @@ describe("V2 prompt admission and idempotence", () => {
     });
 
     const enqueued = reduceV2Event(submitting, enqueuedEvent, "observe-and-apply");
-    const terminal = reduceV2Event(enqueued, terminalEvent, "observe-and-apply");
-    const httpResponse = reduceV2ThreadState(terminal, {
-      type: "prompt_admitted",
-      userMessageId: OPTIMISTIC_MESSAGE_ID,
-      inbox: INBOX_RECORD,
-    });
+    const duplicate = reduceV2Event(enqueued, enqueuedEvent, "observe-and-apply");
+    const terminal = reduceV2Event(duplicate, terminalEvent, "observe-and-apply");
 
     expect(enqueued.inboxById[INBOX_ID]).toEqual(INBOX_RECORD);
+    expect(duplicate.inboxById).toEqual(enqueued.inboxById);
     expect(terminal.execution).toEqual({ type: "idle" });
-    expect(httpResponse.inboxById[INBOX_ID]).toEqual(INBOX_RECORD);
-    expect(Object.keys(httpResponse.inboxById)).toEqual([INBOX_ID]);
-    expect(httpResponse.execution).toEqual({ type: "idle" });
+    expect(terminal.inboxById[INBOX_ID]).toEqual(INBOX_RECORD);
   });
 });
 

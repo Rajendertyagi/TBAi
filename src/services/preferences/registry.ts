@@ -59,7 +59,9 @@ export function normalizeSectionOrderStrict(value: unknown): string[] {
       throw new WorkspacePreferencesCorruptError("desktop.sectionOrder elements must be strings");
     }
     if (!known.has(entry)) {
-      throw new WorkspacePreferencesCorruptError(`desktop.sectionOrder contains unknown section id: ${entry}`);
+      throw new WorkspacePreferencesCorruptError(
+        `desktop.sectionOrder contains unknown section id: ${entry}`,
+      );
     }
     if (seen.has(entry)) continue;
     seen.add(entry);
@@ -122,7 +124,7 @@ function requireGroupObject(
   obj: Record<string, unknown>,
   key: "appearance" | "desktop" | "welcome" | "navigation",
 ): unknown {
-  if (!Object.prototype.hasOwnProperty.call(obj, key) || obj[key] === undefined) return {};
+  if (!Object.hasOwn(obj, key) || obj[key] === undefined) return {};
   if (obj[key] === null) {
     throw new WorkspacePreferencesCorruptError(`preferences.${key} must not be null`);
   }
@@ -137,11 +139,14 @@ export function parsePortablePreferences(raw: unknown): PortablePreferences {
   // Ignore obsolete legacy fields (e.g. migration) by not reading them; strict on active canonical fields.
   // Missing/undefined groups use defaults; explicit null is corrupt.
   const appearance = appearanceSchema.safeParse(requireGroupObject(obj, "appearance"));
-  if (!appearance.success) throw new WorkspacePreferencesCorruptError("appearance preferences are invalid");
+  if (!appearance.success)
+    throw new WorkspacePreferencesCorruptError("appearance preferences are invalid");
   const welcome = welcomeSchema.safeParse(requireGroupObject(obj, "welcome"));
-  if (!welcome.success) throw new WorkspacePreferencesCorruptError("welcome preferences are invalid");
+  if (!welcome.success)
+    throw new WorkspacePreferencesCorruptError("welcome preferences are invalid");
   const navigation = navigationSchema.safeParse(requireGroupObject(obj, "navigation"));
-  if (!navigation.success) throw new WorkspacePreferencesCorruptError("navigation preferences are invalid");
+  if (!navigation.success)
+    throw new WorkspacePreferencesCorruptError("navigation preferences are invalid");
   const desktop = parseDesktop(requireGroupObject(obj, "desktop"));
   return {
     appearance: appearance.data,
@@ -202,13 +207,11 @@ export function parseStoredSnapshot(raw: unknown): WorkspacePreferencesSnapshot 
     }
     sharedTabs.push(parsed.data);
   }
-  if (Object.prototype.hasOwnProperty.call(obj, "preferences") && obj.preferences === null) {
+  if (Object.hasOwn(obj, "preferences") && obj.preferences === null) {
     throw new WorkspacePreferencesCorruptError("snapshot.preferences must not be null");
   }
   const preferences = parsePortablePreferences(
-    Object.prototype.hasOwnProperty.call(obj, "preferences") && obj.preferences !== undefined
-      ? obj.preferences
-      : {},
+    Object.hasOwn(obj, "preferences") && obj.preferences !== undefined ? obj.preferences : {},
   );
   return {
     revision: obj.revision,

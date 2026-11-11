@@ -5,11 +5,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyTypographyToDom,
   DEFAULT_TYPOGRAPHY,
+  migrateTypography,
   readTypography,
   resetCodeTypography,
   resetInterfaceTypography,
   resetReadingTypography,
   resetTerminalTypography,
+  writeTypography,
   type TypographyConfig,
 } from "../../../web/src/features/appearance/typography";
 import { REPO_ROOT } from "../../helpers/repo-root";
@@ -510,41 +512,37 @@ describe("typography bootstrap — executable parity with readTypography", () =>
     return { writes, rootFontSize };
   }
 
-  it("agrees with readTypography for every boundary input", () => {
+  it("agrees with migrated typography for every boundary input", () => {
     const inputs = [12, 13, 14, 16, 24, 11, 25];
     for (const size of inputs) {
       const stored = { ...DEFAULT_TYPOGRAPHY, interfaceFontSize: size };
-      window.localStorage.setItem("tbai-typography", JSON.stringify(stored));
-      const hydrated = readTypography().interfaceFontSize;
+      const hydrated = migrateTypography(stored).interfaceFontSize;
       const prePaint = runBootstrap(stored).rootFontSize;
       expect(prePaint, `stored ${size}`).toBe(`${(hydrated / 16) * 100}%`);
     }
-    window.localStorage.removeItem("tbai-typography");
   });
 
   it("paints a stored 12 at 12px, identical before and after hydration", () => {
     const stored = { ...DEFAULT_TYPOGRAPHY, interfaceFontSize: 12 };
-    window.localStorage.setItem("tbai-typography", JSON.stringify(stored));
     const prePaint = runBootstrap(stored).rootFontSize;
 
-    applyTypographyToDom(readTypography());
+    applyTypographyToDom(migrateTypography(stored));
     const postHydration = document.documentElement.style.fontSize;
 
     expect(prePaint).toBe(`${(12 / 16) * 100}%`);
     expect(postHydration).toBe(prePaint);
-    window.localStorage.removeItem("tbai-typography");
   });
 
   it("leaves clean-install (no storage) and invalid storage matching default 15px / 300 across bootstrap and runtime", () => {
     // 1. Clean installation: no localStorage item
-    window.localStorage.removeItem("tbai-typography");
     const cleanBootstrap = runBootstrap(null);
     // When no storage exists, bootstrap does not override root style fontSize or --font-weight-base,
     // so globals.css defaults (93.75% = 15px, and weight 300) stand untouched.
     expect(cleanBootstrap.rootFontSize).toBe("");
     expect(cleanBootstrap.writes.has("--font-weight-base")).toBe(false);
 
-    // Runtime readTypography yields 15px and 300 weight
+    // Runtime in-memory config defaults to 15px and 300 weight
+    writeTypography(DEFAULT_TYPOGRAPHY);
     const cleanConfig = readTypography();
     expect(cleanConfig.interfaceFontSize).toBe(15);
     expect(cleanConfig.interfaceFontWeight).toBe(300);
@@ -554,15 +552,13 @@ describe("typography bootstrap — executable parity with readTypography", () =>
     expect(document.documentElement.style.fontSize).toBe(`${(15 / 16) * 100}%`);
     expect(rootStyle().getPropertyValue("--font-weight-base")).toBe("300");
 
-    // 2. Corrupted/invalid storage
-    window.localStorage.setItem("tbai-typography", "not-a-json");
+    // 2. Corrupted/invalid storage does not affect runtime in-memory config
     const invalidConfig = readTypography();
     expect(invalidConfig.interfaceFontSize).toBe(15);
     expect(invalidConfig.interfaceFontWeight).toBe(300);
     applyTypographyToDom(invalidConfig);
     expect(document.documentElement.style.fontSize).toBe(`${(15 / 16) * 100}%`);
     expect(rootStyle().getPropertyValue("--font-weight-base")).toBe("300");
-    window.localStorage.removeItem("tbai-typography");
   });
 });
 

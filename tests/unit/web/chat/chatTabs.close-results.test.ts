@@ -11,7 +11,12 @@ function snap(sharedTabs: Array<{ kind: "chat" | "agent"; ref: string }>, revisi
     revision,
     sharedTabs,
     preferences: {
-      appearance: { themeMode: "system", lightTheme: "default", darkTheme: "default", typography: "default" },
+      appearance: {
+        themeMode: "system",
+        lightTheme: "default",
+        darkTheme: "default",
+        typography: "default",
+      },
       desktop: {
         sidebarVisible: true,
         statusBarVisible: true,
@@ -37,7 +42,13 @@ function reset() {
     suppressedDelayedAdds: {},
   });
   usePreferencesStore.setState({
-    snapshot: snap([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 1),
+    snapshot: snap(
+      [
+        { kind: "chat", ref: "a" },
+        { kind: "chat", ref: "b" },
+      ],
+      1,
+    ),
     hydration: "ready",
     hydrationError: null,
     mutationQueue: Promise.resolve(),
@@ -65,7 +76,13 @@ describe("requestSharedClose result semantics", () => {
       closeSharedTab: async () => ({
         ok: false,
         reason: "conflict",
-        snapshot: snap([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 5),
+        snapshot: snap(
+          [
+            { kind: "chat", ref: "a" },
+            { kind: "chat", ref: "b" },
+          ],
+          5,
+        ),
       }),
     } as any);
     await useChatTabsStore.getState().requestSharedClose("a");
@@ -79,7 +96,13 @@ describe("requestSharedClose result semantics", () => {
         ok: false,
         reason: "error",
         error: "server error",
-        snapshot: snap([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 1),
+        snapshot: snap(
+          [
+            { kind: "chat", ref: "a" },
+            { kind: "chat", ref: "b" },
+          ],
+          1,
+        ),
       }),
     } as any);
     await useChatTabsStore.getState().requestSharedClose("a");
@@ -105,7 +128,13 @@ describe("requestSharedCloseBatch result semantics", () => {
       closeSharedTabsBatch: async () => ({
         ok: false,
         reason: "conflict",
-        snapshot: snap([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 5),
+        snapshot: snap(
+          [
+            { kind: "chat", ref: "a" },
+            { kind: "chat", ref: "b" },
+          ],
+          5,
+        ),
       }),
     } as any);
     await useChatTabsStore.getState().requestSharedCloseBatch({ mode: "all" });

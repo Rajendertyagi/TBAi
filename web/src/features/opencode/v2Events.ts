@@ -309,31 +309,11 @@ function isTerminalExecution(state: V2ExecutionState): boolean {
   return state.type === "idle" || state.type === "error";
 }
 
-function executionCancelRequested(state: V2ExecutionState): boolean {
-  return state.type !== "idle" && state.type !== "error" && "cancelRequested" in state
-    ? state.cancelRequested
-    : false;
-}
-
 function currentUserAndInbox(state: V2ThreadState): {
   userMessageId: string | null;
   inboxId: string | null;
 } {
-  if (
-    state.execution.type === "submitting" ||
-    state.execution.type === "admitted" ||
-    state.execution.type === "reconciling"
-  ) {
-    return {
-      userMessageId: state.execution.userMessageId,
-      inboxId: state.execution.type === "admitted" ? state.execution.inboxId : null,
-    };
-  }
-  if (
-    state.execution.type === "executing" ||
-    state.execution.type === "streaming" ||
-    state.execution.type === "cancelling"
-  ) {
+  if (state.execution.type === "executing" || state.execution.type === "streaming") {
     return {
       userMessageId: state.execution.userMessageId,
       inboxId: state.execution.inboxId,
@@ -343,27 +323,10 @@ function currentUserAndInbox(state: V2ThreadState): {
 }
 
 function recordInbox(state: V2ThreadState, record: V2InboxRecord): V2ThreadState {
-  const next: V2ThreadState = {
+  return {
     ...state,
     inboxById: { ...state.inboxById, [record.id]: record },
   };
-  if (isTerminalExecution(next.execution)) return next;
-  if (
-    record.type === "user" &&
-    (next.execution.type === "submitting" || next.execution.type === "reconciling")
-  ) {
-    return {
-      ...next,
-      execution: {
-        type: "admitted",
-        userMessageId: next.execution.userMessageId,
-        inboxId: record.id,
-        delivery: record.delivery,
-        cancelRequested: next.execution.cancelRequested,
-      },
-    };
-  }
-  return next;
 }
 
 function inboxRecordFromItem(
@@ -418,7 +381,7 @@ function applyExecutionStarted(state: V2ThreadState): V2ThreadState {
   // execution branch does next. Composing it BEFORE the early return is what
   // keeps a stale retry from outliving the run that superseded it.
   const observed = withActivity(withRetryCleared(state), "running");
-  if (observed.execution.type === "reverting" || isTerminalExecution(observed.execution)) {
+  if (observed.execution.type === "reverting") {
     return observed;
   }
   const ids = currentUserAndInbox(observed);
@@ -429,14 +392,6 @@ function applyExecutionStarted(state: V2ThreadState): V2ThreadState {
       userMessageId: ids.userMessageId,
       inboxId: ids.inboxId,
       assistantMessageId: null,
-      cancelRequested:
-        observed.execution.type === "cancelling"
-          ? true
-          : observed.execution.type === "submitting" ||
-              observed.execution.type === "admitted" ||
-              observed.execution.type === "reconciling"
-            ? observed.execution.cancelRequested
-            : false,
     },
   };
 }
@@ -541,7 +496,6 @@ function applyAssistantEvent(
       userMessageId: ids.userMessageId,
       inboxId: ids.inboxId,
       assistantMessageId,
-      cancelRequested: state.execution.type === "cancelling",
     },
   };
 }
@@ -1179,7 +1133,7 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     }
     case "prompt_submitting": {
       const alreadySubmitted = state.optimisticMessageIds.includes(action.message.id);
-      const next: V2ThreadState = {
+      return {
         ...state,
         messages: { ...state.messages, [action.message.id]: action.message },
         messageOrder: state.messageOrder.includes(action.message.id)
@@ -1188,28 +1142,6 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         optimisticMessageIds: alreadySubmitted
           ? state.optimisticMessageIds
           : [...state.optimisticMessageIds, action.message.id],
-      };
-      if (next.execution.type === "reverting") return next;
-      return {
-        ...next,
-        execution: { type: "submitting", userMessageId: action.message.id, cancelRequested: false },
-      };
-    }
-    case "prompt_admitted": {
-      const next = action.inbox ? recordInbox(state, action.inbox) : state;
-      if (isTerminalExecution(next.execution) || next.execution.type === "reverting") return next;
-      const inboxId = action.inbox?.id ?? action.inboxId ?? null;
-      const delivery = action.inbox?.delivery ?? action.delivery ?? null;
-      return {
-        ...next,
-        execution: {
-          type: "admitted",
-          userMessageId: action.userMessageId,
-          inboxId,
-          delivery,
-          cancelRequested:
-            next.execution.type === "cancelling" ? true : executionCancelRequested(next.execution),
-        },
       };
     }
     case "prompt_removed": {
@@ -1221,35 +1153,6 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         optimisticMessageIds: state.optimisticMessageIds.filter((id) => id !== action.messageId),
       };
     }
-    case "prompt_reconciling":
-      return isTerminalExecution(state.execution) || state.execution.type === "reverting"
-        ? state
-        : {
-            ...state,
-            execution: {
-              type: "reconciling",
-              userMessageId: action.userMessageId,
-              cancelRequested: action.cancelRequested,
-            },
-          };
-    case "cancel_requested":
-      return isTerminalExecution(state.execution) || state.execution.type === "reverting"
-        ? state
-        : {
-            ...state,
-            execution: {
-              type: "cancelling",
-              phase: action.phase,
-              userMessageId: action.userMessageId,
-              inboxId: action.inboxId,
-              assistantMessageId: action.assistantMessageId,
-              // A cancel requested before the prompt was admitted is still OWED:
-              // the prompt is queued on the server and nothing has removed it
-              // yet. The flag is what the admission path reads to issue that
-              // cancel once the inbox id exists (M7).
-              cancelRequested: action.phase !== "execution",
-            },
-          };
     case "execution_started":
       return applyExecutionStarted(state);
     case "execution_streaming": {
@@ -1260,10 +1163,9 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         ...state,
         execution: {
           type: "streaming",
-          userMessageId: ids.userMessageId,
-          inboxId: ids.inboxId,
+          userMessageId: action.userMessageId ?? ids.userMessageId,
+          inboxId: action.inboxId ?? ids.inboxId,
           assistantMessageId: action.assistantMessageId,
-          cancelRequested: state.execution.type === "cancelling",
         },
       };
     }
@@ -1362,6 +1264,39 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     default:
       return state;
   }
+}
+
+/**
+ * Whether an event carries NEW lifecycle evidence for this thread.
+ *
+ * Deliberately mirrors `reduceV2Event`'s own acceptance gates instead of
+ * re-deriving them: replay-only/unknown types, another session, out-of-scope
+ * data, an already-applied id, and a durable sequence at or below the
+ * per-aggregate high-water mark are all NOT new. The reducer drops such an
+ * event; a fact store that applied it anyway would double-count the same
+ * evidence (a replayed `session.inbox.cancelled` confirming a cancellation
+ * twice, or a stale delivery superseding a settled intent).
+ *
+ * `recentObservedEventIds` is intentionally not consulted: an observed event
+ * that was BUFFERED during hydration has not been applied yet, so it is still
+ * new evidence when the replay reaches it.
+ *
+ * @param state - The thread state the reducer would apply against.
+ * @param event - The candidate event.
+ * @returns True when the reducer would accept it as new applied evidence.
+ */
+export function isLifecycleEvidenceEligible(state: V2ThreadState, event: V2Event): boolean {
+  if (REPLAY_ONLY_EVENT_TYPES.has(event.type) || !PUBLIC_EVENT_TYPES.has(event.type)) return false;
+  const sessionId = getEventSessionId(event);
+  if (sessionId !== null && sessionId !== state.sessionId) return false;
+  if (!isEventInScope(state, event)) return false;
+  if (state.eventIdentity.recentAppliedEventIds.includes(event.id)) return false;
+  const durable = getDurableSequence(event);
+  if (durable) {
+    const highWater = state.eventIdentity.durableSequenceByAggregate[durable.aggregateID];
+    if (highWater !== undefined && durable.seq <= highWater) return false;
+  }
+  return true;
 }
 
 /** Reduces one public V2 event while preserving identity and hydration ordering. */

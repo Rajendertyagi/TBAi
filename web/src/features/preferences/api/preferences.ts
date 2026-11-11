@@ -26,7 +26,10 @@ function getOriginWindowId(): string {
     const key = "tbai:window-id";
     const existing = window.sessionStorage.getItem(key);
     if (existing) return existing;
-    const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `w_${Math.random().toString(36).slice(2)}`;
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `w_${Math.random().toString(36).slice(2)}`;
     window.sessionStorage.setItem(key, id);
     return id;
   } catch {
@@ -41,8 +44,16 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 async function handleSnapshotResponse(res: Response): Promise<WorkspacePreferencesSnapshot> {
-  const data = await readJson<WorkspacePreferencesSnapshot | PreferencesConflictResponse | { error?: string; code?: string }>(res);
-  if (res.status === 409 && data && typeof data === "object" && "conflict" in data && (data as any).conflict) {
+  const data = await readJson<
+    WorkspacePreferencesSnapshot | PreferencesConflictResponse | { error?: string; code?: string }
+  >(res);
+  if (
+    res.status === 409 &&
+    data &&
+    typeof data === "object" &&
+    "conflict" in data &&
+    (data as any).conflict
+  ) {
     throw new PreferencesConflictError(data as PreferencesConflictResponse);
   }
   if (!res.ok) {

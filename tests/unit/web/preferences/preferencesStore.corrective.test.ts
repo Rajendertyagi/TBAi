@@ -61,13 +61,20 @@ describe("failed optimistic patch rollback (behavioral + invariants)", () => {
   it("BEHAVIORAL: non-conflict PATCH failure + authoritative refresh with same revision increments authoritativeReapplySeq (store signal for UI reapply)", async () => {
     // Exercises the actual store path: optimistic patch -> PATCH 500 -> refresh returns same revision -> reapply signal.
     // This verifies store behavior/signal; usePreferencesSync consumes the signal (covered by invariant below).
-    const { usePreferencesStore } = await import("@web/features/preferences/state/preferencesStore");
+    const { usePreferencesStore } = await import(
+      "@web/features/preferences/state/preferencesStore"
+    );
     const realFetch = globalThis.fetch;
     const snap = (revision = 5) => ({
       revision,
       sharedTabs: [],
       preferences: {
-        appearance: { themeMode: "system", lightTheme: "default", darkTheme: "default", typography: "default" },
+        appearance: {
+          themeMode: "system",
+          lightTheme: "default",
+          darkTheme: "default",
+          typography: "default",
+        },
         desktop: {
           sidebarVisible: true,
           statusBarVisible: true,
@@ -78,7 +85,12 @@ describe("failed optimistic patch rollback (behavioral + invariants)", () => {
           showCompleted: false,
           spellCheck: true,
         },
-        welcome: { engine: "direct", quickActionTab: "coding", scopeMode: "simple", folderId: null },
+        welcome: {
+          engine: "direct",
+          quickActionTab: "coding",
+          scopeMode: "simple",
+          folderId: null,
+        },
         navigation: { selectedFolderId: null, folderExpanded: {} },
       },
     });
@@ -118,7 +130,9 @@ describe("failed optimistic patch rollback (behavioral + invariants)", () => {
       expect(usePreferencesStore.getState().authoritativeReapplySeq).toBe(1);
       // 5. Authoritative snapshot remains the server's values (same revision).
       expect(usePreferencesStore.getState().snapshot?.revision).toBe(5);
-      expect((usePreferencesStore.getState().snapshot?.preferences as any)?.appearance?.themeMode).toBe("system");
+      expect(
+        (usePreferencesStore.getState().snapshot?.preferences as any)?.appearance?.themeMode,
+      ).toBe("system");
     } finally {
       globalThis.fetch = realFetch;
       usePreferencesStore.getState().stop();
@@ -136,7 +150,9 @@ describe("failed optimistic patch rollback (behavioral + invariants)", () => {
   it("INVARIANT (source-level): patchPreferences increments authoritativeReapplySeq on non-conflict failure after refresh", () => {
     const src = read("web/src/features/preferences/state/preferencesStore.ts");
     expect(src).toContain("authoritativeReapplySeq: s.authoritativeReapplySeq + 1");
-    expect(src).toContain("Failed optimistic patch: restore authoritative UI even if revision unchanged");
+    expect(src).toContain(
+      "Failed optimistic patch: restore authoritative UI even if revision unchanged",
+    );
   });
 
   it("INVARIANT (source-level): usePreferencesSync force-reapplies on authoritativeReapplySeq change", () => {

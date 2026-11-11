@@ -14,6 +14,7 @@ import {
 import { logger } from "@/lib/logger";
 import {
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
+  OPENCODE_V2_LIFECYCLE_RECOVERY_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
   OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
@@ -31,7 +32,12 @@ import { reconcileOpenCodeSessionDirectory } from "./sessionBootstrap";
 import { RetentionSet } from "./sync/retention";
 import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
 import { coveredTextPartIds, shouldReplayBuffered } from "./sync/historyReplay";
-import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
+import {
+  createInitialV2ThreadState,
+  isLifecycleEvidenceEligible,
+  mapEventError,
+  reduceV2ThreadState,
+} from "./v2Events";
 import { toV2PromptInput } from "./v2MessageProjection";
 import { projectV2Permission } from "./v2Permissions";
 import {
@@ -43,9 +49,27 @@ import {
 } from "./sync/optimistic";
 import {
   createPromptsInFlight,
+  type PromptsInFlight,
+  type PromptsInFlightRestorePoint,
   type V2PromptAdmissionResult,
+  type V2PromptCapacitySnapshot,
   type V2PromptSubmission,
 } from "./sync/promptsInFlight";
+import {
+  createExecutionFactsStore,
+  type V2ExecutionFactsSnapshot,
+  type V2ExecutionFactsStore,
+} from "./sync/executionFacts";
+import {
+  createCancellationFactsStore,
+  type V2CancellationFactsSnapshot,
+  type V2CancellationFactsStore,
+} from "./sync/cancellationFacts";
+import {
+  projectLifecycle,
+  type V2LifecycleHealth,
+  type V2LifecycleProjection,
+} from "./sync/lifecycleProjection";
 import { AttemptSupersededError, createAttempt, type Attempt } from "./sync/attempt";
 import { StartupTimeoutError, withDeadline } from "./sync/startupGate";
 import {
@@ -63,7 +87,7 @@ import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
   V2ActivityState,
   V2DesiredSelection,
-  V2ExecutionState,
+  // V2ExecutionState,
   V2HistoryMerge,
   V2InboxRecord,
   V2MessageState,
@@ -101,6 +125,18 @@ export type V2PromptSendError =
       readonly kind: "ambiguous";
       readonly error: V2SafeError;
     }
+  | {
+      /**
+       * Refused BEFORE dispatch: the admission registry is at capacity.
+       *
+       * This is neither a network nor a server failure, and the prompt was
+       * never sent. It clears as in-flight prompts settle, so presenting it as
+       * a terminal failure would be untruthful.
+       */
+      readonly kind: "capacity-backpressure";
+      readonly error: V2SafeError;
+      readonly capacity: V2PromptCapacitySnapshot;
+    }
   | { readonly kind: "disposed" };
 
 /**
@@ -112,6 +148,7 @@ export type { V2PromptAdmissionResult, V2PromptSubmission };
 
 export interface V2ThreadController {
   getState(): V2ThreadState;
+  getProjection(): V2LifecycleProjection;
   subscribe(listener: () => void): () => void;
   setDesiredSelection(selection: V2DesiredSelection): void;
   load(): Promise<void>;
@@ -127,13 +164,20 @@ export interface V2ThreadController {
   retry(): Promise<void>;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
+  /** Reconciles a degraded lifecycle snapshot; bounded and safe to call twice. */
+  reconcileLifecycle(): Promise<void>;
   resyncAuxiliary(): Promise<void>;
   reconcileStagedRevert(): Promise<void>;
   reconcilePendingPrompt(messageId: string): Promise<"admitted" | "absent" | "unresolved">;
   awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult>;
   sendMessage(message: AppendMessage, options?: V2PromptOptions): Promise<V2PromptSubmission>;
   regenerate(selectedAssistantParentId: string | null): Promise<void>;
-  cancel(): Promise<void>;
+  /** Composer Stop: stops the safely identified active execution only. */
+  stopComposer(): Promise<void>;
+  /** Cancels only the selected queued prompt's inbox item. */
+  cancelQueuedPrompt(promptId: string): Promise<void>;
+  /** Explicit session-wide stop request. */
+  stopSession(): Promise<void>;
   compact(): Promise<void>;
   replyToPermission(requestId: string, decision: "once" | "always" | "reject"): Promise<void>;
   reconcileAutoApprove(): Promise<number>;
@@ -288,6 +332,8 @@ export type V2ThreadControllerConfig = {
    * holding a stream open for the product's 30 seconds.
    */
   readonly streamIdleTimeoutMs: number;
+  /** Bounded authoritative re-reads after a lifecycle transition fault. */
+  readonly lifecycleRecoveryAttempts: number;
   /**
    * The clock the readiness deadline is measured against.
    *
@@ -306,7 +352,22 @@ const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
   promptAdmissionTimeoutMs: OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
   readyTimeoutMs: OPENCODE_V2_READY_TIMEOUT_MS,
   streamIdleTimeoutMs: OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS,
+  lifecycleRecoveryAttempts: OPENCODE_V2_LIFECYCLE_RECOVERY_ATTEMPTS,
   nowMs: () => Date.now(),
+};
+
+/**
+ * The facts a lifecycle transition must restore together.
+ *
+ * The thread state is immutable, so its reference is the restore point; each
+ * fact store contributes its own capture.
+ */
+type LifecycleRestorePoint = {
+  readonly thread: V2ThreadState;
+  readonly prompts: PromptsInFlightRestorePoint;
+  readonly execution: V2ExecutionFactsSnapshot;
+  readonly cancellation: V2CancellationFactsSnapshot;
+  readonly liveTouchedMessageIds: readonly string[];
 };
 
 export type V2ThreadControllerDeps = {
@@ -327,6 +388,19 @@ export type V2ThreadControllerDeps = {
     readonly sessionId: string;
   }) => Promise<{ directory: string | null }>;
   readonly onDirectoryChanged?: (newDirectory: string) => void;
+  /**
+   * Lifecycle fact stores, injectable so a fault can be reproduced in a test.
+   *
+   * Production passes none and the controller creates its own. A test passes a
+   * store that throws on one method, which is the only way to prove that a
+   * failing cross-fact transition rolls back instead of publishing half of
+   * itself.
+   */
+  readonly lifecycleStores?: {
+    readonly prompts?: PromptsInFlight;
+    readonly execution?: V2ExecutionFactsStore;
+    readonly cancellation?: V2CancellationFactsStore;
+  };
 };
 
 /** Creates the single native OpenCode V2 session controller. */
@@ -337,13 +411,41 @@ export function createV2ThreadController(
 ): V2ThreadController {
   const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
   let state = createInitialV2ThreadState(client.sessionId, client.directory);
+  const prompts = deps?.lifecycleStores?.prompts ?? createPromptsInFlight();
+  const executionFacts =
+    deps?.lifecycleStores?.execution ?? createExecutionFactsStore(client.sessionId);
+  const cancellationFacts = deps?.lifecycleStores?.cancellation ?? createCancellationFactsStore();
+  let health: V2LifecycleHealth = {
+    degraded: false,
+    reason: null,
+    recoveryAttempts: 0,
+    recovering: false,
+  };
+  /**
+   * Depth of the open lifecycle transition, if any.
+   *
+   * Mutations inside a transition are applied to the stores but NOT published:
+   * the boundary publishes exactly one snapshot after every fact has committed.
+   * That is what makes a cross-fact event atomic to a subscriber.
+   */
+  let transitionDepth = 0;
+  let transitionPublicationRequested = false;
+  let transitionPostCommit: Array<() => void> = [];
+  let lifecycleReconciliation: Promise<void> | null = null;
+  let projection: V2LifecycleProjection = projectLifecycle({
+    thread: state,
+    prompts: prompts.getSnapshot(),
+    execution: executionFacts.getSnapshot(),
+    cancellation: cancellationFacts.getSnapshot(),
+    health,
+  });
   /**
    * The attempt that may currently commit, and the only one whose readiness
    * anyone waits on.
    *
    * `null` means there is no live attempt: it was superseded, retired for a
    * reconnect, or disposed. Every continuation captures the attempt it started
-   * for and calls `isLive` before it commits anything â€” state, readiness, a
+   * for and calls `isLive` before it commits anything — state, readiness, a
    * load slot or the retry budget.
    */
   let currentAttempt: Attempt | null = null;
@@ -363,8 +465,9 @@ export function createV2ThreadController(
    */
   const liveTouchedMessageIds = new Set<string>();
   const listeners = new Set<() => void>();
-  const prompts = createPromptsInFlight();
   const activePromptReconciliations = new Set<string>();
+  let nextCancellationIntentId = 0;
+  let nextDispatchId = 0;
   /**
    * The retention policy, applied per collection.
    *
@@ -442,9 +545,7 @@ export function createV2ThreadController(
    * @param execution - The execution state to read.
    * @returns True when a cancel was requested and has not been honoured.
    */
-  function cancelPending(execution: V2ExecutionState): boolean {
-    return "cancelRequested" in execution ? execution.cancelRequested : false;
-  }
+  // (legacy cancelPending removed; cancellation is owned by CancellationFactsStore)
 
   /**
    * Reports that the hydration buffer overflowed and events were lost.
@@ -590,10 +691,155 @@ export function createV2ThreadController(
     if (generation) void generation.events.close().catch(() => undefined);
   }
 
-  function notify(): void {
-    if (disposed) return;
+  function recomputeProjection(): void {
+    projection = projectLifecycle({
+      thread: state,
+      prompts: prompts.getSnapshot(),
+      execution: executionFacts.getSnapshot(),
+      cancellation: cancellationFacts.getSnapshot(),
+      health,
+    });
+  }
+
+  /** The one place a subscriber is told the snapshot changed. */
+  function notifySubscribers(): void {
+    recomputeProjection();
     for (const listener of listeners) listener();
   }
+
+  /**
+   * Publishes the current facts.
+   *
+   * Inside a lifecycle transition this only records the request: a subscriber
+   * must never observe the moment when the thread state has moved but the
+   * admission registry has not (or the reverse). The transition publishes once,
+   * after every fact committed.
+   */
+  function publish(): void {
+    if (disposed) return;
+    if (transitionDepth > 0) {
+      transitionPublicationRequested = true;
+      return;
+    }
+    notifySubscribers();
+  }
+
+  function captureLifecycleRestorePoint(): LifecycleRestorePoint {
+    return {
+      thread: state,
+      prompts: prompts.captureRestorePoint(),
+      execution: executionFacts.getSnapshot(),
+      cancellation: cancellationFacts.getSnapshot(),
+      liveTouchedMessageIds: [...liveTouchedMessageIds],
+    };
+  }
+
+  function restoreLifecycleRestorePoint(point: LifecycleRestorePoint): void {
+    state = point.thread;
+    prompts.restoreRestorePoint(point.prompts);
+    executionFacts.replace(point.execution);
+    cancellationFacts.restore(point.cancellation);
+    liveTouchedMessageIds.clear();
+    for (const messageId of point.liveTouchedMessageIds) liveTouchedMessageIds.add(messageId);
+  }
+
+  function markLifecycleDegraded(label: string, error: unknown): void {
+    // Preserve the attempt counter: a fault raised BY a reconciliation attempt
+    // must not reset the budget it is spending, or bounded recovery would spin
+    // forever while reporting `recoveryAttempts: 0`.
+    health = {
+      degraded: true,
+      reason: error instanceof Error ? error.name : typeof error,
+      recoveryAttempts: health.recoveryAttempts,
+      recovering: false,
+    };
+    logger.error("opencode", "runtime.lifecycle_transition_failed", {
+      transition: label,
+      errorType: health.reason,
+    });
+  }
+
+  /**
+   * Runs one cross-fact mutation as a single publication.
+   *
+   * `mutate` MUST be synchronous: the boundary cannot hold a transaction open
+   * across an await without letting an unrelated event join it.
+   *
+   * A fault restores every store to the captured point, marks the lifecycle
+   * degraded, publishes that truth (never the half-applied mutation) and
+   * schedules bounded reconciliation. Mutations are refused while degraded, so
+   * no second event compounds a snapshot this client could not account for.
+   */
+  function runLifecycleTransition(
+    label: string,
+    mutate: () => void,
+    options: { readonly allowWhileDegraded?: boolean } = {},
+  ): "committed" | "blocked" | "failed" {
+    if (transitionDepth > 0) {
+      mutate();
+      return "committed";
+    }
+    if (health.degraded && options.allowWhileDegraded !== true) {
+      logger.warn("opencode", "runtime.lifecycle_mutation_blocked", {
+        transition: label,
+        recoveryAttempts: health.recoveryAttempts,
+      });
+      return "blocked";
+    }
+    const restorePointRef: { current: LifecycleRestorePoint | null } = { current: null };
+    transitionDepth = 1;
+    transitionPublicationRequested = false;
+    transitionPostCommit = [];
+    prompts.beginNotificationDeferral();
+    try {
+      restorePointRef.current = captureLifecycleRestorePoint();
+      mutate();
+      prompts.flushNotificationDeferral();
+      transitionDepth = 0;
+      const shouldPublish = transitionPublicationRequested;
+      transitionPublicationRequested = false;
+      const postCommit = transitionPostCommit;
+      transitionPostCommit = [];
+      if (shouldPublish && !disposed) notifySubscribers();
+      for (const action of postCommit) {
+        if (disposed) break;
+        try {
+          action();
+        } catch (error) {
+          logger.warn("opencode", "runtime.lifecycle_post_commit_failed", {
+            transition: label,
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
+        }
+      }
+      return "committed";
+    } catch (error) {
+      prompts.discardNotificationDeferral();
+      transitionDepth = 0;
+      transitionPublicationRequested = false;
+      transitionPostCommit = [];
+      // A failure in CAPTURE means nothing was mutated yet, so there is nothing
+      // to restore - and the runtime is still degraded, because it could not
+      // prove the facts before changing them.
+      if (restorePointRef.current !== null) restoreLifecycleRestorePoint(restorePointRef.current);
+      markLifecycleDegraded(label, error);
+      if (!disposed) notifySubscribers();
+      // Reconcile outside the failed transition, never inside it.
+      void Promise.resolve().then(() => reconcileLifecycle());
+      return "failed";
+    }
+  }
+
+  /** Queues a side effect that must run only after the transition committed. */
+  function afterCommit(action: () => void): void {
+    if (transitionDepth > 0) {
+      transitionPostCommit.push(action);
+      return;
+    }
+    action();
+  }
+
+  // notify() removed; use publish() for consistent snapshot publication.
 
   /**
    * The generation the runtime is talking to right now.
@@ -617,7 +863,7 @@ export function createV2ThreadController(
     const next = reduceV2ThreadState(state, action);
     if (next === state) return;
     state = next;
-    notify();
+    publish();
   }
 
   /**
@@ -698,6 +944,27 @@ export function createV2ThreadController(
     }
   }
 
+  function upgradeAndDispatchQueuedCancelIntents(promptId: string, inboxId: string): void {
+    for (const intent of Object.values(cancellationFacts.getSnapshot().intentsById)) {
+      if (intent.operation !== "cancel-queued-prompt") continue;
+      if (intent.target.kind !== "queued-prompt") continue;
+      if (intent.target.promptId !== promptId) continue;
+      cancellationFacts.upgradeTarget(intent.intentId, {
+        ...intent.target,
+        inboxId,
+      });
+      const current = cancellationFacts.getIntent(intent.intentId);
+      if (!current) continue;
+      if (
+        current.state === "requested" ||
+        current.state === "target-resolved" ||
+        current.state === "unknown"
+      ) {
+        void dispatchQueuedPromptCancellation(intent.intentId);
+      }
+    }
+  }
+
   function applyAdmissionEvent(event: V2Event): void {
     if (event.type !== "session.inbox.enqueued" || event.data.item.type !== "user") return;
     const item = event.data.item;
@@ -707,35 +974,65 @@ export function createV2ThreadController(
       type: "user",
       delivery: item.delivery,
     };
-    const activeMessageId =
-      state.execution.type === "submitting" || state.execution.type === "reconciling"
-        ? state.execution.userMessageId
-        : state.execution.type === "admitted" && state.execution.inboxId === event.data.inboxID
-          ? state.execution.userMessageId
-          : state.execution.type === "cancelling"
-            ? state.execution.userMessageId
-            : undefined;
     dispatch({ type: "inbox_recorded", record });
-    if (typeof activeMessageId === "string") {
-      // Read the pending cancel BEFORE the admission moves the state: the
-      // `admitted` state carries the flag forward, but the check is about what
-      // was true when the prompt was admitted.
-      const cancelOwed = cancelPending(state.execution);
-      dispatch({ type: "prompt_admitted", userMessageId: activeMessageId, inbox: record });
-      prompts.settle(activeMessageId, "admitted", {
-        messageId: activeMessageId,
-        inboxId: record.id,
-        delivery: record.delivery,
+
+    // Exact inbox-event correlation only:
+    // 1) direct equality between event inbox ID and local prompt ID, or
+    // 2) already-established prompt HTTP request-to-inbox correlation for same
+    //    operation/prompt with that inbox ID.
+    // Never correlate by text/order/adjacency/active-send/only-pending.
+    const direct = prompts.get(event.data.inboxID);
+    if (direct) {
+      prompts.enrich(direct.promptId, {
+        sessionId: client.sessionId,
+        promptId: direct.promptId,
+        source: "inbox-event",
+        serverEventId: event.id,
+        inboxId: event.data.inboxID,
+        delivery: item.delivery,
+        exactCorrelation: true,
       });
-      // A cancel requested BEFORE the admission is honoured now, against the
-      // inbox id the server gave the prompt. Until this existed the flag was
-      // carried into the `admitted` state and nothing read it, so the queued
-      // prompt executed while the reader was told it was cancelled (M7).
-      //
-      // The cancel is issued against the admitted inbox id. "Exactly once" is
-      // provided by the state machine (execution_settled -> idle); this set is
-      // belt-and-braces.
-      if (cancelOwed) void cancelAdmittedPrompt(record.id);
+      prompts.settleVerdict(direct.promptId, "admitted", {
+        sessionId: client.sessionId,
+        promptId: direct.promptId,
+        source: "inbox-event",
+        serverEventId: event.id,
+        inboxId: event.data.inboxID,
+        delivery: item.delivery,
+        exactCorrelation: true,
+      });
+      afterCommit(() => upgradeAndDispatchQueuedCancelIntents(direct.promptId, event.data.inboxID));
+      return;
+    }
+
+    // Established request correlation is recorded on the prompt record by HTTP
+    // response handling; enrich/settle only records that already proved it.
+    for (const candidate of prompts.getSnapshot().records) {
+      if (candidate.sessionId !== client.sessionId) continue;
+      if (candidate.inboxId.value === event.data.inboxID) {
+        prompts.enrich(candidate.promptId, {
+          sessionId: client.sessionId,
+          promptId: candidate.promptId,
+          source: "inbox-event",
+          serverEventId: event.id,
+          inboxId: event.data.inboxID,
+          delivery: item.delivery,
+          establishedRequestCorrelation: true,
+        });
+        prompts.settleVerdict(candidate.promptId, "admitted", {
+          sessionId: client.sessionId,
+          promptId: candidate.promptId,
+          source: "inbox-event",
+          serverEventId: event.id,
+          inboxId: event.data.inboxID,
+          delivery: item.delivery,
+          establishedRequestCorrelation: true,
+        });
+        afterCommit(() =>
+          upgradeAndDispatchQueuedCancelIntents(candidate.promptId, event.data.inboxID),
+        );
+        return;
+      }
     }
   }
 
@@ -818,26 +1115,156 @@ export function createV2ThreadController(
       });
   }
 
-  function applyEvent(event: V2Event, eventOrdinal: number): void {
-    dispatch({ type: "v2_event", event, mode: "observe-only" });
-    if (isAssistantMessageEvent(event)) {
-      // Buffering is a property of the LIVE attempt's hydration. A failed or
-      // superseded attempt no longer reports `hydrating`, so a dead hydration
-      // cannot strand the transcript by buffering every later delta (M4).
-      if (currentAttempt?.hydrating ?? false) {
-        pipeline.buffer(event, eventOrdinal);
-        return;
+  function applyExecutionEvidence(event: V2Event): void {
+    const evidence = {
+      serverEventId: event.id,
+      durableAggregateId: "durable" in event && event.durable ? event.durable.aggregateID : null,
+      durableSeq: "durable" in event && event.durable ? event.durable.seq : null,
+      durableVersion: "durable" in event && event.durable ? (event.durable.version ?? null) : null,
+    };
+    switch (event.type) {
+      case "session.execution.started":
+        executionFacts.markSessionActive(evidence);
+        executionFacts.setActiveExecution({
+          phase: "executing",
+          binding: { kind: "unbound" },
+          evidence,
+        });
+        break;
+      case "session.status":
+        if (event.data.status.type === "busy") {
+          executionFacts.markSessionActive(evidence);
+          if (!executionFacts.getSnapshot().activeExecution) {
+            executionFacts.setActiveExecution({
+              phase: "executing",
+              binding: { kind: "unbound" },
+              evidence,
+            });
+          }
+        } else if (event.data.status.type === "idle") {
+          executionFacts.markSessionIdle(evidence);
+        }
+        break;
+      case "session.idle":
+        executionFacts.markSessionIdle(evidence);
+        break;
+      case "session.execution.succeeded":
+        executionFacts.recordOutcome({
+          outcome: "succeeded",
+          attribution: "unattributed",
+          binding: { kind: "unbound" },
+          evidence,
+        });
+        executionFacts.markSessionIdle(evidence);
+        break;
+      case "session.execution.failed":
+        executionFacts.recordOutcome({
+          outcome: "failed",
+          attribution: "unattributed",
+          binding: { kind: "unbound" },
+          evidence,
+        });
+        executionFacts.markSessionIdle(evidence);
+        break;
+      case "session.execution.interrupted":
+        executionFacts.recordOutcome({
+          outcome: "interrupted",
+          attribution: "unattributed",
+          binding: { kind: "unbound" },
+          evidence,
+        });
+        executionFacts.markSessionUnknown(evidence);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function applyCancellationEvidence(event: V2Event): void {
+    if (event.type === "session.inbox.cancelled") {
+      const evidence = {
+        kind: event.type,
+        serverEventId: event.id,
+        durableAggregateId: "durable" in event && event.durable ? event.durable.aggregateID : null,
+        durableSeq: "durable" in event && event.durable ? event.durable.seq : null,
+        sessionId: event.data.sessionID,
+        inboxId: event.data.inboxID,
+        promptId: null,
+        assistantMessageId: null,
+        at: event.created,
+        payload: event.data,
+      };
+      for (const intent of Object.values(cancellationFacts.getSnapshot().intentsById)) {
+        if (intent.operation !== "cancel-queued-prompt") continue;
+        if (intent.target.kind !== "queued-prompt") continue;
+        if (intent.target.sessionId !== event.data.sessionID) continue;
+        if (intent.target.inboxId !== event.data.inboxID) continue;
+        cancellationFacts.recordEvidence(intent.intentId, evidence);
       }
-      noteLiveMutation(event);
-      dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
+    }
+    if (event.type === "session.inbox.delivered") {
+      // Delivered evidence makes queued-cancel inapplicable/superseded; never
+      // treated as successful cancellation.
+      for (const intent of Object.values(cancellationFacts.getSnapshot().intentsById)) {
+        if (intent.operation !== "cancel-queued-prompt") continue;
+        if (intent.target.kind !== "queued-prompt") continue;
+        if (intent.target.sessionId !== event.data.sessionID) continue;
+        if (intent.target.inboxId !== event.data.inboxID) continue;
+        cancellationFacts.resolveNonConfirmed(intent.intentId, "superseded", "inbox-delivered");
+      }
+    }
+  }
+
+  function applyEvent(event: V2Event, eventOrdinal: number): void {
+    if (disposed) return;
+    if (!isLifecycleEvidenceEligible(state, event)) {
+      // The reducer will reject this as evidence (duplicate id, stale durable
+      // sequence, another session), so it must not touch a fact store. It is
+      // still OBSERVED and, during hydration, BUFFERED: buffering is about the
+      // stream's ordering, not about accepting the event's facts.
+      dispatch({ type: "v2_event", event, mode: "observe-only" });
+      if (isAssistantMessageEvent(event) && (currentAttempt?.hydrating ?? false)) {
+        pipeline.buffer(event, eventOrdinal);
+      }
+      logger.debug("opencode", "runtime.lifecycle_evidence_rejected", {
+        eventType: event.type,
+      });
       return;
     }
-    dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
-    applyAdmissionEvent(event);
-    applyAutoApproveEvent(event);
-    applyCompactionLifecycleEvent(event);
-    applySettlementEvent(event);
-    applySessionMovedEvent(event);
+    runLifecycleTransition(`event:${event.type}`, () => {
+      dispatch({ type: "v2_event", event, mode: "observe-only" });
+      if (isAssistantMessageEvent(event)) {
+        // Buffering is a property of the LIVE attempt's hydration. A failed or
+        // superseded attempt no longer reports `hydrating`, so a dead hydration
+        // cannot strand the transcript by buffering every later delta (M4).
+        if (currentAttempt?.hydrating ?? false) {
+          pipeline.buffer(event, eventOrdinal);
+          return;
+        }
+        noteLiveMutation(event);
+        dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
+        // Assistant activity implies active execution evidence for UI/transcript.
+        if (executionFacts.getSnapshot().activity !== "active") {
+          executionFacts.markSessionActive({
+            serverEventId: event.id,
+            durableAggregateId:
+              "durable" in event && event.durable ? event.durable.aggregateID : null,
+            durableSeq: "durable" in event && event.durable ? event.durable.seq : null,
+            durableVersion:
+              "durable" in event && event.durable ? (event.durable.version ?? null) : null,
+          });
+        }
+        return;
+      }
+      dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
+      applyAdmissionEvent(event);
+      applyExecutionEvidence(event);
+      applyCancellationEvidence(event);
+      applyAutoApproveEvent(event);
+      applyCompactionLifecycleEvent(event);
+      applySettlementEvent(event);
+      applySessionMovedEvent(event);
+    });
   }
 
   let moveReconcileInFlight = false;
@@ -1200,6 +1627,7 @@ export function createV2ThreadController(
     if (!isLive(live)) return;
     applyAuxiliary(auxiliary);
     dispatch({ type: "load_completed" });
+    if (health.degraded) void reconcileLifecycle();
     // Deliberately not awaited: hydration is complete and must not wait for a
     // read that only refines a status chip and a notice.
     void checkActivity(live);
@@ -1439,6 +1867,7 @@ export function createV2ThreadController(
       const snapshot = await history.read(requireGeneration());
       history.commit(snapshot, historyMerge(held));
       dispatch({ type: "load_completed" });
+      if (health.degraded) void reconcileLifecycle();
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 refresh failed");
       dispatch({ type: "load_failed", error: safe });
@@ -1540,30 +1969,20 @@ export function createV2ThreadController(
     const record = prompts.get(messageId);
     if (
       !record ||
-      record.result === "admitted" ||
-      record.result === "disposed" ||
-      record.result === "definitive-failure"
+      record.verdict === "admitted" ||
+      record.terminal === "disposed" ||
+      record.terminal === "definitive-failure"
     ) {
       return;
     }
-    prompts.markAmbiguous(messageId);
-    const activeMessageId =
-      state.execution.type === "submitting" || state.execution.type === "reconciling"
-        ? state.execution.userMessageId
-        : state.execution.type === "cancelling"
-          ? state.execution.userMessageId
-          : undefined;
-    if (activeMessageId === messageId && state.execution.type !== "reconciling") {
-      dispatch({
-        type: "prompt_reconciling",
-        userMessageId: messageId,
-        cancelRequested: state.execution.type === "cancelling",
-      });
-    }
+    prompts.markAmbiguous(messageId, {
+      sessionId: client.sessionId,
+      promptId: messageId,
+      source: "reconciliation",
+    });
+    publish();
     if (activePromptReconciliations.has(messageId)) return;
     activePromptReconciliations.add(messageId);
-    // Attempt authoritative reconciliation (bounded). Never infer absence from
-    // incomplete/unreliable scans; keep ambiguous if unresolved.
     void (async () => {
       const overallDeadline = Date.now() + Math.max(cfg.promptAdmissionTimeoutMs, 5_000);
       const overallController = new AbortController();
@@ -1577,9 +1996,9 @@ export function createV2ThreadController(
           const currentRecord = prompts.get(messageId);
           if (
             !currentRecord ||
-            currentRecord.result === "admitted" ||
-            currentRecord.result === "disposed" ||
-            currentRecord.result === "definitive-failure"
+            currentRecord.verdict === "admitted" ||
+            currentRecord.terminal === "disposed" ||
+            currentRecord.terminal === "definitive-failure"
           ) {
             return;
           }
@@ -1595,12 +2014,9 @@ export function createV2ThreadController(
             signal: overallController.signal,
             deadline: overallDeadline,
           });
-          if (result === "admitted") {
-            return;
-          }
+          if (result === "admitted") return;
           const remaining = overallDeadline - Date.now();
           if (remaining <= 0 || overallController.signal.aborted) break;
-          // unresolved: wait a bit and retry if time remains
           await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
         }
       } finally {
@@ -1624,7 +2040,7 @@ export function createV2ThreadController(
     const canMutatePromptState = (): boolean => {
       if (!isGenerationCurrent()) return false;
       const record = prompts.get(messageId);
-      return !!record && record.result !== "disposed" && record.result !== "definitive-failure";
+      return !!record && record.terminal !== "disposed" && record.terminal !== "definitive-failure";
     };
 
     const overallDeadline = options.deadline;
@@ -1660,30 +2076,26 @@ export function createV2ThreadController(
       }
     };
 
-    // First check local state quickly
     const localInbox = Object.values(state.inboxById).find((record) => record.id === messageId);
     if (localInbox !== undefined) {
-      const record = prompts.get(messageId);
-      if (record && record.result !== "admitted" && canMutatePromptState()) {
-        const activeMessageId =
-          state.execution.type === "submitting" || state.execution.type === "reconciling"
-            ? state.execution.userMessageId
-            : state.execution.type === "admitted" && state.execution.inboxId === localInbox.id
-              ? state.execution.userMessageId
-              : state.execution.type === "cancelling"
-                ? state.execution.userMessageId
-                : undefined;
-        if (activeMessageId === messageId) {
-          const cancelOwed = cancelPending(state.execution);
-          dispatch({ type: "inbox_recorded", record: localInbox });
-          dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: localInbox });
-          if (cancelOwed) void cancelAdmittedPrompt(localInbox.id);
-        }
-        prompts.settle(messageId, "admitted", {
-          messageId,
+      if (canMutatePromptState()) {
+        prompts.enrich(messageId, {
+          sessionId: client.sessionId,
+          promptId: messageId,
+          source: "local-observation",
           inboxId: localInbox.id,
           delivery: localInbox.delivery,
+          establishedRequestCorrelation: true,
         });
+        prompts.settleVerdict(messageId, "admitted", {
+          sessionId: client.sessionId,
+          promptId: messageId,
+          source: "local-observation",
+          inboxId: localInbox.id,
+          delivery: localInbox.delivery,
+          establishedRequestCorrelation: true,
+        });
+        publish();
       }
       return "admitted";
     }
@@ -1691,37 +2103,26 @@ export function createV2ThreadController(
       state.messages[messageId] !== undefined &&
       !state.optimisticMessageIds.includes(messageId)
     ) {
-      const record = prompts.get(messageId);
-      if (record && record.result !== "admitted" && canMutatePromptState()) {
-        // Admitted via persisted message; inbox details may be unavailable.
-        // Do not fabricate inbox metadata or issue invalid inbox cancellation.
-        const activeMessageId =
-          state.execution.type === "submitting" || state.execution.type === "reconciling"
-            ? state.execution.userMessageId
-            : state.execution.type === "cancelling"
-              ? state.execution.userMessageId
-              : undefined;
-        if (activeMessageId === messageId) {
-          dispatch({
-            type: "prompt_admitted",
-            userMessageId: messageId,
-            inbox: null,
-            inboxId: null,
-            delivery: null,
-          });
-        }
-        prompts.settle(messageId, "admitted", {
-          messageId,
-          inboxId: null,
-          delivery: null,
+      if (canMutatePromptState()) {
+        prompts.enrich(messageId, {
+          sessionId: client.sessionId,
+          promptId: messageId,
+          source: "history",
+          serverMessageId: messageId,
         });
+        prompts.settleVerdict(messageId, "admitted", {
+          sessionId: client.sessionId,
+          promptId: messageId,
+          source: "history",
+          serverMessageId: messageId,
+        });
+        publish();
       }
       return "admitted";
     }
 
     try {
       if (overallExpired()) return "unresolved";
-      // Check inbox first (like scheduler)
       const inboxResp = await withRequestDeadline((signal) =>
         generation.operations.inboxList({ sessionID: client.sessionId }, { signal }),
       );
@@ -1729,8 +2130,7 @@ export function createV2ThreadController(
       const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
       const inboxItem = inboxItems.find((item: any) => item.id === messageId);
       if (inboxItem) {
-        const record = prompts.get(messageId);
-        if (record && record.result !== "admitted" && canMutatePromptState()) {
+        if (canMutatePromptState()) {
           const normalized =
             inboxItem?.type === "user"
               ? inboxRecordFromUser(inboxItem)
@@ -1741,40 +2141,35 @@ export function createV2ThreadController(
                   delivery: inboxItem.delivery,
                 };
           dispatch({ type: "inbox_recorded", record: normalized });
-          const activeMessageId =
-            state.execution.type === "submitting" || state.execution.type === "reconciling"
-              ? state.execution.userMessageId
-              : state.execution.type === "admitted" && state.execution.inboxId === normalized.id
-                ? state.execution.userMessageId
-                : state.execution.type === "cancelling"
-                  ? state.execution.userMessageId
-                  : undefined;
-          if (activeMessageId === messageId) {
-            const cancelOwed = cancelPending(state.execution);
-            dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: normalized });
-            if (cancelOwed) void cancelAdmittedPrompt(normalized.id);
-          }
-          prompts.settle(messageId, "admitted", {
-            messageId,
+          prompts.enrich(messageId, {
+            sessionId: client.sessionId,
+            promptId: messageId,
+            source: "inbox-list",
             inboxId: normalized.id,
             delivery: normalized.delivery,
+            establishedRequestCorrelation: true,
           });
+          prompts.settleVerdict(messageId, "admitted", {
+            sessionId: client.sessionId,
+            promptId: messageId,
+            source: "inbox-list",
+            inboxId: normalized.id,
+            delivery: normalized.delivery,
+            establishedRequestCorrelation: true,
+          });
+          publish();
         }
         return "admitted";
       }
 
-      // Paginate messages like scheduler does
       let cursor: string | undefined;
       const seen = new Set<string>();
       let incomplete = false;
       for (let page = 0; page < 100; page++) {
         if (overallExpired() || !isGenerationCurrent()) return "unresolved";
         const params: any = { sessionID: client.sessionId, limit: 100 };
-        if (cursor) {
-          params.cursor = cursor;
-        } else {
-          params.order = "asc";
-        }
+        if (cursor) params.cursor = cursor;
+        else params.order = "asc";
         try {
           const msgResp: any = await withRequestDeadline((signal) =>
             generation.history.list(params, { signal }),
@@ -1782,42 +2177,26 @@ export function createV2ThreadController(
           if (overallExpired() || !isGenerationCurrent()) return "unresolved";
           const messages = msgResp?.data ?? msgResp?.messages ?? [];
           if (messages.some((msg: any) => msg.id === messageId)) {
-            const record = prompts.get(messageId);
-            if (record && record.result !== "admitted" && canMutatePromptState()) {
-              const activeMessageId =
-                state.execution.type === "submitting" || state.execution.type === "reconciling"
-                  ? state.execution.userMessageId
-                  : state.execution.type === "cancelling"
-                    ? state.execution.userMessageId
-                    : undefined;
-              if (activeMessageId === messageId) {
-                dispatch({
-                  type: "prompt_admitted",
-                  userMessageId: messageId,
-                  inbox: null,
-                  inboxId: null,
-                  delivery: null,
-                });
-              }
-              prompts.settle(messageId, "admitted", {
-                messageId,
-                inboxId: null,
-                delivery: null,
+            if (canMutatePromptState()) {
+              prompts.enrich(messageId, {
+                sessionId: client.sessionId,
+                promptId: messageId,
+                source: "history",
+                serverMessageId: messageId,
               });
+              prompts.settleVerdict(messageId, "admitted", {
+                sessionId: client.sessionId,
+                promptId: messageId,
+                source: "history",
+                serverMessageId: messageId,
+              });
+              publish();
             }
             return "admitted";
           }
           const next = msgResp?.cursor?.next;
           if (!next) break;
-          if (seen.has(next)) {
-            incomplete = true;
-            break;
-          }
-          if (messages.length === 0) {
-            incomplete = true;
-            break;
-          }
-          if (page === 99) {
+          if (seen.has(next) || messages.length === 0 || page === 99) {
             incomplete = true;
             break;
           }
@@ -1828,12 +2207,7 @@ export function createV2ThreadController(
           break;
         }
       }
-      if (incomplete || overallExpired()) {
-        return "unresolved";
-      }
-      // A complete scan found no evidence, but the request may still be in-flight
-      // on the server in edge cases; preserve ambiguity rather than claiming
-      // definitive absence.
+      if (incomplete || overallExpired()) return "unresolved";
       return "unresolved";
     } catch {
       return "unresolved";
@@ -1847,8 +2221,93 @@ export function createV2ThreadController(
     return reconcilePromptById(messageId);
   }
 
-  function awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult> {
-    return prompts.awaitAdmission(messageId);
+  /**
+   * One authoritative re-read of everything a lifecycle transition writes.
+   *
+   * It repairs the thread snapshot (session, auxiliary sets, transcript) so the
+   * facts are proven against the server rather than assumed from a rollback.
+   * Prompt admission that the lost event carried is settled separately by the
+   * existing prompt reconciliation, which validates each prompt by its own
+   * evidence.
+   */
+  async function reconcileLifecycleOnce(): Promise<boolean> {
+    if (disposed) return false;
+    const live = currentAttempt;
+    const generation = live?.generation ?? null;
+    if (!live || !generation) return false;
+    try {
+      const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
+      if (!isLive(live)) return false;
+      const auxiliary = await loadAuxiliary(generation);
+      if (!isLive(live)) return false;
+      const held = beginHistoryReadScope();
+      const snapshot = await history.read(generation);
+      if (!isLive(live)) return false;
+      const outcome = runLifecycleTransition(
+        "reconcile-lifecycle",
+        () => {
+          dispatch({ type: "session_hydrated", session });
+          applyAuxiliary(auxiliary);
+          history.commit(snapshot, historyMerge(held));
+          dispatch({ type: "load_completed" });
+        },
+        { allowWhileDegraded: true },
+      );
+      return outcome === "committed";
+    } catch (error) {
+      logger.warn("opencode", "runtime.lifecycle_reconcile_attempt_failed", {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Bounded reconciliation of a degraded lifecycle.
+   *
+   * Idempotent: concurrent callers join the same run. A run that exhausts its
+   * attempts leaves the runtime VISIBLY degraded (`recovering: false`) rather
+   * than spinning; `reconcileLifecycle`, a reconnect and a manual refresh can
+   * all start a fresh run later.
+   */
+  async function reconcileLifecycle(): Promise<void> {
+    if (disposed || !health.degraded) return;
+    if (lifecycleReconciliation) return lifecycleReconciliation;
+    lifecycleReconciliation = (async () => {
+      try {
+        for (let attempt = 1; attempt <= cfg.lifecycleRecoveryAttempts; attempt += 1) {
+          if (disposed || !health.degraded) return;
+          health = { ...health, recoveryAttempts: attempt, recovering: true };
+          publish();
+          const recovered = await reconcileLifecycleOnce();
+          if (disposed || !health.degraded) return;
+          if (!recovered) continue;
+          health = { degraded: false, reason: null, recoveryAttempts: 0, recovering: false };
+          publish();
+          // The event that faulted may have carried an admission. Re-run the
+          // evidence-validating prompt reconciliation for every unresolved
+          // prompt; execution facts come from the re-read above.
+          for (const record of prompts.getSnapshot().records) {
+            if (record.verdict !== "admitted" && record.terminal === null) {
+              startPromptReconciliation(record.promptId);
+            }
+          }
+          return;
+        }
+        health = { ...health, recovering: false };
+        publish();
+      } finally {
+        lifecycleReconciliation = null;
+      }
+    })();
+    return lifecycleReconciliation;
+  }
+
+  async function awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult> {
+    const current = prompts.getAdmissionResult(messageId);
+    if (current !== null) return current;
+    // No verdict yet: wait for any admission verdict (including ambiguous).
+    return prompts.awaitAdmissionObserved(messageId);
   }
 
   async function applySelection(): Promise<void> {
@@ -1889,19 +2348,48 @@ export function createV2ThreadController(
       options.messageId ?? (typeof customId === "string" ? customId : createV2MessageId());
     if (!isLocalV2MessageId(messageId))
       throw new TypeError("OpenCode V2 prompt message id must start with msg_");
+
+    if (health.degraded)
+      throw new V2ControllerError({
+        kind: "recovery-required",
+        message: "OpenCode V2 lifecycle is being reconciled; retry shortly",
+      });
+    const created = prompts.create(client.sessionId, messageId);
+    if (created.ok === false) {
+      // Refused BEFORE dispatch: nothing was sent, so this is not a network or
+      // server failure, and the capacity that caused it is recoverable.
+      logger.warn("opencode", "runtime.prompt_capacity_backpressure", {
+        size: created.capacity.size,
+        hardCap: created.capacity.hardCap,
+        protectedCount: created.capacity.protectedCount,
+      });
+      throw {
+        kind: "capacity-backpressure",
+        error: { kind: "capacity", message: created.message },
+        capacity: created.capacity,
+      } satisfies V2PromptSendError;
+    }
+
     await applySelection();
     const payload = toV2PromptInput(message);
     const localMessage = optimisticMessage(message, messageId);
-    const record = prompts.create(messageId);
     dispatch({ type: "prompt_submitting", message: localMessage });
-    // The wait is BOUNDED. A prompt whose admission cannot be decided leaves
-    // the server running it, and the client cannot say whether it arrived -
-    // but the reader must not be left with a send that never returns. The
-    // deadline turns that silence into a reported, recoverable outcome.
+
+    const admissionToken = prompts.acquireProtection(
+      messageId,
+      "admission-waiter",
+      `send:${messageId}`,
+    );
+    const controllerToken = prompts.acquireProtection(
+      messageId,
+      "controller-binding",
+      `bind:${messageId}`,
+    );
     const admissionPromise = prompts.awaitAdmissionWithDeadline(
       messageId,
       cfg.promptAdmissionTimeoutMs,
     );
+
     const input: SessionPromptInput = {
       sessionID: client.sessionId,
       id: messageId,
@@ -1915,44 +2403,90 @@ export function createV2ThreadController(
     const promptRequest = Promise.resolve()
       .then(() => activeGeneration.operations.prompt(input))
       .then((response) => {
-        if (disposed || record.result === "admitted") return;
-        const normalized = inboxRecordFromUser(response);
-        dispatch({ type: "inbox_recorded", record: normalized });
-        dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: normalized });
-        prompts.settle(messageId, "admitted", {
-          messageId,
-          inboxId: normalized.id,
-          delivery: normalized.delivery,
+        if (disposed) {
+          prompts.settleVerdict(messageId, "disposed");
+          return;
+        }
+        if (currentAttempt?.generation !== activeGeneration) {
+          // A response from a superseded attempt is STALE evidence: it belongs to
+          // a generation this runtime no longer trusts. Reject it and reconcile
+          // against the current generation instead of admitting from old wire.
+          logger.warn("opencode", "runtime.stale_prompt_response_ignored", {
+            reason: "generation-superseded",
+          });
+          startPromptReconciliation(messageId);
+          return;
+        }
+        const outcome = runLifecycleTransition(`prompt-response:${messageId}`, () => {
+          const current = prompts.get(messageId);
+          if (current?.verdict === "admitted") return;
+          const normalized = inboxRecordFromUser(response);
+          dispatch({ type: "inbox_recorded", record: normalized });
+          prompts.enrich(messageId, {
+            sessionId: client.sessionId,
+            promptId: messageId,
+            source: "http-response",
+            inboxId: normalized.id,
+            delivery: normalized.delivery,
+            establishedRequestCorrelation: true,
+          });
+          prompts.settleVerdict(messageId, "admitted", {
+            sessionId: client.sessionId,
+            promptId: messageId,
+            source: "http-response",
+            inboxId: normalized.id,
+            delivery: normalized.delivery,
+            establishedRequestCorrelation: true,
+          });
+          afterCommit(() => upgradeAndDispatchQueuedCancelIntents(messageId, normalized.id));
         });
-        // The other admission path. A cancel requested before the admission is
-        // honoured here too, and the inbox id makes it exactly once: the set
-        // is shared with the inbox-event path.
-        if (cancelPending(state.execution)) cancelAdmittedPrompt(normalized.id);
+        if (outcome === "failed") definitiveError = null;
       })
       .catch((error: unknown) => {
-        if (disposed || record.result === "admitted") {
-          if (disposed) prompts.settle(messageId, "disposed");
+        if (disposed) {
+          prompts.settleVerdict(messageId, "disposed");
           return;
         }
-        if (isDefinitiveFailure(error)) {
-          dispatch({ type: "prompt_removed", messageId });
-          definitiveError = safeError(error, V2_DEFINITIVE_FAILURE_MESSAGE);
-          prompts.settle(messageId, "definitive-failure");
+        if (currentAttempt?.generation !== activeGeneration) {
+          logger.warn("opencode", "runtime.stale_prompt_response_ignored", {
+            reason: "generation-superseded",
+          });
+          startPromptReconciliation(messageId);
           return;
         }
-        startPromptReconciliation(messageId);
+        const definitive = isDefinitiveFailure(error);
+        const outcome = runLifecycleTransition(`prompt-failure:${messageId}`, () => {
+          const current = prompts.get(messageId);
+          if (current?.verdict === "admitted") return;
+          if (definitive) {
+            dispatch({ type: "prompt_removed", messageId });
+            definitiveError = safeError(error, V2_DEFINITIVE_FAILURE_MESSAGE);
+            prompts.settleVerdict(messageId, "definitive-failure");
+            return;
+          }
+          afterCommit(() => startPromptReconciliation(messageId));
+        });
+        if (outcome === "failed") definitiveError = null;
       });
-    // The request remains owned by this generation after an inbox event admits
-    // the prompt. Its eventual response is observed and ignored safely; it is
-    // never used as proof that the prompt was absent.
     void promptRequest;
+
     const result = await admissionPromise;
-    if (result === "admitted" && record.submission !== null) return record.submission;
+    if (admissionToken) prompts.releaseProtection(messageId, admissionToken);
+    if (controllerToken) prompts.releaseProtection(messageId, controllerToken);
+    // Releasing the last protection makes an admitted prompt evictable, which is
+    // what lifts capacity backpressure. Publish so the composer is re-enabled
+    // as soon as the slot exists, instead of waiting for an unrelated event.
+    if ((admissionToken || controllerToken) && !disposed) publish();
+    const finalRecord = prompts.get(messageId);
+    if (result === "admitted" && finalRecord) {
+      return {
+        messageId,
+        inboxId: finalRecord.inboxId.value,
+        delivery: finalRecord.delivery.value,
+      };
+    }
     if (result === "disposed") throw { kind: "disposed" } satisfies V2PromptSendError;
     if (result === "ambiguous") {
-      // Admission deadline elapsed or transport became ambiguous. Start the
-      // idempotent reconciliation lifecycle (covers timeout while HTTP request
-      // is still pending). Never abort/resubmit the original prompt.
       startPromptReconciliation(messageId);
       throw {
         kind: "ambiguous",
@@ -1971,91 +2505,211 @@ export function createV2ThreadController(
     } satisfies V2PromptSendError;
   }
 
-  /**
-   * Issues the cancel for a prompt that was admitted after the reader asked
-   * for it.
-   *
-   * The in-flight request is NOT aborted - its outcome is genuinely unknown,
-   * and aborting it would not stop the server from having taken the prompt.
-   * What the cancel does is remove the QUEUED prompt, once the server tells
-   * us its inbox id, and that is the only handle that identifies it.
-   *
-   * Belt-and-braces per inbox id: the admission arrives through two paths (the
-   * HTTP response and the inbox event). "Exactly once" is provided by the state
-   * machine (execution_settled -> idle).
-   *
-
-   * @param inboxId - The inbox id the server admitted the prompt as.
-   */
-  function cancelAdmittedPrompt(inboxId: string): void {
-    const generation = currentAttempt?.generation ?? null;
-    if (!generation) return;
-    void generation.operations
-      .inboxCancel({ sessionID: client.sessionId, inboxID: inboxId })
-      .catch((error: unknown) => {
-        logger.warn("opencode", "runtime.prompt_cancel_failed", {
-          errorType: error instanceof Error ? error.name : typeof error,
-        });
-      });
-    dispatch({ type: "execution_settled" });
+  function newCancellationIntentId(): string {
+    nextCancellationIntentId += 1;
+    return `cancel_${client.sessionId}_${nextCancellationIntentId}`;
   }
 
-  async function cancel(): Promise<void> {
+  function newDispatchId(): string {
+    nextDispatchId += 1;
+    return `dispatch_${client.sessionId}_${nextDispatchId}`;
+  }
+
+  async function dispatchQueuedPromptCancellation(intentId: string): Promise<void> {
+    const intent = cancellationFacts.getIntent(intentId);
+    if (!intent) return;
+    if (intent.operation !== "cancel-queued-prompt" || intent.target.kind !== "queued-prompt")
+      return;
+    if (intent.target.inboxId === null) {
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "missing-inbox-id");
+      publish();
+      return;
+    }
+    if (intent.dispatchId !== null) return; // duplicate dispatch prevention
     const generation = currentAttempt?.generation ?? null;
-    if (disposed || !generation || state.execution.type === "reverting") return;
-    if (state.execution.type === "idle" || state.execution.type === "error") return;
-    const current = state.execution;
-    if (current.type === "submitting" || current.type === "reconciling") {
-      dispatch({
-        type: "cancel_requested",
-        phase: "prompt-request",
-        userMessageId: current.userMessageId,
+    if (!generation) {
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "generation-unavailable");
+      publish();
+      return;
+    }
+    const dispatchId = newDispatchId();
+    cancellationFacts.markDispatching(intentId, dispatchId);
+    publish();
+    try {
+      await generation.operations.inboxCancel({
+        sessionID: client.sessionId,
+        inboxID: intent.target.inboxId,
+      });
+      // A disposed or superseded runtime must not let a stale dispatch response
+      // mutate current lifecycle facts.
+      if (disposed || currentAttempt?.generation !== generation) return;
+      cancellationFacts.recordDispatchResponse(intentId, {
+        at: Date.now(),
+        ok: true,
+        status: null,
+        interrupted: null,
+        errorKind: null,
+      });
+      // Void response is evidence only, never confirmation.
+      publish();
+    } catch (error) {
+      if (disposed || currentAttempt?.generation !== generation) return;
+      cancellationFacts.recordDispatchResponse(intentId, {
+        at: Date.now(),
+        ok: false,
+        status: errorStatus(error),
+        interrupted: null,
+        errorKind: error instanceof Error ? error.name : typeof error,
+      });
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "inbox-cancel-dispatch-failed");
+      publish();
+    }
+  }
+
+  async function dispatchExecutionStop(intentId: string): Promise<void> {
+    const intent = cancellationFacts.getIntent(intentId);
+    if (!intent) return;
+    if (intent.operation !== "stop-current-execution" || intent.target.kind !== "active-execution")
+      return;
+    if (intent.dispatchId !== null) return;
+    const generation = currentAttempt?.generation ?? null;
+    if (!generation) {
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "generation-unavailable");
+      publish();
+      return;
+    }
+    const dispatchId = newDispatchId();
+    cancellationFacts.markDispatching(intentId, dispatchId);
+    publish();
+    try {
+      const result = await generation.operations.interrupt({ sessionID: client.sessionId });
+      if (disposed || currentAttempt?.generation !== generation) return;
+      cancellationFacts.recordDispatchResponse(intentId, {
+        at: Date.now(),
+        ok: true,
+        status: null,
+        interrupted: result.interrupted,
+        errorKind: null,
+      });
+      // interrupt result is dispatch/response evidence only, never confirmation.
+      // Execution cancellation may remain pending/unknown indefinitely.
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "interrupt-unconfirmed");
+      publish();
+    } catch (error) {
+      if (disposed || currentAttempt?.generation !== generation) return;
+      cancellationFacts.recordDispatchResponse(intentId, {
+        at: Date.now(),
+        ok: false,
+        status: errorStatus(error),
+        interrupted: null,
+        errorKind: error instanceof Error ? error.name : typeof error,
+      });
+      cancellationFacts.resolveNonConfirmed(intentId, "unknown", "interrupt-dispatch-failed");
+      publish();
+    }
+  }
+
+  async function stopComposer(): Promise<void> {
+    if (disposed) return;
+    const op = projection.composerStopOperation;
+    if (op.kind !== "stop-current-execution") return;
+    const intentId = newCancellationIntentId();
+    cancellationFacts.requestIntent({
+      intentId,
+      operation: "stop-current-execution",
+      requestedAt: Date.now(),
+      target: {
+        kind: "active-execution",
+        sessionId: client.sessionId,
+        promptId: op.promptId,
+        inboxId: op.inboxId,
+        assistantMessageId: op.assistantMessageId,
+        scope: op.scope,
+      },
+      state: "target-resolved",
+    });
+    publish();
+    await dispatchExecutionStop(intentId);
+  }
+
+  async function stopSession(): Promise<void> {
+    if (disposed) return;
+    const intentId = newCancellationIntentId();
+    cancellationFacts.requestIntent({
+      intentId,
+      operation: "stop-current-execution",
+      requestedAt: Date.now(),
+      target: {
+        kind: "active-execution",
+        sessionId: client.sessionId,
+        promptId: null,
         inboxId: null,
         assistantMessageId: null,
-      });
-      return;
-    }
-    if (current.type === "admitted") {
-      dispatch({
-        type: "cancel_requested",
-        phase: "queued",
-        userMessageId: current.userMessageId,
-        inboxId: current.inboxId,
-        assistantMessageId: null,
-      });
-      if (current.inboxId) {
-        await generation.operations.inboxCancel({
-          sessionID: client.sessionId,
-          inboxID: current.inboxId,
-        });
-        dispatch({ type: "execution_settled" });
-      }
-      // History-only admission: inbox metadata unavailable, so cancellation cannot
-      // be performed authoritatively here. Preserve honest non-completed state.
-      return;
-    }
-    dispatch({
-      type: "cancel_requested",
-      phase: "execution",
-      userMessageId:
-        current.type === "executing" ||
-        current.type === "streaming" ||
-        current.type === "cancelling"
-          ? current.userMessageId
-          : null,
-      inboxId:
-        current.type === "executing" ||
-        current.type === "streaming" ||
-        current.type === "cancelling"
-          ? current.inboxId
-          : null,
-      assistantMessageId:
-        current.type === "streaming" || current.type === "cancelling"
-          ? current.assistantMessageId
-          : null,
+        scope: "session-wide",
+      },
+      state: "target-resolved",
     });
-    const result = await generation.operations.interrupt({ sessionID: client.sessionId });
-    if (!result.interrupted) await refresh();
+    publish();
+    await dispatchExecutionStop(intentId);
+  }
+
+  async function cancelQueuedPrompt(promptId: string): Promise<void> {
+    if (disposed) return;
+    const record = prompts.get(promptId);
+    if (!record) return;
+    const inboxId = record.inboxId.value;
+
+    // Idempotent: reuse an existing unresolved/non-terminal intent for this queued prompt.
+    const existing = Object.values(cancellationFacts.getSnapshot().intentsById).find(
+      (intent) =>
+        intent.operation === "cancel-queued-prompt" &&
+        intent.target.kind === "queued-prompt" &&
+        intent.target.promptId === promptId &&
+        intent.state !== "confirmed" &&
+        intent.state !== "failed" &&
+        intent.state !== "superseded",
+    );
+    if (existing) {
+      if (inboxId && existing.target.inboxId === null) {
+        cancellationFacts.upgradeTarget(existing.intentId, { ...existing.target, inboxId });
+      }
+      publish();
+      const current = cancellationFacts.getIntent(existing.intentId);
+      if (
+        current &&
+        current.target.kind === "queued-prompt" &&
+        current.target.inboxId !== null &&
+        current.dispatchId === null &&
+        (current.state === "requested" ||
+          current.state === "target-resolved" ||
+          current.state === "unknown")
+      ) {
+        await dispatchQueuedPromptCancellation(existing.intentId);
+      }
+      return;
+    }
+
+    const intentId = newCancellationIntentId();
+    cancellationFacts.requestIntent({
+      intentId,
+      operation: "cancel-queued-prompt",
+      requestedAt: Date.now(),
+      target: {
+        kind: "queued-prompt",
+        sessionId: client.sessionId,
+        promptId,
+        inboxId,
+      },
+      state: inboxId ? "target-resolved" : "requested",
+    });
+    // Protect admission record while cancellation intent is unresolved.
+    prompts.acquireProtection(promptId, "cancellation-intent", `cancel:${intentId}`);
+    publish();
+    if (inboxId) {
+      await dispatchQueuedPromptCancellation(intentId);
+    }
+    // If inbox id is not yet known, dispatch occurs when target is upgraded by
+    // admission evidence (HTTP response/inbox event/reconciliation).
   }
 
   async function compact(): Promise<void> {
@@ -2330,9 +2984,9 @@ export function createV2ThreadController(
     prompts.disposeAll();
     listeners.clear();
   }
-
   return {
     getState: () => state,
+    getProjection: () => projection,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -2345,13 +2999,16 @@ export function createV2ThreadController(
     retry,
     awaitReady,
     refresh,
+    reconcileLifecycle,
     resyncAuxiliary,
     reconcileStagedRevert,
     reconcilePendingPrompt,
     awaitPromptAdmission,
     sendMessage,
     regenerate,
-    cancel,
+    stopComposer,
+    cancelQueuedPrompt,
+    stopSession,
     compact,
     replyToPermission,
     reconcileAutoApprove,

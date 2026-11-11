@@ -111,6 +111,7 @@ mock.module("@web/features/chat/state/chatTabs.ts", () => ({
   },
   urlForTab: (tab: { kind: string; ref: string }) =>
     tab.kind === "agent" ? `/code/${tab.ref}` : `/chat/${tab.ref}`,
+  visibleTabs: () => [{ key: "chat:new", kind: "chat", ref: "new" }],
 }));
 
 // ── the SAME react-router instance the component imports ────────────────────

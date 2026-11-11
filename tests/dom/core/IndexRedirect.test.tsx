@@ -1,14 +1,10 @@
 /**
- * Phase 5 — IndexRedirect.tsx: declarative Navigate replaces the imperative
- * navigate()-in-useEffect pattern.
+ * IndexRedirect: hydration-aware landing route.
  *
- * Test 23 from tests/test-prompts-phase5.md.
- *
- * Before Phase 5, `IndexRedirect` called `useNavigate()` inside a
- * `useEffect` and returned `null`. The library now owns when the redirect
- * fires: the component returns `<Navigate to={...} replace />` declaratively,
- * and React Router performs the navigation during render. These source
- * guards pin that shape so the imperative pattern cannot silently return.
+ * Waits for authoritative workspace hydration, then deterministically opens a
+ * local draft and redirects to `/chat/new`. Renders loading/error states while
+ * hydration is pending or failed, and uses declarative `<Navigate>` for the
+ * final redirect.
  */
 import { describe, it, expect } from "bun:test";
 import { REPO_ROOT } from "../../helpers/repo-root";
@@ -20,29 +16,28 @@ async function readIndexRedirect(): Promise<string> {
   return Bun.file(IDX_SRC).text();
 }
 
-describe("Test 23 — IndexRedirect renders Navigate declaratively", () => {
-  it("does not use useEffect", async () => {
-    const src = await readIndexRedirect();
-    expect(src).not.toContain("useEffect");
-  });
-
-  it("does not use useNavigate", async () => {
+describe("IndexRedirect — hydration-aware declarative redirect", () => {
+  it("does not use imperative useNavigate", async () => {
     const src = await readIndexRedirect();
     expect(src).not.toContain("useNavigate");
   });
 
-  it("returns a <Navigate element", async () => {
+  it("returns a <Navigate element for the resolved target", async () => {
     const src = await readIndexRedirect();
     expect(src).toContain("<Navigate");
+    expect(src).toContain("replace");
   });
 
-  it("uses ROUTES.CHAT_NEW as the redirect target", async () => {
+  it("targets the deterministic local draft route", async () => {
     const src = await readIndexRedirect();
     expect(src).toContain("ROUTES.CHAT_NEW");
+    expect(src).toContain("openNewDraft");
   });
 
-  it("does not return null (the Navigate element is the render output)", async () => {
+  it("waits for authoritative workspace hydration", async () => {
     const src = await readIndexRedirect();
-    expect(src).not.toContain("return null");
+    expect(src).toContain("usePreferencesStore");
+    expect(src).toContain("hydration");
+    expect(src).toContain("Loading workspace");
   });
 });

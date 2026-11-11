@@ -98,7 +98,15 @@ export function DirectViewportBridge() {
   // is BEFORE its `load()` has run, so it is deliberately not awaited for
   // freshness and a failed load cannot surface through it.
   const aui = useAui();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+  const threadExtras = useAuiState((s) => s.thread.extras);
+  const isRunning =
+    threadExtras &&
+    typeof threadExtras === "object" &&
+    (threadExtras as { kind?: unknown }).kind === "tbai-opencode-v2"
+      ? ((threadExtras as { projection?: { hasActiveSessionWork?: boolean } }).projection
+          ?.hasActiveSessionWork ?? false)
+      : threadIsRunning;
   /**
    * assistant-ui's canonical history-loading signal: true from this mount until
    * the history adapter's `load()` settles, on success OR failure. Read here so a

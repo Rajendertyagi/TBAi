@@ -88,6 +88,25 @@ export function foreignProcessIds(pids: readonly number[], ignored: readonly num
 }
 
 /**
+ * True when `dbPath` is one of OpenCode's canonical default database locations.
+ *
+ * The comparison is normalized and resolved, and intentionally does not depend
+ * on a temporarily overridden `XDG_DATA_HOME`: an isolated runtime/test database
+ * must not be treated as the shared default merely because it lives under the
+ * current process's XDG data home.
+ */
+function isCanonicalDefaultOpenCodeDatabase(dbPath: string): boolean {
+  const normalizedDb = path.resolve(dbPath).toLowerCase();
+  const canonical = new Set<string>([
+    path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db").toLowerCase(),
+  ]);
+  if (process.env.LOCALAPPDATA) {
+    canonical.add(path.resolve(process.env.LOCALAPPDATA, "opencode", "opencode.db").toLowerCase());
+  }
+  return canonical.has(normalizedDb);
+}
+
+/**
  * Stable mutex name for one database path.
  *
  * Windows paths are case-insensitive, so the hash input is lower-cased and
@@ -349,24 +368,13 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
       );
     }
 
-    // If the database files already exist, Restart Manager provides authoritative
-    // detection of processes that actually hold or share open handles on them.
-    // If the database files do not exist yet (first-time initialization),
-    // and dbPath is the default database, we check whether any running OpenCode
-    // processes exist as a safeguard.
-    if (files.length === 0) {
-      const defaultDb = (
-        process.env.XDG_DATA_HOME
-          ? path.resolve(process.env.XDG_DATA_HOME, "opencode", "opencode.db")
-          : path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
-      ).toLowerCase();
-      const normalizedDb = path.resolve(dbPath).toLowerCase();
-
-      if (normalizedDb === defaultDb && this.deps.findRunningOpenCodePids) {
-        const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid, childPid]);
-        for (const pid of runningOpenCodePids) {
-          if (!pids.includes(pid)) pids.push(pid);
-        }
+    // Process enumeration guard: for canonical default OpenCode databases, also
+    // check for foreign OpenCode server processes. This is independent of
+    // XDG_DATA_HOME overrides so isolated databases are never treated as shared.
+    if (isCanonicalDefaultOpenCodeDatabase(dbPath) && this.deps.findRunningOpenCodePids) {
+      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid, childPid]);
+      for (const pid of runningOpenCodePids) {
+        if (!pids.includes(pid)) pids.push(pid);
       }
     }
 
@@ -402,24 +410,13 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
       }
     }
 
-    // If the database files already exist, Restart Manager provides authoritative
-    // detection of processes that actually hold or share open handles on them.
-    // If the database files do not exist yet (first-time initialization),
-    // and dbPath is the default database, we check whether any running OpenCode
-    // processes exist as a safeguard.
-    if (files.length === 0) {
-      const defaultDb = (
-        process.env.XDG_DATA_HOME
-          ? path.resolve(process.env.XDG_DATA_HOME, "opencode", "opencode.db")
-          : path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
-      ).toLowerCase();
-      const normalizedDb = path.resolve(dbPath).toLowerCase();
-
-      if (normalizedDb === defaultDb && this.deps.findRunningOpenCodePids) {
-        const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid]);
-        for (const pid of runningOpenCodePids) {
-          if (!pids.includes(pid)) pids.push(pid);
-        }
+    // Process enumeration guard: for canonical default OpenCode databases, also
+    // check for foreign OpenCode server processes. This is independent of
+    // XDG_DATA_HOME overrides so isolated databases are never treated as shared.
+    if (isCanonicalDefaultOpenCodeDatabase(dbPath) && this.deps.findRunningOpenCodePids) {
+      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid]);
+      for (const pid of runningOpenCodePids) {
+        if (!pids.includes(pid)) pids.push(pid);
       }
     }
 

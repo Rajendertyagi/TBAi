@@ -12,7 +12,12 @@ import {
   type OpenCodeServiceCapabilities,
 } from "./compatibility";
 import { readConnectionState, readShutdownState } from "./connectionState";
-import { revalidateAdoptedTarget, type AdoptedRecoveryOutcome } from "./recovery";
+import {
+  getLostAdoptedRecovery,
+  resetLostAdoptedRecoveryForTests,
+  revalidateAdoptedTarget,
+  type AdoptedRecoveryOutcome,
+} from "./recovery";
 import { hasExplicitServerConfig } from "./registration";
 import { openCodeServerManager } from "./serverManager";
 
@@ -249,7 +254,8 @@ export function startOpenCodeRevalidation(
 ): void {
   if (revalidationTimer !== null) return;
   if (readShutdownState().shutdownStarted) return;
-  if (readConnectionState().target.mode !== "adopted") return;
+  const targetMode = readConnectionState().target.mode;
+  if (targetMode !== "adopted" && !getLostAdoptedRecovery()) return;
   activeConfig = config;
   revalidate = options.revalidate ?? (() => revalidateAdoptedTarget({ config: activeConfig }));
   revalidationTimer = setInterval(() => {
@@ -274,18 +280,19 @@ export function isOpenCodeRevalidationRunning(): boolean {
 
 async function revalidateTick(): Promise<void> {
   const state = readConnectionState();
-  if (state.shutdownStarted || state.target.mode !== "adopted") {
+  if (state.shutdownStarted) {
+    stopOpenCodeRevalidation();
+    return;
+  }
+  // Keep running while an adopted target is installed or while a lost adopted
+  // service is awaiting affinity-safe rediscovery/re-adopt.
+  if (state.target.mode !== "adopted" && !getLostAdoptedRecovery()) {
     stopOpenCodeRevalidation();
     return;
   }
   try {
     const outcome = await revalidate();
-    if (outcome.status === "fallback") {
-      // The target is managed now; the managed process's own exit is the
-      // manager's business, so the loop has nothing left to watch.
-      stopOpenCodeRevalidation();
-      logger.info("opencode", "opencode.revalidation_stopped", { reason: "fallback" });
-    } else if (outcome.status === "refused" && outcome.reason === "shutdown") {
+    if (outcome.status === "refused" && outcome.reason === "shutdown") {
       stopOpenCodeRevalidation();
     }
   } catch (err) {
@@ -307,4 +314,5 @@ export function resetOpenCodeRuntimeStartupForTests(): void {
   startupRun = null;
   activeConfig = OPENCODE_CONFIG;
   revalidate = () => revalidateAdoptedTarget({ config: activeConfig });
+  resetLostAdoptedRecoveryForTests();
 }

@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import {
-  beginAttempt,
   beginShutdown,
-  captureOpenCodeRequestContext,
   installAdoptedTarget,
   installManagedTarget,
   readConnectionState,
@@ -12,31 +10,33 @@ import {
 } from "@/services/opencode/connectionState.ts";
 import { OpenCodeRedirectRefusedError } from "@/services/opencode/http.ts";
 import type { OpenCodeTransport } from "@/services/opencode/http.ts";
-import { revalidateAdoptedTarget } from "@/services/opencode/recovery.ts";
-import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
+import {
+  getLostAdoptedRecovery,
+  resetLostAdoptedRecoveryForTests,
+  revalidateAdoptedTarget,
+  type RediscoveryCandidate,
+} from "@/services/opencode/recovery.ts";
+import { conversationService } from "@/services/storage/conversations.ts";
 
 /**
- * D3 / §1.5.1 rows 5–9 — revalidating an adopted service and the managed
- * fallback.
+ * P3-A: affinity-safe adopted loss recovery with scoped rediscovery/re-adopt.
  *
- * No case starts, signals or restarts a real process: the probe transport and
- * the managed-start function are injected. What is asserted is the decision
- * logic — preservation on a transient failure, fallback only on confirmed
- * loss, one managed start under concurrency, and a typed refusal at every
- * lifecycle boundary.
+ * No case starts, signals or restarts a real process. Probe/rediscovery/session
+ * verification are injected. Assertions cover liveness decisions, affinity-safe
+ * loss handling, bounded passive rediscovery, compatibility/session checks,
+ * restore without unsafe global switching, and absence of non-owned lifecycle ops.
  */
 
 const ORIGIN = "http://127.0.0.1:4321";
 const OTHER_ORIGIN = "http://127.0.0.1:4322";
 const PASSWORD = "recovery-fixture-password";
-/** The newer adoption's OWN credential — distinct, so a reuse would be visible. */
-const NEW_PASSWORD = "recovery-newer-adoption-password";
 const MANAGED_BASE_URL = "http://127.0.0.1:4323";
 
 const FAST_CONFIG = {
   ...OPENCODE_CONFIG,
   adoptedLossConfirmAttempts: 2,
   adoptedLossRetryDelayMs: 0,
+  discoveryProbeTimeoutMs: 50,
 };
 
 function transportFrom(respond: (url: string) => Response | Promise<Response>): {
@@ -59,20 +59,54 @@ function unreachable(): never {
   throw new Error("connect ECONNREFUSED");
 }
 
-function installAdopted(origin = ORIGIN): void {
-  installAdoptedTarget({ origin, password: PASSWORD });
+function installAdopted(origin = ORIGIN, profileId?: string): void {
+  installAdoptedTarget({ origin, password: PASSWORD, profileId });
 }
+
+function candidate(origin = ORIGIN): RediscoveryCandidate {
+  return {
+    origin,
+    password: PASSWORD,
+    capabilities: {
+      version: "2.2.0",
+      supported: {
+        session: true,
+        events: true,
+        config: true,
+        agent: true,
+        model: true,
+        command: true,
+      },
+    },
+    profileId: undefined,
+    runtimePid: 4242,
+    dataLocation: undefined,
+    registration: {
+      path: "rediscovery",
+      origin,
+      pid: 4242,
+      password: PASSWORD,
+      version: "2.2.0",
+    },
+  };
+}
+
+const originalList = conversationService.list;
 
 beforeEach(() => {
   resetConnectionStateForTests();
+  resetLostAdoptedRecoveryForTests();
+  (conversationService as any).list = () => [];
 });
 
 afterEach(() => {
+  (conversationService as any).list = originalList;
+  resetLostAdoptedRecoveryForTests();
   resetConnectionStateForTests();
 });
 
-describe("revalidation — the target is not adopted", () => {
-  it("does nothing when no target is installed", async () => {
+describe("revalidation - the target is not adopted", () => {
+  it("does nothing when no target is installed and no lost recovery exists", async () => {
     const { transport, calls } = transportFrom(() => new Response("", { status: 200 }));
 
     expect(await revalidateAdoptedTarget({ probeTransport: transport })).toEqual({
@@ -81,7 +115,7 @@ describe("revalidation — the target is not adopted", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("does nothing when the managed target is installed", async () => {
+  it("does nothing when the managed target is installed and no lost recovery exists", async () => {
     installManagedTarget({ baseUrl: MANAGED_BASE_URL, password: PASSWORD });
     const { transport, calls } = transportFrom(() => new Response("", { status: 200 }));
 
@@ -96,10 +130,11 @@ describe("revalidation — the target is not adopted", () => {
   });
 });
 
-describe("revalidation — a service that answers is alive", () => {
+describe("revalidation - a service that answers is alive", () => {
   it("preserves the target on any HTTP status, including 401 and 500", async () => {
     for (const status of [200, 401, 500]) {
       resetConnectionStateForTests();
+      resetLostAdoptedRecoveryForTests();
       installAdopted();
       const { transport, calls } = transportFrom(() => new Response("", { status }));
 
@@ -109,6 +144,7 @@ describe("revalidation — a service that answers is alive", () => {
       });
       expect(calls).toEqual([`${ORIGIN}${OPENCODE_CONFIG.readinessProbePath}`]);
       expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN });
+      expect(getLostAdoptedRecovery()).toBeNull();
     }
   });
 
@@ -133,148 +169,96 @@ describe("revalidation — a service that answers is alive", () => {
       if (probes === 1) unreachable();
       return new Response("", { status: 503 });
     });
-    let starts = 0;
 
     const outcome = await revalidateAdoptedTarget({
       config: FAST_CONFIG,
       probeTransport: transport,
-      startManaged: async () => {
-        starts += 1;
-        return MANAGED_BASE_URL;
-      },
+      rediscover: async () => candidate(),
+      verifySessionAvailability: async () => true,
     });
 
     expect(outcome).toEqual({ status: "preserved", lastStatus: 503 });
     expect(probes).toBe(2);
-    expect(starts).toBe(0);
     expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN });
+    expect(getLostAdoptedRecovery()).toBeNull();
   });
 });
 
-describe("revalidation — confirmed loss falls back to the managed service", () => {
-  it("clears the adopted target and installs the managed one", async () => {
+describe("revalidation - confirmed loss is affinity-safe", () => {
+  it("clears dead adopted target without installing managed fallback globally", async () => {
     installAdopted();
     const { transport, calls } = transportFrom(unreachable);
-    const starts: string[] = [];
 
     const outcome = await revalidateAdoptedTarget({
       config: FAST_CONFIG,
       probeTransport: transport,
-      startManaged: async () => {
-        starts.push(MANAGED_BASE_URL);
-        return MANAGED_BASE_URL;
-      },
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
     });
 
-    expect(outcome).toEqual({ status: "fallback", managedBaseUrl: MANAGED_BASE_URL });
-    expect(starts).toHaveLength(1);
-    // Every bounded attempt ran before the loss was confirmed.
+    expect(outcome).toEqual({ status: "unavailable", origin: ORIGIN, reason: "cannot_rediscover" });
     expect(calls).toHaveLength(FAST_CONFIG.adoptedLossConfirmAttempts);
-    expect(readConnectionState().target).toMatchObject({
-      mode: "managed",
-      baseUrl: MANAGED_BASE_URL,
-    });
+    expect(readConnectionState().target.mode).toBe("unresolved");
+    expect(getLostAdoptedRecovery()?.lost.origin).toBe(ORIGIN);
   });
 
-  /**
-   * AT6: an adoption that succeeded and then suffers a SECOND loss observation.
-   *
-   * After the first confirmed loss the target is managed. A second loss must
-   * not start another managed child, must not move the binding again, and must
-   * not even probe: it reports `not-adopted` because there is no adopted
-   * service left to lose.
-   */
-  it("AT6 — a second loss after fallback starts nothing and preserves the target", async () => {
+  it("restores the original adopted service when rediscovered and verified (no duplicate sessions/resubmits)", async () => {
     installAdopted();
-    let starts = 0;
-    const startManaged = async (): Promise<string> => {
-      starts += 1;
-      return MANAGED_BASE_URL;
-    };
+    let rediscoverCalls = 0;
+    let verifyCalls = 0;
 
-    const first = await revalidateAdoptedTarget({
+    const outcome = await revalidateAdoptedTarget({
       config: FAST_CONFIG,
       probeTransport: transportFrom(unreachable).transport,
-      startManaged,
-    });
-    expect(first).toEqual({ status: "fallback", managedBaseUrl: MANAGED_BASE_URL });
-    expect(starts).toBe(1);
-    const afterFallback = readConnectionState();
-    expect(afterFallback.target).toMatchObject({ mode: "managed", baseUrl: MANAGED_BASE_URL });
-
-    const secondProbe = transportFrom(unreachable);
-    const second = await revalidateAdoptedTarget({
-      config: FAST_CONFIG,
-      probeTransport: secondProbe.transport,
-      startManaged,
-    });
-    expect(second).toEqual({ status: "not-adopted" });
-    expect(starts).toBe(1);
-    expect(secondProbe.calls).toHaveLength(0);
-    expect(readConnectionState().revision).toBe(afterFallback.revision);
-    expect(readConnectionState().target).toMatchObject({
-      mode: "managed",
-      baseUrl: MANAGED_BASE_URL,
-    });
-  });
-
-  it("honours the configured confirmation count", async () => {
-    installAdopted();
-    const { transport, calls } = transportFrom(unreachable);
-    const config = { ...FAST_CONFIG, adoptedLossConfirmAttempts: 3 };
-
-    await revalidateAdoptedTarget({
-      config,
-      probeTransport: transport,
-      startManaged: async () => MANAGED_BASE_URL,
-    });
-
-    expect(calls).toHaveLength(3);
-  });
-
-  it("runs one managed start for concurrent callers sharing the in-flight check", async () => {
-    installAdopted();
-    const { transport, calls } = transportFrom(unreachable);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let starts = 0;
-    const options = {
-      config: FAST_CONFIG,
-      probeTransport: transport,
-      startManaged: async () => {
-        starts += 1;
-        await gate;
-        return MANAGED_BASE_URL;
+      rediscover: async (lost) => {
+        rediscoverCalls += 1;
+        expect(lost.origin).toBe(ORIGIN);
+        return candidate(ORIGIN);
       },
-    };
+      verifySessionAvailability: async (cand, lost) => {
+        verifyCalls += 1;
+        expect(cand.origin).toBe(ORIGIN);
+        expect(lost.origin).toBe(ORIGIN);
+        return true;
+      },
+    });
 
-    const first = revalidateAdoptedTarget(options);
-    const second = revalidateAdoptedTarget(options);
-    // The second caller joins the first run rather than starting its own.
-    expect(second).toBe(first);
-
-    release();
-    expect(await Promise.all([first, second])).toEqual([
-      { status: "fallback", managedBaseUrl: MANAGED_BASE_URL },
-      { status: "fallback", managedBaseUrl: MANAGED_BASE_URL },
-    ]);
-    expect(starts).toBe(1);
-    expect(calls).toHaveLength(FAST_CONFIG.adoptedLossConfirmAttempts);
+    expect(outcome).toEqual({ status: "restored", origin: ORIGIN });
+    expect(rediscoverCalls).toBe(1);
+    expect(verifyCalls).toBe(1);
+    expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN });
+    expect(getLostAdoptedRecovery()).toBeNull();
   });
 
-  it("starts a fresh check after the shared run settles", async () => {
+  it("does not re-adopt an incompatible rediscovered server (different origin)", async () => {
     installAdopted();
-    const { transport, calls } = transportFrom(() => new Response("", { status: 200 }));
+    const outcome = await revalidateAdoptedTarget({
+      config: FAST_CONFIG,
+      probeTransport: transportFrom(unreachable).transport,
+      rediscover: async () => candidate(OTHER_ORIGIN),
+      verifySessionAvailability: async () => true,
+    });
 
-    await revalidateAdoptedTarget({ probeTransport: transport });
-    await revalidateAdoptedTarget({ probeTransport: transport });
-
-    expect(calls).toHaveLength(2);
+    expect(outcome).toEqual({ status: "unavailable", origin: ORIGIN, reason: "incompatible" });
+    expect(readConnectionState().target.mode).toBe("unresolved");
+    expect(getLostAdoptedRecovery()?.lost.origin).toBe(ORIGIN);
   });
 
-  it("never signals the adopted process", async () => {
+  it("fails safely when session availability cannot be verified", async () => {
+    installAdopted();
+    const outcome = await revalidateAdoptedTarget({
+      config: FAST_CONFIG,
+      probeTransport: transportFrom(unreachable).transport,
+      rediscover: async () => candidate(ORIGIN),
+      verifySessionAvailability: async () => false,
+    });
+
+    expect(outcome).toEqual({ status: "unavailable", origin: ORIGIN, reason: "incompatible" });
+    expect(readConnectionState().target.mode).toBe("unresolved");
+    expect(getLostAdoptedRecovery()?.lost.origin).toBe(ORIGIN);
+  });
+
+  it("never signals or lifecycle-controls the adopted/external process", async () => {
     installAdopted();
     let enumerations = 0;
     const unregister = registerManagedChildStopProvider({
@@ -288,19 +272,72 @@ describe("revalidation — confirmed loss falls back to the managed service", ()
       await revalidateAdoptedTarget({
         config: FAST_CONFIG,
         probeTransport: transportFrom(unreachable).transport,
-        startManaged: async () => MANAGED_BASE_URL,
+        rediscover: async () => null,
+        verifySessionAvailability: async () => true,
       });
     } finally {
       unregister();
     }
 
-    // The managed-child owner was not even asked: recovery has no stop path for
-    // an adopted service (§3.3).
     expect(enumerations).toBe(0);
+  });
+
+  it("runs one recovery for concurrent callers sharing the in-flight check", async () => {
+    installAdopted();
+    const { transport, calls } = transportFrom(unreachable);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let rediscoverCalls = 0;
+    const options = {
+      config: FAST_CONFIG,
+      probeTransport: transport,
+      rediscover: async () => {
+        rediscoverCalls += 1;
+        await gate;
+        return null;
+      },
+      verifySessionAvailability: async () => true,
+    };
+
+    const first = revalidateAdoptedTarget(options);
+    const second = revalidateAdoptedTarget(options);
+    expect(second).toBe(first);
+
+    release();
+    expect(await Promise.all([first, second])).toEqual([
+      { status: "unavailable", origin: ORIGIN, reason: "cannot_rediscover" },
+      { status: "unavailable", origin: ORIGIN, reason: "cannot_rediscover" },
+    ]);
+    expect(rediscoverCalls).toBe(1);
+    expect(calls).toHaveLength(FAST_CONFIG.adoptedLossConfirmAttempts);
+  });
+
+  it("retries rediscovery on a later tick after unavailable (bounded passive)", async () => {
+    installAdopted();
+    await revalidateAdoptedTarget({
+      config: FAST_CONFIG,
+      probeTransport: transportFrom(unreachable).transport,
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
+    });
+    expect(getLostAdoptedRecovery()?.failed).toBe(true);
+    expect(readConnectionState().target.mode).toBe("unresolved");
+
+    const outcome = await revalidateAdoptedTarget({
+      config: FAST_CONFIG,
+      rediscover: async () => candidate(ORIGIN),
+      verifySessionAvailability: async () => true,
+    });
+
+    expect(outcome).toEqual({ status: "restored", origin: ORIGIN });
+    expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN });
+    expect(getLostAdoptedRecovery()).toBeNull();
   });
 });
 
-describe("revalidation — refusals", () => {
+describe("revalidation - refusals and safety", () => {
   it("refuses after shutdown without probing", async () => {
     installAdopted();
     await beginShutdown();
@@ -313,129 +350,28 @@ describe("revalidation — refusals", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("leaves the target unresolved when the managed start fails", async () => {
+  it("does not restore if a different target was installed meanwhile", async () => {
     installAdopted();
-    const { transport } = transportFrom(unreachable);
-
     const outcome = await revalidateAdoptedTarget({
       config: FAST_CONFIG,
-      probeTransport: transport,
-      startManaged: async () => {
-        throw new Error("managed binary missing");
+      probeTransport: transportFrom(unreachable).transport,
+      rediscover: async () => {
+        // Simulate concurrent install of managed target (e.g. local fallback path)
+        installManagedTarget({ baseUrl: MANAGED_BASE_URL, password: PASSWORD });
+        return candidate(ORIGIN);
       },
-    });
-
-    expect(outcome).toEqual({ status: "refused", reason: "managed_start_failed" });
-    // Row 9: no retry loop and no silent restore of the cleared binding.
-    expect(readConnectionState().target.mode).toBe("unresolved");
-  });
-
-  it("AT7 — a newer adoption supersedes the fallback and keeps its own credential", async () => {
-    installAdopted(ORIGIN);
-    const { transport } = transportFrom(unreachable);
-    let revisionAtAdoption = -1;
-
-    const outcome = await revalidateAdoptedTarget({
-      config: FAST_CONFIG,
-      probeTransport: transport,
-      startManaged: async () => {
-        // A concurrent adoption wins the state while the managed start is in
-        // flight. Its own attempt is the current one.
-        const attempt = beginAttempt("manual");
-        installAdoptedTarget({ origin: OTHER_ORIGIN, password: NEW_PASSWORD, attempt });
-        revisionAtAdoption = readConnectionState().revision;
-        return MANAGED_BASE_URL;
-      },
+      verifySessionAvailability: async () => true,
     });
 
     expect(outcome).toEqual({ status: "refused", reason: "superseded" });
-    // The newer adoption REMAINS installed, and it kept its own credential: the
-    // stale fallback neither replaced it nor rotated it back to the previous
-    // adopted password or TBAi's managed one.
     expect(readConnectionState().target).toMatchObject({
-      mode: "adopted",
-      baseUrl: OTHER_ORIGIN,
-      origin: OTHER_ORIGIN,
-      credential: { kind: "adopted", origin: OTHER_ORIGIN, password: NEW_PASSWORD },
-    });
-    expect(readConnectionState().target).not.toMatchObject({
-      credential: { password: PASSWORD },
-    });
-    expect(readConnectionState().target).not.toMatchObject({
-      credential: { password: getOpenCodeAuthPassword() },
-    });
-    // The stale run wrote nothing after the newer install: same revision.
-    expect(readConnectionState().revision).toBe(revisionAtAdoption);
-
-    // Origin and credential come from ONE capture, and the transport sends that
-    // pair: the request reaches the newer origin bearing the newer secret.
-    const realFetch = globalThis.fetch;
-    const captured: Array<{ url: string; authorization: string | null }> = [];
-    globalThis.fetch = Object.assign(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        captured.push({
-          url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-          authorization: new Headers(init?.headers).get("authorization"),
-        });
-        return Response.json({});
-      },
-      { preconnect: realFetch.preconnect },
-    );
-    try {
-      const context = captureOpenCodeRequestContext();
-      expect(context.baseUrl).toBe(OTHER_ORIGIN);
-      await context.transport(`${context.baseUrl}${OPENCODE_CONFIG.readinessProbePath}`);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
-    expect(captured).toHaveLength(1);
-    expect(captured[0]?.url).toBe(`${OTHER_ORIGIN}${OPENCODE_CONFIG.readinessProbePath}`);
-    const decoded = Buffer.from(
-      (captured[0]?.authorization ?? "").replace(/^Basic /, ""),
-      "base64",
-    ).toString("utf8");
-    expect(decoded).toBe(`${OPENCODE_CONFIG.authUsername}:${NEW_PASSWORD}`);
-  });
-
-  it("AT7 — a revalidation that goes stale during the probe clears and installs nothing", async () => {
-    installAdopted(ORIGIN);
-    let adoptedDuringProbe = false;
-    const { transport, calls } = transportFrom(() => {
-      // The target changes underneath the bounded confirmation probes.
-      if (!adoptedDuringProbe) {
-        adoptedDuringProbe = true;
-        const attempt = beginAttempt("manual");
-        installAdoptedTarget({ origin: OTHER_ORIGIN, password: NEW_PASSWORD, attempt });
-      }
-      return unreachable();
-    });
-    const starts: string[] = [];
-
-    const outcome = await revalidateAdoptedTarget({
-      config: FAST_CONFIG,
-      probeTransport: transport,
-      startManaged: async () => {
-        starts.push(MANAGED_BASE_URL);
-        return MANAGED_BASE_URL;
-      },
-    });
-
-    // The origin guard refuses at the decision point: a stale revalidation can
-    // neither clear the newer binding nor install the old one, and it never
-    // starts the managed fallback.
-    expect(outcome).toEqual({ status: "refused", reason: "superseded" });
-    expect(starts).toHaveLength(0);
-    expect(calls).toHaveLength(FAST_CONFIG.adoptedLossConfirmAttempts);
-    expect(readConnectionState().target).toMatchObject({
-      mode: "adopted",
-      baseUrl: OTHER_ORIGIN,
-      origin: OTHER_ORIGIN,
-      credential: { kind: "adopted", origin: OTHER_ORIGIN, password: NEW_PASSWORD },
+      mode: "managed",
+      baseUrl: MANAGED_BASE_URL,
     });
   });
 });
 
-describe("revalidation — the production probe path", () => {
+describe("revalidation - production probe path", () => {
   const realFetch = globalThis.fetch;
 
   afterEach(() => {

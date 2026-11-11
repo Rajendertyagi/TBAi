@@ -52,6 +52,7 @@ export function resolveManagedBinary(
 
 /** Strips ANSI escape sequences from CLI output before parsing. */
 function stripAnsi(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequences intentionally start with ESC (U+001B).
   return text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
 }
 

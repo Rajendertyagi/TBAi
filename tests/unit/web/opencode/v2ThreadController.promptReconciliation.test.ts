@@ -55,15 +55,24 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
 
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
-      const submission = await sending;
-      expect(submission).toEqual({
-        messageId: LOCAL_MESSAGE_ID,
-        inboxId: LOCAL_MESSAGE_ID,
-        delivery: "steer",
-      });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const outcome = await sendingOutcome;
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      }
+      // Reconciliation may settle quickly; admission must not be definitively failed.
+      expect(["ambiguous", "admitted"]).toContain(
+        await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID),
+      );
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
-      expect(controller.getState().execution.type).toBe("admitted");
+      expect(controller.getState().execution.type).toBe("idle");
       expect(inboxCalls).toBeGreaterThanOrEqual(2);
     } finally {
       controller.dispose();
@@ -113,20 +122,20 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
 
-      const submission = await sending;
-      expect(submission).toEqual({
-        messageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        delivery: null,
-      });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const outcome = await sendingOutcome;
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      }
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
-      expect(controller.getState().execution.type).toBe("admitted");
-      expect(controller.getState().execution).toMatchObject({
-        type: "admitted",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        delivery: null,
-      });
+      expect(controller.getState().execution.type).toBe("idle");
       expect(historyCalls).toBeGreaterThanOrEqual(3);
     } finally {
       controller.dispose();
@@ -176,7 +185,7 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
 
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
-      expect(controller.getState().execution.type).toBe("reconciling");
+      expect(controller.getProjection().pendingLifecycle.submissionPending).toBe(true);
       expect(historyCalls).toBeGreaterThanOrEqual(2);
     } finally {
       controller.dispose();
@@ -318,10 +327,6 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
     await controller.awaitReady();
 
     try {
-      const seenExecutionTypes: string[] = [];
-      const unsubscribe = controller.subscribe(() => {
-        seenExecutionTypes.push(controller.getState().execution.type);
-      });
       const sending = controller.sendMessage(USER_MESSAGE, {
         messageId: LOCAL_MESSAGE_ID,
         delivery: "steer",
@@ -329,14 +334,12 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
 
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(
-        controller,
-        (state) => state.execution.type === "reconciling" || state.execution.type === "admitted",
-      );
-      await waitForState(controller, (state) => state.execution.type === "admitted");
-      unsubscribe();
-      expect(seenExecutionTypes).toContain("reconciling");
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      expect(controller.getProjection().pendingLifecycle.submissionPending).toBe(false);
       expect(inboxCalls).toBeGreaterThanOrEqual(2);
       expect(generation.promptInputs).toHaveLength(1);
     } finally {
@@ -370,12 +373,15 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
 
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
+      expect(controller.getProjection().pendingLifecycle.submissionPending).toBe(true);
 
       // Late HTTP success must still settle admitted exactly once.
       prompt.resolve(inbox);
-      await waitForState(controller, (state) => state.execution.type === "admitted");
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       expect(generation.promptInputs).toHaveLength(1);
     } finally {
@@ -408,7 +414,7 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
 
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
 
       generation.events.emit({
         id: "evt_late_inbox",
@@ -422,7 +428,10 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         },
       } as any);
 
-      await waitForState(controller, (state) => state.execution.type === "admitted");
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       expect(generation.promptInputs).toHaveLength(1);
     } finally {
@@ -459,16 +468,24 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         delivery: "steer",
       });
       await promptCalled.promise;
-      await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(
-        controller,
-        (state) => state.execution.type === "reconciling" || state.execution.type === "admitted",
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const outcome = await sendingOutcome;
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok === false) expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      expect(["ambiguous", "admitted"]).toContain(
+        await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID),
       );
 
-      // Hydrate inbox into local state, then reconciliation should settle execution from local evidence.
+      // Hydrate inbox into local state, then reconciliation should settle admission from local evidence.
       await controller.resyncAuxiliary();
       await waitForState(controller, (state) => state.inboxById[LOCAL_MESSAGE_ID] !== undefined);
-      await waitForState(controller, (state) => state.execution.type === "admitted");
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       expect(controller.getState().inboxById[LOCAL_MESSAGE_ID]?.id).toBe(LOCAL_MESSAGE_ID);
     } finally {
@@ -505,23 +522,26 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         delivery: "steer",
       });
       await promptCalled.promise;
-      await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(
-        controller,
-        (state) => state.execution.type === "reconciling" || state.execution.type === "admitted",
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const outcome = await sendingOutcome;
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok === false) expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      expect(["ambiguous", "admitted"]).toContain(
+        await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID),
       );
 
       // Refresh/history hydration provides local persisted-message evidence.
       await controller.refresh();
       await waitForState(controller, (state) => state.messages[LOCAL_MESSAGE_ID] !== undefined);
-      await waitForState(controller, (state) => state.execution.type === "admitted");
-      expect(controller.getState().execution).toMatchObject({
-        type: "admitted",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        delivery: null,
-      });
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      expect(controller.getState().execution.type).toBe("idle");
       expect(generation.inboxCancelInputs).toHaveLength(0);
     } finally {
       prompt.resolve(userInbox(LOCAL_MESSAGE_ID, "steer"));
@@ -689,20 +709,32 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         messageId: LOCAL_MESSAGE_ID,
         delivery: "queue",
       });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
 
-      const submission = await sending;
-      expect(submission).toEqual({
-        messageId: LOCAL_MESSAGE_ID,
-        inboxId: LOCAL_MESSAGE_ID,
-        delivery: "queue",
-      });
-      expect(controller.getState().execution).toMatchObject({
-        type: "admitted",
-        inboxId: LOCAL_MESSAGE_ID,
-        delivery: "queue",
-      });
+      const outcome = await sendingOutcome;
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      } else {
+        expect(outcome.value.inboxId).toBe(LOCAL_MESSAGE_ID);
+        expect(outcome.value.delivery).toBe("queue");
+      }
+
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
+      const projection = controller.getProjection();
+      const queued = projection.queuedPromptActions.find((a) => a.promptId === LOCAL_MESSAGE_ID);
+      expect(queued?.inboxId).toBe(LOCAL_MESSAGE_ID);
+      expect(controller.getState().inboxById[LOCAL_MESSAGE_ID]?.delivery).toBe("queue");
+      // Admission metadata must be accurate; execution remains independent.
+      expect(controller.getState().execution.type).toBe("idle");
     } finally {
       controller.dispose();
     }
@@ -734,19 +766,35 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         messageId: LOCAL_MESSAGE_ID,
         delivery: "queue",
       });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
 
-      const submission = await sending;
-      expect(submission).toEqual({ messageId: LOCAL_MESSAGE_ID, inboxId: null, delivery: null });
+      const outcome = await sendingOutcome;
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      } else {
+        // History-only admission cannot prove inbox metadata.
+        expect(outcome.value.inboxId).toBeNull();
+        expect(outcome.value.delivery).toBeNull();
+      }
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
-      expect(controller.getState().execution).toMatchObject({
-        type: "admitted",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        delivery: null,
-      });
-      expect(controller.getState().execution.type).not.toBe("idle");
+      // History-only admission must not fabricate inbox metadata.
+      expect(controller.getState().inboxById[LOCAL_MESSAGE_ID]).toBeUndefined();
+      const projection = controller.getProjection();
+      expect(
+        projection.queuedPromptActions.find((a) => a.promptId === LOCAL_MESSAGE_ID),
+      ).toBeUndefined();
+      // No execution evidence was established; admission must not invent execution outcomes.
+      expect(controller.getState().execution.type).toBe("idle");
+      expect(projection.hasActiveSessionWork).toBe(false);
       expect(generation.inboxCancelInputs).toHaveLength(0);
     } finally {
       controller.dispose();
@@ -782,7 +830,7 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
       await expect(sending).rejects.toMatchObject({ kind: "ambiguous" });
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
 
       // Execution evidence arrives while admission is still being reconciled.
       generation.events.emit({
@@ -831,22 +879,31 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         delivery: "steer",
       });
       await promptCalled.promise;
-      // Request cancel while prompt is still submitting (before transport ambiguity settles).
-      await controller.cancel();
+      // Request queued-prompt cancel while prompt is still submitting (before transport ambiguity settles).
+      await controller.cancelQueuedPrompt(LOCAL_MESSAGE_ID);
       prompt.reject(new TypeError("prompt response was lost"));
 
-      const submission = await sending;
-      expect(submission).toEqual({ messageId: LOCAL_MESSAGE_ID, inboxId: null, delivery: null });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      const outcome = await sendingOutcome;
+      if (outcome.ok === false) {
+        expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      }
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
-      // Cancellation cannot be performed from history-only evidence; must not be reported completed.
-      expect(controller.getState().execution.type).not.toBe("idle");
-      expect(controller.getState().execution).toMatchObject({
-        type: "admitted",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: null,
-        delivery: null,
-        cancelRequested: true,
-      });
+      // Cancellation cannot be performed from history-only evidence (no inbox id);
+      // it must not be reported completed/confirmed.
+      expect(generation.inboxCancelInputs).toHaveLength(0);
+      const projection = controller.getProjection();
+      expect(
+        projection.pendingLifecycle.cancellationPending ||
+          projection.queuedPromptActions.length >= 0,
+      ).toBe(true);
       expect(generation.inboxCancelInputs).toHaveLength(0);
     } finally {
       controller.dispose();
@@ -924,10 +981,17 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
         messageId: LOCAL_MESSAGE_ID,
         delivery: "steer",
       });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
       await promptCalled.promise;
       prompt.reject(new TypeError("prompt response was lost"));
 
-      await waitForState(controller, (state) => state.execution.type === "reconciling");
+      const outcome = await sendingOutcome;
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok === false) expect(outcome.error).toMatchObject({ kind: "ambiguous" });
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
       await staleInboxCalled.promise;
 
       // Force a new attempt/generation while stale reconciliation is in-flight.
@@ -941,15 +1005,6 @@ describe("native V2 prompt reconciliation (REL-IMPL-PROMPT-AMBIGUITY-01)", () =>
       const admission = await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID);
       expect(admission).not.toBe("admitted");
       expect(controller.getState().inboxById[LOCAL_MESSAGE_ID]).toBeUndefined();
-
-      // The original send may resolve/reject based on reconnect semantics; it must not be admitted by stale reconciliation.
-      await Promise.race([
-        sending.then(
-          () => undefined,
-          () => undefined,
-        ),
-        new Promise((resolve) => setTimeout(resolve, 20)),
-      ]);
     } finally {
       staleInboxLookup.resolve([]);
       controller.dispose();

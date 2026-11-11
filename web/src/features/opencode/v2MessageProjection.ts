@@ -342,7 +342,8 @@ function messageToAssistant(
           },
         }
       : {}),
-    ...(message.role === "assistant" && (source !== null || openCodeParts.length > 0 || messageError !== undefined)
+    ...(message.role === "assistant" &&
+    (source !== null || openCodeParts.length > 0 || messageError !== undefined)
       ? {
           metadata: {
             custom: {

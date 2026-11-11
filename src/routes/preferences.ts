@@ -7,7 +7,10 @@ import {
   sharedTabReorderBodySchema,
   workspacePreferencesPatchBodySchema,
 } from "../lib/validation";
-import { workspacePreferencesService, WorkspacePreferencesCorruptError } from "../services/preferences";
+import {
+  workspacePreferencesService,
+  WorkspacePreferencesCorruptError,
+} from "../services/preferences";
 import { conversationService } from "../services/storage";
 import { disableIdleTimeout } from "./shared";
 
@@ -138,7 +141,10 @@ app.patch("/", async (c) => {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Invalid preferences patch", issues: err.issues }, 400);
     }
-    if (err instanceof Error && /Unknown preferences group|preferences must be an object|invalid/i.test(err.message)) {
+    if (
+      err instanceof Error &&
+      /Unknown preferences group|preferences must be an object|invalid/i.test(err.message)
+    ) {
       return c.json({ error: err.message }, 400);
     }
     throw err;

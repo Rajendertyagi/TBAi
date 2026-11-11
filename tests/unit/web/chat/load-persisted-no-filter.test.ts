@@ -33,7 +33,7 @@ describe("shared workspace tab model", () => {
       snapshot: {
         revision: 1,
         sharedTabs: [],
-      preferences: {
+        preferences: {
           appearance: {
             themeMode: "system",
             lightTheme: "default",

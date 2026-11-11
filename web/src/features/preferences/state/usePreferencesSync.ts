@@ -131,7 +131,9 @@ export function usePreferencesSync(): void {
       w.scopeMode === "project" && w.folderId
         ? { mode: "project" as const, folderId: w.folderId }
         : { mode: "simple" as const, folderId: null };
-    const nextTab = isQuickActionTabId(w.quickActionTab) ? w.quickActionTab : DEFAULT_QUICK_ACTION_TAB;
+    const nextTab = isQuickActionTabId(w.quickActionTab)
+      ? w.quickActionTab
+      : DEFAULT_QUICK_ACTION_TAB;
     const scopeChanged =
       scopeState.scope.mode !== nextScope.mode || scopeState.scope.folderId !== nextScope.folderId;
     const tabChanged = scopeState.quickActionTab !== nextTab;

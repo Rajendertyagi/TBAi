@@ -44,7 +44,10 @@ interface PreferencesState {
     mode: "others" | "right" | "all";
     anchorConversationId?: string;
   }) => Promise<PreferencesCloseResult>;
-  reorderSharedTab: (conversationId: string, toIndex: number) => Promise<WorkspacePreferencesSnapshot>;
+  reorderSharedTab: (
+    conversationId: string,
+    toIndex: number,
+  ) => Promise<WorkspacePreferencesSnapshot>;
 }
 
 let eventSource: EventSource | null = null;
@@ -269,7 +272,11 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     runSerialized(async () => {
       const base = await get().waitForHydratedSnapshot();
       try {
-        const snapshot = await apiOpenSharedTab({ baseRevision: base.revision, conversationId, kind });
+        const snapshot = await apiOpenSharedTab({
+          baseRevision: base.revision,
+          conversationId,
+          kind,
+        });
         get().applySnapshot(snapshot);
         return snapshot;
       } catch (err) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+﻿import { describe, it, expect, beforeEach, afterAll, afterEach } from "bun:test";
 import {
   beginShutdown,
   installAdoptedTarget,
@@ -10,6 +10,7 @@ import { LOCAL_OWNER, OpenCodeHistoryBoundaryError } from "@/services/opencode/h
 import { OpenCodeOriginMismatchError } from "@/services/opencode/http.ts";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
 import { resolveOpenCodeServiceAccess } from "@/services/opencode/serviceAccess.ts";
+import { resetLostAdoptedRecoveryForTests } from "@/services/opencode/recovery.ts";
 
 /**
  * The single service resolver for history operations.
@@ -34,6 +35,7 @@ let ensureBaseUrlImpl: () => Promise<string>;
 
 beforeEach(() => {
   resetConnectionStateForTests();
+  resetLostAdoptedRecoveryForTests();
   ensureBaseUrlCalls = 0;
   ensureBaseUrlImpl = async () => "http://127.0.0.1:4000";
   manager.ensureBaseUrl = async () => {
@@ -42,8 +44,13 @@ beforeEach(() => {
   };
 });
 
+afterEach(() => {
+  resetLostAdoptedRecoveryForTests();
+});
+
 afterAll(() => {
   manager.ensureBaseUrl = originalEnsureBaseUrl;
+  resetLostAdoptedRecoveryForTests();
   resetConnectionStateForTests();
 });
 
@@ -61,7 +68,7 @@ function adoptedTarget(origin: string, profileId?: string): void {
   installAdoptedTarget({ origin, password: SYNTHETIC_PASSWORD, profileId });
 }
 
-describe("resolveOpenCodeServiceAccess — installed target decides", () => {
+describe("resolveOpenCodeServiceAccess â€” installed target decides", () => {
   it("returns the local owner and captured transport for loopback adopted target without asking manager", async () => {
     adoptedTarget(LOCAL_ADOPTED_A);
 
@@ -216,7 +223,7 @@ describe("resolveOpenCodeServiceAccess — installed target decides", () => {
   });
 });
 
-describe("resolveOpenCodeServiceAccess — nothing installed", () => {
+describe("resolveOpenCodeServiceAccess â€” nothing installed", () => {
   it("refuses a remote binding instead of starting a managed stand-in", async () => {
     let caught: unknown;
     try {
@@ -304,7 +311,7 @@ describe("resolveOpenCodeServiceAccess — nothing installed", () => {
   });
 });
 
-describe("resolveOpenCodeServiceAccess — shutdown", () => {
+describe("resolveOpenCodeServiceAccess â€” shutdown", () => {
   it("refuses before any service work once shutdown has begun", async () => {
     await beginShutdown();
 
@@ -322,5 +329,79 @@ describe("resolveOpenCodeServiceAccess — shutdown", () => {
       );
     }
     expect(ensureBaseUrlCalls).toBe(0);
+  });
+});
+
+describe("resolveOpenCodeServiceAccess - lost adopted recovery affinity (P3-A)", () => {
+  it("refuses a conversation bound to a lost adopted service as unavailable even when managed is installed", async () => {
+    const { revalidateAdoptedTarget } = await import("@/services/opencode/recovery.ts");
+    const { OPENCODE_CONFIG } = await import("@/config/opencode.ts");
+    installAdoptedTarget({
+      origin: EXPLICIT_LOOPBACK,
+      password: SYNTHETIC_PASSWORD,
+      profileId: `explicit:${EXPLICIT_LOOPBACK}`,
+    });
+    await revalidateAdoptedTarget({
+      config: { ...OPENCODE_CONFIG, adoptedLossConfirmAttempts: 1, adoptedLossRetryDelayMs: 0 },
+      probeTransport: Object.assign(
+        async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      ) as any,
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
+    });
+    installManagedTarget({ baseUrl: "http://127.0.0.1:4000", password: "synthetic-managed" });
+
+    let caught: unknown;
+    try {
+      await resolveOpenCodeServiceAccess({
+        id: "conv-remote",
+        opencodeSessionId: "ses_remote",
+        opencodeServiceOwner: `remote:${EXPLICIT_LOOPBACK}`,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeHistoryBoundaryError);
+    expect((caught as OpenCodeHistoryBoundaryError).refusal).toBe("adopted_unavailable");
+    expect(ensureBaseUrlCalls).toBe(0);
+  });
+
+  it("allows local/unbound conversations to use managed fallback while lost adopted recovery is pending", async () => {
+    const { revalidateAdoptedTarget } = await import("@/services/opencode/recovery.ts");
+    const { OPENCODE_CONFIG } = await import("@/config/opencode.ts");
+    installAdoptedTarget({
+      origin: EXPLICIT_LOOPBACK,
+      password: SYNTHETIC_PASSWORD,
+      profileId: `explicit:${EXPLICIT_LOOPBACK}`,
+    });
+    await revalidateAdoptedTarget({
+      config: { ...OPENCODE_CONFIG, adoptedLossConfirmAttempts: 1, adoptedLossRetryDelayMs: 0 },
+      probeTransport: Object.assign(
+        async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      ) as any,
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
+    });
+    ensureBaseUrlImpl = async () => {
+      installManagedTarget({ baseUrl: "http://127.0.0.1:4000", password: "synthetic-managed" });
+      return "http://127.0.0.1:4000";
+    };
+
+    const access = await resolveOpenCodeServiceAccess({
+      id: "conv-local",
+      opencodeSessionId: null,
+      opencodeServiceOwner: null,
+    });
+
+    expect(access.owner).toEqual(LOCAL_OWNER);
+    expect(access.baseUrl).toBe("http://127.0.0.1:4000");
+    expect(ensureBaseUrlCalls).toBe(1);
   });
 });

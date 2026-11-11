@@ -25,8 +25,10 @@ import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
+import { OpenCodeQueuedPrompts } from "./OpenCodeQueuedPrompts";
 import { OpenCodeRecoveryNotice } from "./OpenCodeRecoveryNotice";
 import { OpenCodePrimaryStatus } from "./OpenCodePrimaryStatus";
+import { OpenCodeLifecycleNotice } from "./OpenCodeLifecycleNotice";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
 
 /**
@@ -319,13 +321,19 @@ function AgentRuntime({
                 mode="agent"
                 composerExtras={{
                   // Interactive: natural height, above the reserved row.
-                  interactive: <OpenCodeQuestions />,
+                  interactive: (
+                    <div className="flex flex-col gap-2">
+                      <OpenCodeQueuedPrompts />
+                      <OpenCodeQuestions />
+                    </div>
+                  ),
                   // Status: transient presentations only — the primary owns the
                   // active turn, the notice states what the reuse verified.
                   // Primary first so it occupies the top line when the row wraps.
                   status: (
                     <>
                       <OpenCodePrimaryStatus />
+                      <OpenCodeLifecycleNotice />
                       <OpenCodeRecoveryNotice
                         key={sessionId}
                         reusedExistingSession={reusedExistingSession}

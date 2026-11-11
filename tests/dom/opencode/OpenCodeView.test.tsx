@@ -61,8 +61,9 @@ describe("OpenCodeView loading surface", () => {
     expect(source).not.toContain("aboveComposerExtra");
     expect(source).not.toContain("belowComposerExtra");
 
-    // Interactive content: the question dock, at its natural height.
-    expect(source).toContain("interactive: <OpenCodeQuestions />");
+    // Interactive content: queued prompt controls and the question dock, at natural height.
+    expect(source).toContain("<OpenCodeQueuedPrompts />");
+    expect(source).toContain("<OpenCodeQuestions />");
 
     // Status region: exactly the primary and the restoration notice.
     const statusStart = source.indexOf("status: (", start);

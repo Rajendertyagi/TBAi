@@ -6,6 +6,7 @@ import {
   DEFAULT_TYPOGRAPHY,
   getFont,
   INTERFACE_FONT_SIZE_CONFIG,
+  migrateTypography,
   MONO_FONTS,
   readTypography,
   resetCodeTypography,
@@ -19,8 +20,6 @@ import {
   type TypographyConfig,
 } from "../../../web/src/features/appearance/typography";
 import { REPO_ROOT } from "../../helpers/repo-root";
-
-const STORAGE_KEY = "tbai-typography";
 
 function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConfig {
   return {
@@ -41,88 +40,17 @@ function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConf
   };
 }
 
-interface MemoryStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-  clear(): void;
-  readonly length: number;
-  key(index: number): string | null;
-}
-
-function createMemoryStorage(initial: Record<string, string> = {}): MemoryStorage {
-  const map = new Map<string, string>(Object.entries(initial));
-  return {
-    getItem: (key: string) => (map.has(key) ? map.get(key)! : null),
-    setItem: (key: string, value: string) => {
-      map.set(key, String(value));
-    },
-    removeItem: (key: string) => {
-      map.delete(key);
-    },
-    clear: () => {
-      map.clear();
-    },
-    get length() {
-      return map.size;
-    },
-    key: (index: number) => Array.from(map.keys())[index] ?? null,
-  };
-}
+// (storage harness removed: typography is SQLite-authoritative in-memory; migration is tested via migrateTypography)
 
 /**
- * Executes a callback with an isolated in-memory `window.localStorage` harness.
- * Preserves and restores the original global `window` descriptor.
- */
-function withStorage<T>(
-  initialOrRecord: Record<string, string> | unknown,
-  fn: (storage: MemoryStorage) => T,
-): T {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
-  const storage =
-    typeof initialOrRecord === "object" &&
-    initialOrRecord !== null &&
-    !Array.isArray(initialOrRecord) &&
-    STORAGE_KEY in (initialOrRecord as Record<string, unknown>)
-      ? createMemoryStorage(initialOrRecord as Record<string, string>)
-      : createMemoryStorage(
-          initialOrRecord !== undefined
-            ? {
-                [STORAGE_KEY]:
-                  typeof initialOrRecord === "string"
-                    ? initialOrRecord
-                    : JSON.stringify(initialOrRecord),
-              }
-            : {},
-        );
-
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    writable: true,
-    value: {
-      localStorage: storage,
-    },
-  });
-
-  try {
-    return fn(storage);
-  } finally {
-    if (previous) {
-      Object.defineProperty(globalThis, "window", previous);
-    } else {
-      Reflect.deleteProperty(globalThis, "window");
-    }
-  }
-}
-
-/**
- * Reads a stored record through the production `readTypography()` path.
+ * Migrates/validates a stored record through the production migration path.
  *
- * Uses the in-memory localStorage harness so it executes deterministically
- * in headless unit runs without requiring happy-dom.
+ * Typography is SQLite-authoritative in-memory; localStorage is a passive
+ * pre-paint cache only. Migration/validation behavior is owned by
+ * `migrateTypography`.
  */
 function readStoredTypography(record: unknown): TypographyConfig {
-  return withStorage(record, () => readTypography());
+  return migrateTypography(record);
 }
 
 describe("Typography config, storage & scoped resets (v3)", () => {
@@ -149,114 +77,97 @@ describe("Typography config, storage & scoped resets (v3)", () => {
   });
 
   it("migrates the first v1 shape (no monoFontWeight / codeFontSize) losslessly", () => {
-    withStorage(undefined, (storage) => {
-      const legacy = {
-        version: 1,
-        fontFamily: "roboto",
-        monoFontFamily: "fira-code",
-        fontWeight: 600,
-        baseSize: 18,
-        lineHeight: 1.65,
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(legacy));
-      const config = readTypography();
-      expect(config.version).toBe(3);
-      expect(config.interfaceFontFamily).toBe("roboto");
-      expect(config.interfaceFontWeight).toBe(600);
-      expect(config.codeFontFamily).toBe("fira-code");
-      // monoFontWeight falls back to fontWeight
-      expect(config.codeFontWeight).toBe(600);
-      expect(config.codeFontSize).toBe(13);
-      expect(config.readingLineHeight).toBe(1.65);
-      // baseSize 18 migrated directly to interfaceFontSize
-      expect(config.interfaceFontSize).toBe(18);
-      expect(config.codeWordWrap).toBe(false);
-      expect(config.terminalFontFamily).toBe("jetbrains-mono");
-      expect(config.terminalFontSize).toBe(12);
-      expect(config.terminalFontWeight).toBe(400);
-      expect(config.terminalWrap).toBe(true);
-
-      // Verify serialized state is updated to V3
-      const stored = JSON.parse(storage.getItem(STORAGE_KEY)!);
-      expect(stored.version).toBe(3);
-      expect(stored.interfaceFontSize).toBe(18);
-    });
+    const legacy = {
+      version: 1,
+      fontFamily: "roboto",
+      monoFontFamily: "fira-code",
+      fontWeight: 600,
+      baseSize: 18,
+      lineHeight: 1.65,
+    };
+    const config = migrateTypography(legacy);
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe("roboto");
+    expect(config.interfaceFontWeight).toBe(600);
+    expect(config.codeFontFamily).toBe("fira-code");
+    // monoFontWeight falls back to fontWeight
+    expect(config.codeFontWeight).toBe(600);
+    expect(config.codeFontSize).toBe(13);
+    expect(config.readingLineHeight).toBe(1.65);
+    // baseSize 18 migrated directly to interfaceFontSize
+    expect(config.interfaceFontSize).toBe(18);
+    expect(config.codeWordWrap).toBe(false);
+    expect(config.terminalFontFamily).toBe("jetbrains-mono");
+    expect(config.terminalFontSize).toBe(12);
+    expect(config.terminalFontWeight).toBe(400);
+    expect(config.terminalWrap).toBe(true);
   });
 
   it("migrates the second v1 shape (with monoFontWeight / codeFontSize) losslessly", () => {
-    withStorage(undefined, (storage) => {
-      const legacy = {
-        version: 1,
-        fontFamily: "outfit",
-        monoFontFamily: "source-code-pro",
-        fontWeight: 700,
-        monoFontWeight: 300,
-        baseSize: 13,
-        codeFontSize: 15,
-        lineHeight: 1.35,
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(legacy));
-      const config = readTypography();
-      expect(config.version).toBe(3);
-      expect(config.interfaceFontFamily).toBe("outfit");
-      expect(config.interfaceFontWeight).toBe(700);
-      expect(config.codeFontFamily).toBe("source-code-pro");
-      expect(config.codeFontWeight).toBe(300);
-      expect(config.codeFontSize).toBe(15);
-      expect(config.readingLineHeight).toBe(1.35);
-      // Legacy baseSize 13 is preserved
-      expect(config.interfaceFontSize).toBe(13);
-    });
+    const legacy = {
+      version: 1,
+      fontFamily: "outfit",
+      monoFontFamily: "source-code-pro",
+      fontWeight: 700,
+      monoFontWeight: 300,
+      baseSize: 13,
+      codeFontSize: 15,
+      lineHeight: 1.35,
+    };
+    const config = migrateTypography(legacy);
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe("outfit");
+    expect(config.interfaceFontWeight).toBe(700);
+    expect(config.codeFontFamily).toBe("source-code-pro");
+    expect(config.codeFontWeight).toBe(300);
+    expect(config.codeFontSize).toBe(15);
+    expect(config.readingLineHeight).toBe(1.35);
+    // Legacy baseSize 13 is preserved
+    expect(config.interfaceFontSize).toBe(13);
   });
 
   it("migrates v1 invalid fields safely and defaults missing ones", () => {
-    withStorage(undefined, (storage) => {
-      const invalidLegacy = {
-        version: 1,
-        fontFamily: "unknown-font",
-        monoFontFamily: "unknown-mono",
-        fontWeight: 9999,
-        baseSize: 100, // outside legacy 12-24 -> default 15
-        codeFontSize: -5,
-        lineHeight: "not-a-number",
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(invalidLegacy));
-      const config = readTypography();
-      expect(config.version).toBe(3);
-      expect(config.interfaceFontFamily).toBe("inter");
-      expect(config.codeFontFamily).toBe("jetbrains-mono");
-      expect(config.interfaceFontSize).toBe(15);
-      expect(config.codeFontSize).toBe(13);
-      expect(config.readingLineHeight).toBe(1.5);
-    });
+    const invalidLegacy = {
+      version: 1,
+      fontFamily: "unknown-font",
+      monoFontFamily: "unknown-mono",
+      fontWeight: 9999,
+      baseSize: 100, // outside legacy 12-24 -> default 15
+      codeFontSize: -5,
+      lineHeight: "not-a-number",
+    };
+    const config = migrateTypography(invalidLegacy);
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe("inter");
+    expect(config.codeFontFamily).toBe("jetbrains-mono");
+    expect(config.interfaceFontSize).toBe(15);
+    expect(config.codeFontSize).toBe(13);
+    expect(config.readingLineHeight).toBe(1.5);
   });
 
   it("migrates v2 records normalizing interfaceFontSize * appScale clamped to 12-24", () => {
-    withStorage(undefined, (storage) => {
-      const v2Record = {
-        version: 2,
-        interfaceFontFamily: "figtree",
-        interfaceFontSize: 16,
-        interfaceFontWeight: 500,
-        codeFontFamily: "jetbrains-mono",
-        codeFontSize: 14,
-        codeFontWeight: 400,
-        codeWordWrap: true,
-        terminalFontFamily: "jetbrains-mono",
-        terminalFontSize: 12,
-        terminalFontWeight: 400,
-        terminalWrap: true,
-        readingLineHeight: 1.5,
-        appScale: 1.25,
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(v2Record));
-      const config = readTypography();
-      expect(config.version).toBe(3);
-      expect(config.interfaceFontFamily).toBe("figtree");
-      // 16 * 1.25 = 20
-      expect(config.interfaceFontSize).toBe(20);
-      expect(config.codeWordWrap).toBe(true);
-    });
+    const v2Record = {
+      version: 2,
+      interfaceFontFamily: "figtree",
+      interfaceFontSize: 16,
+      interfaceFontWeight: 500,
+      codeFontFamily: "jetbrains-mono",
+      codeFontSize: 14,
+      codeFontWeight: 400,
+      codeWordWrap: true,
+      terminalFontFamily: "jetbrains-mono",
+      terminalFontSize: 12,
+      terminalFontWeight: 400,
+      terminalWrap: true,
+      readingLineHeight: 1.5,
+      appScale: 1.25,
+    };
+    const config = migrateTypography(v2Record);
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe("figtree");
+    // 16 * 1.25 = 20
+    expect(config.interfaceFontSize).toBe(20);
+    expect(config.codeWordWrap).toBe(true);
   });
 
   it("migrates v2 boundary scale values, invalid scales, and clamps properly", () => {
@@ -297,70 +208,61 @@ describe("Typography config, storage & scoped resets (v3)", () => {
   });
 
   it("preserves existing valid V3 user preferences (e.g., 16px and 400 weight) unchanged", () => {
-    withStorage(undefined, (storage) => {
-      const existingV3UserConfig: TypographyConfig = {
-        version: 3,
-        interfaceFontFamily: "roboto",
-        interfaceFontSize: 16,
-        interfaceFontWeight: 400,
-        codeFontFamily: "fira-code",
-        codeFontSize: 14,
-        codeFontWeight: 500,
-        codeWordWrap: true,
-        terminalFontFamily: "source-code-pro",
-        terminalFontSize: 13,
-        terminalFontWeight: 600,
-        terminalWrap: false,
-        readingLineHeight: 1.6,
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(existingV3UserConfig));
-      const read = readTypography();
-      expect(read).toEqual(existingV3UserConfig);
-      expect(read.interfaceFontSize).toBe(16);
-      expect(read.interfaceFontWeight).toBe(400);
-      expect(read.codeFontSize).toBe(14);
-      expect(read.codeFontWeight).toBe(500);
-      expect(read.terminalFontSize).toBe(13);
-      expect(read.terminalFontWeight).toBe(600);
-      expect(read.readingLineHeight).toBe(1.6);
-    });
+    const existingV3UserConfig: TypographyConfig = {
+      version: 3,
+      interfaceFontFamily: "roboto",
+      interfaceFontSize: 16,
+      interfaceFontWeight: 400,
+      codeFontFamily: "fira-code",
+      codeFontSize: 14,
+      codeFontWeight: 500,
+      codeWordWrap: true,
+      terminalFontFamily: "source-code-pro",
+      terminalFontSize: 13,
+      terminalFontWeight: 600,
+      terminalWrap: false,
+      readingLineHeight: 1.6,
+    };
+    const read = migrateTypography(existingV3UserConfig);
+    expect(read).toEqual(existingV3UserConfig);
+    expect(read.interfaceFontSize).toBe(16);
+    expect(read.interfaceFontWeight).toBe(400);
+    expect(read.codeFontSize).toBe(14);
+    expect(read.codeFontWeight).toBe(500);
+    expect(read.terminalFontSize).toBe(13);
+    expect(read.terminalFontWeight).toBe(600);
+    expect(read.readingLineHeight).toBe(1.6);
   });
 
   it("validates every v3 field independently and enforces strict booleans", () => {
-    withStorage(undefined, (storage) => {
-      storage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          version: 3,
-          interfaceFontFamily: "not-a-font",
-          interfaceFontSize: 99,
-          interfaceFontWeight: 42,
-          codeFontFamily: "not-a-mono",
-          codeFontSize: 99,
-          codeFontWeight: 42,
-          codeWordWrap: "yes", // malformed non-boolean -> false
-          terminalFontFamily: "not-a-mono",
-          terminalFontSize: 99,
-          terminalFontWeight: 42,
-          terminalWrap: "no", // malformed non-boolean -> true
-          readingLineHeight: 99,
-        }),
-      );
-      const config = readTypography();
-      expect(config.version).toBe(3);
-      expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
-      expect(config.interfaceFontSize).toBe(15);
-      expect(config.interfaceFontWeight).toBe(300);
-      expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
-      expect(config.codeFontSize).toBe(13);
-      expect(config.codeFontWeight).toBe(400);
-      expect(config.codeWordWrap).toBe(false);
-      expect(config.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
-      expect(config.terminalFontSize).toBe(12);
-      expect(config.terminalFontWeight).toBe(400);
-      expect(config.terminalWrap).toBe(true);
-      expect(config.readingLineHeight).toBe(1.5);
+    const config = migrateTypography({
+      version: 3,
+      interfaceFontFamily: "not-a-font",
+      interfaceFontSize: 99,
+      interfaceFontWeight: 42,
+      codeFontFamily: "not-a-mono",
+      codeFontSize: 99,
+      codeFontWeight: 42,
+      codeWordWrap: "yes", // malformed non-boolean -> false
+      terminalFontFamily: "not-a-mono",
+      terminalFontSize: 99,
+      terminalFontWeight: 42,
+      terminalWrap: "no", // malformed non-boolean -> true
+      readingLineHeight: 99,
     });
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
+    expect(config.interfaceFontSize).toBe(15);
+    expect(config.interfaceFontWeight).toBe(300);
+    expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
+    expect(config.codeFontSize).toBe(13);
+    expect(config.codeFontWeight).toBe(400);
+    expect(config.codeWordWrap).toBe(false);
+    expect(config.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
+    expect(config.terminalFontSize).toBe(12);
+    expect(config.terminalFontWeight).toBe(400);
+    expect(config.terminalWrap).toBe(true);
+    expect(config.readingLineHeight).toBe(1.5);
 
     // Test malformed boolean variations: only real booleans accepted
     for (const malformed of ["true", "false", 0, 1, null, undefined]) {
@@ -374,88 +276,75 @@ describe("Typography config, storage & scoped resets (v3)", () => {
     }
   });
 
-  it("proves migration and serialization idempotence across repeated cycles", () => {
-    withStorage(undefined, (storage) => {
-      const v2 = {
-        version: 2,
-        interfaceFontFamily: "outfit",
-        interfaceFontSize: 16,
-        interfaceFontWeight: 600,
-        codeFontFamily: "fira-code",
-        codeFontSize: 14,
-        codeFontWeight: 500,
-        codeWordWrap: true,
-        terminalFontFamily: "source-code-pro",
-        terminalFontSize: 13,
-        terminalFontWeight: 400,
-        terminalWrap: false,
-        readingLineHeight: 1.65,
-        appScale: 1.125, // 16 * 1.125 = 18
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(v2));
+  it("proves migration idempotence across repeated cycles", () => {
+    const v2 = {
+      version: 2,
+      interfaceFontFamily: "outfit",
+      interfaceFontSize: 16,
+      interfaceFontWeight: 600,
+      codeFontFamily: "fira-code",
+      codeFontSize: 14,
+      codeFontWeight: 500,
+      codeWordWrap: true,
+      terminalFontFamily: "source-code-pro",
+      terminalFontSize: 13,
+      terminalFontWeight: 400,
+      terminalWrap: false,
+      readingLineHeight: 1.65,
+      appScale: 1.125, // 16 * 1.125 = 18
+    };
 
-      const read1 = readTypography();
-      expect(read1.interfaceFontSize).toBe(18);
-      expect(read1.version).toBe(3);
+    const read1 = migrateTypography(v2);
+    expect(read1.interfaceFontSize).toBe(18);
+    expect(read1.version).toBe(3);
 
-      const serialized1 = storage.getItem(STORAGE_KEY);
-      const read2 = readTypography();
-      const serialized2 = storage.getItem(STORAGE_KEY);
-
-      expect(read2).toEqual(read1);
-      expect(serialized2).toBe(serialized1);
-
-      // Write -> read -> write stability
-      // Note: writeTypography modifies lastNotifiedFontId to "outfit"
-      writeTypography(read2);
-      const read3 = readTypography();
-      expect(read3).toEqual(read2);
-      // Restore default typography so module-level baseline doesn't leak into subsequent tests
-      writeTypography(DEFAULT_TYPOGRAPHY);
-    });
+    const read2 = migrateTypography(read1);
+    expect(read2).toEqual(read1);
+    const read3 = migrateTypography(read2);
+    expect(read3).toEqual(read2);
   });
 
   it("observable font subscription matrix: notifies strictly on Interface Font changes", () => {
-    withStorage(undefined, () => {
-      // Establish baseline read inside clean storage
-      const current = readTypography();
-      expect(current.interfaceFontFamily).toBe("inter");
+    // Establish baseline in-memory config
+    writeTypography(DEFAULT_TYPOGRAPHY);
+    const current = readTypography();
+    expect(current.interfaceFontFamily).toBe("inter");
 
-      const received: string[] = [];
-      const unsubscribe = subscribeInterfaceFont((id) => received.push(id));
+    const received: string[] = [];
+    const unsubscribe = subscribeInterfaceFont((id) => received.push(id));
 
-      // 1. Unrelated changes must NOT notify
-      writeTypography({ ...current, interfaceFontSize: 20 });
-      writeTypography({ ...current, interfaceFontWeight: 700 });
-      writeTypography({ ...current, codeFontFamily: "fira-code" });
-      writeTypography({ ...current, terminalFontFamily: "source-code-pro" });
-      writeTypography({ ...current, readingLineHeight: 1.65 });
-      expect(received).toEqual([]);
+    // 1. Unrelated changes must NOT notify
+    writeTypography({ ...current, interfaceFontSize: 20 });
+    writeTypography({ ...current, interfaceFontWeight: 700 });
+    writeTypography({ ...current, codeFontFamily: "fira-code" });
+    writeTypography({ ...current, terminalFontFamily: "source-code-pro" });
+    writeTypography({ ...current, readingLineHeight: 1.65 });
+    expect(received).toEqual([]);
 
-      // 2. Genuine Interface Font change MUST notify
-      writeTypography({ ...current, interfaceFontFamily: "roboto" });
-      expect(received).toEqual(["roboto"]);
+    // 2. Genuine Interface Font change MUST notify
+    writeTypography({ ...current, interfaceFontFamily: "roboto" });
+    expect(received).toEqual(["roboto"]);
 
-      // 3. Repeated write of the same font must NOT notify again
-      writeTypography({ ...current, interfaceFontFamily: "roboto" });
-      expect(received).toEqual(["roboto"]);
+    // 3. Repeated write of the same font must NOT notify again
+    writeTypography({ ...current, interfaceFontFamily: "roboto" });
+    expect(received).toEqual(["roboto"]);
 
-      // 4. Second subscriber receives notifications simultaneously
-      const secondReceived: string[] = [];
-      const unsubscribe2 = subscribeInterfaceFont((id) => secondReceived.push(id));
+    // 4. Second subscriber receives notifications simultaneously
+    const secondReceived: string[] = [];
+    const unsubscribe2 = subscribeInterfaceFont((id) => secondReceived.push(id));
 
-      writeTypography({ ...current, interfaceFontFamily: "outfit" });
-      expect(received).toEqual(["roboto", "outfit"]);
-      expect(secondReceived).toEqual(["outfit"]);
+    writeTypography({ ...current, interfaceFontFamily: "outfit" });
+    expect(received).toEqual(["roboto", "outfit"]);
+    expect(secondReceived).toEqual(["outfit"]);
 
-      // 5. Unsubscribed listener stops receiving notifications
-      unsubscribe();
-      writeTypography({ ...current, interfaceFontFamily: "figtree" });
-      expect(received).toEqual(["roboto", "outfit"]); // unchanged
-      expect(secondReceived).toEqual(["outfit", "figtree"]);
+    // 5. Unsubscribed listener stops receiving notifications
+    unsubscribe();
+    writeTypography({ ...current, interfaceFontFamily: "figtree" });
+    expect(received).toEqual(["roboto", "outfit"]); // unchanged
+    expect(secondReceived).toEqual(["outfit", "figtree"]);
 
-      unsubscribe2();
-    });
+    unsubscribe2();
+    writeTypography(DEFAULT_TYPOGRAPHY);
   });
 
   it("clamps interface and code weights independently", () => {
@@ -553,21 +442,11 @@ describe("Typography config, storage & scoped resets (v3)", () => {
     expect(reset).toEqual(DEFAULT_TYPOGRAPHY);
   });
 
-  it("safely recovers from corrupted storage", () => {
-    withStorage(undefined, (storage) => {
-      storage.setItem(STORAGE_KEY, "{ corrupted_json: ... ");
-      const config = readTypography();
-      expect(config).toEqual(DEFAULT_TYPOGRAPHY);
-    });
-  });
-
-  it("safely recovers from a non-object payload", () => {
-    withStorage(undefined, (storage) => {
-      storage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
-      expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
-      storage.setItem(STORAGE_KEY, JSON.stringify("nope"));
-      expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
-    });
+  it("safely recovers from corrupted/non-object payloads", () => {
+    expect(migrateTypography(undefined)).toEqual(DEFAULT_TYPOGRAPHY);
+    expect(migrateTypography(null)).toEqual(DEFAULT_TYPOGRAPHY);
+    expect(migrateTypography([1, 2, 3])).toEqual(DEFAULT_TYPOGRAPHY);
+    expect(migrateTypography("nope")).toEqual(DEFAULT_TYPOGRAPHY);
   });
 });
 

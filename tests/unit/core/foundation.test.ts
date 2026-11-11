@@ -80,7 +80,7 @@ function resetStores(): void {
         sharedTabs,
       });
       usePreferencesStore.getState().applySnapshot(next);
-      return next;
+      return { ok: true, snapshot: next };
     },
   } as any);
 }
@@ -90,7 +90,7 @@ function setSharedTabs(ids: string[], activeLocal?: string): void {
     baseSnapshot({
       revision: 2,
       sharedTabs: ids.map((id) => ({ kind: "chat" as const, ref: id })),
-      }),
+    }),
   );
   if (activeLocal) useChatTabsStore.setState({ localActiveKey: chatKey(activeLocal) });
 }
@@ -148,9 +148,7 @@ describe("unified tab store (local presentation)", () => {
     setSharedTabs(["a", "b"], "a");
     await useChatTabsStore.getState().requestSharedClose("b");
     const s = useChatTabsStore.getState();
-    expect(usePreferencesStore.getState().snapshot?.sharedTabs.map((t) => t.ref)).toEqual([
-      "a",
-    ]);
+    expect(usePreferencesStore.getState().snapshot?.sharedTabs.map((t) => t.ref)).toEqual(["a"]);
     expect(s.localActiveKey).toBe("chat:a");
   });
 

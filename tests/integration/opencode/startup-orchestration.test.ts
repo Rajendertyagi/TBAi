@@ -11,7 +11,7 @@ import {
   resetConnectionStateForTests,
 } from "@/services/opencode/connectionState.ts";
 import type { OpenCodeTransport } from "@/services/opencode/http.ts";
-import { revalidateAdoptedTarget } from "@/services/opencode/recovery.ts";
+import { getLostAdoptedRecovery, revalidateAdoptedTarget } from "@/services/opencode/recovery.ts";
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
 import {
   isOpenCodeRevalidationRunning,
@@ -423,7 +423,7 @@ describe("B7 — the version strategy at the startup boundary", () => {
   });
 });
 
-describe("D3 — loss after adoption falls back to the managed service, once", () => {
+describe("D3/P3-A - adopted loss recovery is affinity-safe (no unsafe global managed fallback)", () => {
   async function adoptFake(fake: FakeOpenCode): Promise<ManagedStarts> {
     const starts = newStarts();
     const outcome = await startOpenCodeRuntime({
@@ -437,36 +437,45 @@ describe("D3 — loss after adoption falls back to the managed service, once", (
     return starts;
   }
 
-  it("a confirmed loss starts one managed service and clears the adopted target", async () => {
+  it("confirmed loss clears dead adopted target without installing managed fallback globally", async () => {
     const fake = startFakeOpenCode();
     const starts = await adoptFake(fake);
     fake.stop();
 
     const outcome = await revalidateAdoptedTarget({
       config: FAST_CONFIG,
-      startManaged: managedStart(starts),
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
     });
 
-    expect(outcome).toEqual({ status: "fallback", managedBaseUrl: MANAGED_URL });
-    expect(starts.count).toBe(1);
-    expect(readConnectionState().target).toMatchObject({
-      mode: "managed",
-      baseUrl: MANAGED_URL,
+    expect(outcome).toEqual({
+      status: "unavailable",
+      origin: fake.origin,
+      reason: "cannot_rediscover",
     });
+    expect(starts.count).toBe(0);
+    expect(readConnectionState().target.mode).toBe("unresolved");
+    expect(getLostAdoptedRecovery()?.lost.origin).toBe(fake.origin);
   });
 
-  it("repeated recovery events share one managed start", async () => {
+  it("repeated recovery events share one in-flight recovery run", async () => {
     const fake = startFakeOpenCode();
-    const starts = await adoptFake(fake);
+    await adoptFake(fake);
     fake.stop();
 
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let rediscoverCalls = 0;
     const options = {
       config: FAST_CONFIG,
-      startManaged: managedStart(starts, { gate }),
+      rediscover: async () => {
+        rediscoverCalls += 1;
+        await gate;
+        return null;
+      },
+      verifySessionAvailability: async () => true,
     };
 
     const first = revalidateAdoptedTarget(options);
@@ -475,10 +484,10 @@ describe("D3 — loss after adoption falls back to the managed service, once", (
 
     release();
     expect(await Promise.all([first, second])).toEqual([
-      { status: "fallback", managedBaseUrl: MANAGED_URL },
-      { status: "fallback", managedBaseUrl: MANAGED_URL },
+      { status: "unavailable", origin: fake.origin, reason: "cannot_rediscover" },
+      { status: "unavailable", origin: fake.origin, reason: "cannot_rediscover" },
     ]);
-    expect(starts.count).toBe(1);
+    expect(rediscoverCalls).toBe(1);
   });
 
   it("one transient probe failure preserves the adopted target", async () => {
@@ -498,7 +507,8 @@ describe("D3 — loss after adoption falls back to the managed service, once", (
     const outcome = await revalidateAdoptedTarget({
       config: { ...FAST_CONFIG, adoptedLossConfirmAttempts: 2 },
       probeTransport: transport,
-      startManaged: managedStart(starts),
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
     });
 
     expect(outcome).toEqual({ status: "preserved", lastStatus: 503 });
@@ -526,13 +536,14 @@ describe("D3 — loss after adoption falls back to the managed service, once", (
       fake.stop();
       await revalidateAdoptedTarget({
         config: FAST_CONFIG,
-        startManaged: managedStart(starts),
+        rediscover: async () => null,
+        verifySessionAvailability: async () => true,
       });
     } finally {
       unregister();
     }
 
-    expect(starts.count).toBe(1);
+    expect(starts.count).toBe(0);
     expect(enumerations).toBe(0);
   });
 });

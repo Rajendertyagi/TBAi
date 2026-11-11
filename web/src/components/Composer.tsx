@@ -690,16 +690,22 @@ function Composer({
                         <button
                           type="button"
                           onClick={() => {
-                            // Explicit server cancel: runs are server-owned, so
-                            // the browser abort alone merely detaches. Shared
-                            // helper looks up the resumable-store stream id and
-                            // cancels it; fire-and-forget so the local cancel
-                            // proceeds regardless of the outcome.
-                            const item = aui.threadListItem.getState() as {
-                              remoteId?: string | null;
-                              id?: string | null;
-                            };
-                            void cancelActiveRun(item.remoteId ?? item.id);
+                            // Explicit server cancel for Direct runs: runs are
+                            // server-owned, so the browser abort alone merely
+                            // detaches. OpenCode runtime cancellation is handled
+                            // by the runtime adapter's onCancel (stopComposer).
+                            if (isCodeSurface) return;
+                            const item = (() => {
+                              try {
+                                return aui.threadListItem.getState() as {
+                                  remoteId?: string | null;
+                                  id?: string | null;
+                                };
+                              } catch {
+                                return null;
+                              }
+                            })();
+                            void cancelActiveRun(item?.remoteId ?? item?.id ?? threadKey);
                           }}
                           aria-label={composerConfig.copy.stopGenerating}
                           className={cn(

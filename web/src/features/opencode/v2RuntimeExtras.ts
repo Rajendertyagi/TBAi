@@ -3,6 +3,7 @@ import type { FormInfo, SessionFormReplyInput, SessionInfo } from "@opencode/cli
 import type { V2PermissionView } from "./v2Permissions";
 import type { V2DesiredSelection, V2ThreadState } from "./v2Types";
 import type { V2PromptAdmissionResult, V2ThreadController } from "./v2ThreadController";
+import type { V2LifecycleProjection } from "./sync/lifecycleProjection";
 
 /** The typed native runtime surface exposed through assistant-ui extras. */
 export interface V2RuntimeExtras {
@@ -10,6 +11,7 @@ export interface V2RuntimeExtras {
   readonly sessionId: string;
   readonly session: SessionInfo | null;
   readonly state: V2ThreadState;
+  readonly projection: V2LifecycleProjection;
   readonly model: V2ThreadState["model"];
   readonly agent: string | null;
   readonly desiredModel: V2ThreadState["desiredModel"];
@@ -19,6 +21,8 @@ export interface V2RuntimeExtras {
   setDesiredSelection(selection: V2DesiredSelection): void;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
+  /** Reconciles a degraded lifecycle snapshot; bounded and safe to call twice. */
+  reconcileLifecycle(): Promise<void>;
   /**
    * Explicit manual recovery: starts a fresh attempt even after the automatic
    * retry budget is spent.
@@ -30,7 +34,12 @@ export interface V2RuntimeExtras {
   reconcileStagedRevert(): Promise<void>;
   reconcilePendingPrompt(messageId: string): Promise<"admitted" | "absent" | "unresolved">;
   awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult>;
-  cancel(): Promise<void>;
+  /** Composer Stop: stops the safely identified active execution only. */
+  stopComposer(): Promise<void>;
+  /** Cancels only the selected queued prompt's inbox item. */
+  cancelQueuedPrompt(promptId: string): Promise<void>;
+  /** Explicit session-wide stop request. */
+  stopSession(): Promise<void>;
   compact(): Promise<void>;
   regenerate(selectedAssistantParentId: string | null): Promise<void>;
   replyToPermission(requestId: string, decision: "once" | "always" | "reject"): Promise<void>;
@@ -43,6 +52,7 @@ export interface V2RuntimeExtras {
 export function createV2RuntimeExtras(
   controller: V2ThreadController,
   state: V2ThreadState,
+  projection: V2LifecycleProjection,
   permissions: readonly V2PermissionView[],
 ): V2RuntimeExtras {
   return {
@@ -50,6 +60,7 @@ export function createV2RuntimeExtras(
     sessionId: controller.getState().sessionId,
     session: state.session,
     state,
+    projection,
     model: state.model,
     agent: state.agent,
     desiredModel: state.desiredModel,
@@ -59,11 +70,14 @@ export function createV2RuntimeExtras(
     setDesiredSelection: (selection) => controller.setDesiredSelection(selection),
     awaitReady: () => controller.awaitReady(),
     refresh: () => controller.refresh(),
+    reconcileLifecycle: () => controller.reconcileLifecycle(),
     retry: () => controller.retry(),
     reconcileStagedRevert: () => controller.reconcileStagedRevert(),
     reconcilePendingPrompt: (messageId) => controller.reconcilePendingPrompt(messageId),
     awaitPromptAdmission: (messageId) => controller.awaitPromptAdmission(messageId),
-    cancel: () => controller.cancel(),
+    stopComposer: () => controller.stopComposer(),
+    cancelQueuedPrompt: (promptId) => controller.cancelQueuedPrompt(promptId),
+    stopSession: () => controller.stopSession(),
     compact: () => controller.compact(),
     regenerate: (parentId) => controller.regenerate(parentId),
     replyToPermission: (requestId, decision) => controller.replyToPermission(requestId, decision),

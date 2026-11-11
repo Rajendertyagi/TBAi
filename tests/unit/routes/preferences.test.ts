@@ -68,7 +68,10 @@ describe("preferences routes (canonical)", () => {
       const patchRes = await app.request("http://localhost/api/preferences", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ baseRevision: 1, preferences: { appearance: { themeMode: "dark" } } }),
+        body: JSON.stringify({
+          baseRevision: 1,
+          preferences: { appearance: { themeMode: "dark" } },
+        }),
       });
       expect(patchRes.status).toBe(500);
       const rawAfter = db
