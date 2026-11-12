@@ -60,6 +60,9 @@ const RUNTIME_ENV_FLAG = "TBAI_OPENCODE_RUNTIME_TESTS";
  */
 const SUITE_TIMEOUT_MS = 120_000;
 
+/** Maximum characters of failure diagnostics printed per suite. */
+export const MAX_FAILURE_DIAGNOSTICS_CHARS = 12_000;
+
 /** Suites that must pass on every PR, in run order. */
 export const REQUIRED_SUITES = [
   "audit-b7-opencode",
@@ -86,24 +89,110 @@ type SuiteOutcome = {
   readonly ok: boolean;
   readonly detail: string;
   readonly elapsedMs: number;
+  readonly diagnostics?: string;
 };
 
 type Counts = { pass: number; fail: number; skip: number };
 
+/** Removes ANSI escape sequences so parsing and diagnostics are stable. */
+export function stripAnsi(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence stripping
+  return text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 /** Parses bun's per-file summary lines (" 7 pass", " 0 fail", " 1 skip"). */
 export function parseCounts(output: string): Counts {
   const counts: Counts = { pass: 0, fail: 0, skip: 0 };
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence stripping
-  const stripped = output.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+  const stripped = stripAnsi(output);
   for (const line of stripped.split(/\r?\n/)) {
     const match = /^\s*(\d+)\s+(pass|fail|skip(?:ped)?)\s*$/.exec(line);
     if (!match) continue;
     const kind = match[2];
-    if (kind === "pass") counts.pass += Number(match[1]);
-    else if (kind === "fail") counts.fail += Number(match[1]);
-    else counts.skip += Number(match[1]);
+    // Bun prints per-file and final totals; keep the last reported value for
+    // each kind so a single-suite run is not double-counted.
+    if (kind === "pass") counts.pass = Number(match[1]);
+    else if (kind === "fail") counts.fail = Number(match[1]);
+    else counts.skip = Number(match[1]);
   }
   return counts;
+}
+
+/**
+ * Redacts secret-like values from diagnostics before they reach CI logs.
+ * This is intentionally conservative and bounded; it does not attempt to
+ * understand every credential format.
+ */
+export function sanitizeDiagnostics(text: string): string {
+  let out = text;
+  // Authorization headers / bearer tokens
+  out = out.replace(/(Authorization\s*:\s*Bearer\s+)[^\s"']+/gi, "$1[REDACTED]");
+  out = out.replace(/(Bearer\s+)[A-Za-z0-9._\-+/=]{12,}/g, "$1[REDACTED]");
+  // Common key/token/password assignments in text/json/env-like output
+  out = out.replace(
+    /((?:api[_-]?key|token|secret|password|passwd|pwd|session[_-]?id|cookie|set-cookie)\s*[:=]\s*)(["']?)([^\s"',}\]]{8,})\2/gi,
+    "$1$2[REDACTED]$2",
+  );
+  // OpenAI/Anthropic-like secret prefixes if they appear
+  out = out.replace(/\b(sk-[A-Za-z0-9]{16,})\b/g, "[REDACTED]");
+  out = out.replace(/\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[REDACTED]");
+  return out;
+}
+
+/**
+ * Extracts bounded, sanitized failure diagnostics from bun test output.
+ * Prefers failing test names, assertion details, expected/received values and
+ * stack traces; falls back to the tail when no structured failure is found.
+ */
+export function extractFailureDiagnostics(
+  output: string,
+  maxChars = MAX_FAILURE_DIAGNOSTICS_CHARS,
+): string {
+  const stripped = stripAnsi(output).replace(/\r\n/g, "\n");
+  const lines = stripped.split("\n");
+  const selected: string[] = [];
+  const failLineIdxs: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*\(fail\)\s+/.test(lines[i] ?? "")) failLineIdxs.push(i);
+  }
+
+  if (failLineIdxs.length > 0) {
+    for (const idx of failLineIdxs) {
+      const start = Math.max(0, idx - 1);
+      let end = Math.min(lines.length, idx + 40);
+      // extend until next fail marker or summary-ish boundary, but keep bounded
+      for (let j = idx + 1; j < Math.min(lines.length, idx + 120); j++) {
+        const line = lines[j] ?? "";
+        if (/^\s*\(fail\)\s+/.test(line)) {
+          end = j;
+          break;
+        }
+        if (/^\s*\d+\s+(pass|fail|skip)/.test(line) && j > idx + 2) {
+          end = j;
+          break;
+        }
+        end = j + 1;
+      }
+      selected.push(...lines.slice(start, end));
+      if (selected.join("\n").length > maxChars) break;
+    }
+  } else {
+    // No explicit (fail) markers: include error/assertion/stack-like lines and tail.
+    const interesting = lines.filter((line) =>
+      /(error:|Error:|AssertionError|expect\(|Expected|Received|at\s+\S|FAIL|timed? out|exit\s+\d+)/i.test(
+        line,
+      ),
+    );
+    if (interesting.length > 0) selected.push(...interesting.slice(0, 120));
+    if (selected.length === 0) selected.push(...lines.slice(-80));
+    else selected.push("", "--- output tail ---", ...lines.slice(-40));
+  }
+
+  let text = sanitizeDiagnostics(selected.join("\n").trim());
+  if (!text) text = "(no diagnostic output captured)";
+  if (text.length > maxChars) {
+    text = `${text.slice(0, maxChars)}\n... [diagnostics truncated to ${maxChars} chars]`;
+  }
+  return text;
 }
 
 function runSuite(name: string): SuiteOutcome {
@@ -129,19 +218,40 @@ function runSuite(name: string): SuiteOutcome {
   const summary = `${counts.pass} pass, ${counts.fail} fail, ${counts.skip} skip`;
 
   if (result.status !== 0) {
-    return { name, ok: false, detail: `exit ${result.status} (${summary})`, elapsedMs };
+    return {
+      name,
+      ok: false,
+      detail: `exit ${result.status} (${summary})`,
+      elapsedMs,
+      diagnostics: extractFailureDiagnostics(output),
+    };
   }
-  if (counts.fail > 0) return { name, ok: false, detail: summary, elapsedMs };
+  if (counts.fail > 0) {
+    return {
+      name,
+      ok: false,
+      detail: summary,
+      elapsedMs,
+      diagnostics: extractFailureDiagnostics(output),
+    };
+  }
   if (counts.skip > 0) {
     return {
       name,
       ok: false,
       detail: `${counts.skip} skipped; a skipped required suite proves nothing (${summary})`,
       elapsedMs,
+      diagnostics: extractFailureDiagnostics(output),
     };
   }
   if (counts.pass === 0) {
-    return { name, ok: false, detail: `no test executed (${summary})`, elapsedMs };
+    return {
+      name,
+      ok: false,
+      detail: `no test executed (${summary})`,
+      elapsedMs,
+      diagnostics: extractFailureDiagnostics(output),
+    };
   }
   return { name, ok: true, detail: summary, elapsedMs };
 }
@@ -290,6 +400,11 @@ export function runGate(registry: RuntimeSuiteRegistry = currentRuntimeSuiteRegi
     console.log(
       `${verdict} ${outcome.name} ${outcome.detail} (${(outcome.elapsedMs / 1000).toFixed(1)}s)`,
     );
+    if (!outcome.ok && outcome.diagnostics) {
+      console.log(`--- diagnostics: ${outcome.name} ---`);
+      console.log(outcome.diagnostics);
+      console.log(`--- end diagnostics: ${outcome.name} ---`);
+    }
     return outcome;
   });
 

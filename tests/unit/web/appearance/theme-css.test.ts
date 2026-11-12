@@ -145,6 +145,38 @@ describe("contrast & legibility", () => {
       }
     }
   });
+
+  it("guarantees status bar text meets WCAG AA (>= 4.5:1) in every theme", () => {
+    for (const theme of THEMES) {
+      for (const variant of ["light", "dark"] as const) {
+        const vars = resolveThemeVars(theme, variant);
+        const fg = parseColor(vars["--muted-foreground"]);
+        const bg = parseColor(vars["--statusbar"]);
+        if (fg && bg) {
+          const ratio = contrastRatio(fg, bg);
+          expect(ratio, `${theme.id}/${variant}: --muted-foreground on --statusbar`).toBeGreaterThanOrEqual(
+            4.5,
+          );
+        }
+      }
+    }
+  });
+
+  it("guarantees link text meets WCAG AA (>= 4.5:1) in every theme", () => {
+    for (const theme of THEMES) {
+      for (const variant of ["light", "dark"] as const) {
+        const vars = resolveThemeVars(theme, variant);
+        const fg = parseColor(vars["--link"]);
+        const bg = parseColor(vars["--background"]);
+        if (fg && bg) {
+          const ratio = contrastRatio(fg, bg);
+          expect(ratio, `${theme.id}/${variant}: --link on --background`).toBeGreaterThanOrEqual(
+            4.5,
+          );
+        }
+      }
+    }
+  });
 });
 
 describe("themeCss", () => {

@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { contrastRatio, mix, parseColor } from "../src/features/appearance/theme-color.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -313,13 +314,54 @@ export function resolveThemeVariables(
   // 3. Status Bar & Link Text Contrast Contract:
   // In StatusBar.tsx, text is text-muted-foreground.
   // We offset statusbar subtly from background so text is 100% readable in every theme.
-  result["--statusbar"] = isDark
-    ? "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)"
-    : "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)";
+  const ensureContrast = (candidate: string, against: string, toward: string, min = 4.5): string => {
+    const bgc = parseColor(against);
+    let current = candidate;
+    if (!bgc) return current;
+    for (let i = 0; i <= 20; i++) {
+      const fgc = parseColor(current);
+      if (fgc && contrastRatio(fgc, bgc) >= min) return current;
+      current = mix(current, toward, 0.12);
+    }
+    return toward;
+  };
+
+  // Ensure muted-foreground is readable on background and statusbar (status bar uses it).
+  result["--muted-foreground"] = ensureContrast(result["--muted-foreground"] || mutedFg, bg, fg);
+
+  const statusbarBase = isDark ? mix(bg, fg, 0.1) : mix(bg, fg, 0.06);
+  // Ensure muted-foreground remains readable on statusbar.
+  {
+    let sb = statusbarBase;
+    const mfg = parseColor(result["--muted-foreground"]);
+    for (let i = 0; i < 40; i++) {
+      const sbc = parseColor(sb);
+      if (mfg && sbc && contrastRatio(mfg, sbc) >= 4.5) break;
+      const towardBg = mix(sb, bg, 0.2);
+      const towardFg = mix(sb, fg, 0.2);
+      const rBg = mfg && parseColor(towardBg) ? contrastRatio(mfg, parseColor(towardBg)!) : 0;
+      const rFg = mfg && parseColor(towardFg) ? contrastRatio(mfg, parseColor(towardFg)!) : 0;
+      const next = rFg > rBg ? towardFg : towardBg;
+      if (next === sb) break;
+      sb = next;
+    }
+    // If still insufficient, fall back to background and strengthen muted-foreground.
+    let mfgc = parseColor(result["--muted-foreground"]);
+    let sbc = parseColor(sb);
+    if (mfgc && sbc && contrastRatio(mfgc, sbc) < 4.5) {
+      sb = bg;
+      result["--muted-foreground"] = ensureContrast(result["--muted-foreground"], sb, fg);
+    }
+    result["--statusbar"] = sb;
+  }
 
   // Links in prose must maintain high contrast as text (not button fills).
-  result["--link"] = isDark ? "oklch(0.8711 0.0055 286.3)" : vars.primary || "oklch(0.2103 0.0059 285.9)";
-  result["--link-hover"] = isDark ? "oklch(0.95 0 0)" : vars.foreground || "oklch(0.1408 0.0044 285.8)";
+  const linkBase = isDark
+    ? "oklch(0.8711 0.0055 286.3)"
+    : vars.primary || "oklch(0.2103 0.0059 285.9)";
+  result["--link"] = ensureContrast(linkBase, bg, fg);
+  const linkHoverBase = isDark ? "oklch(0.95 0 0)" : vars.foreground || "oklch(0.1408 0.0044 285.8)";
+  result["--link-hover"] = ensureContrast(linkHoverBase, bg, fg);
 
   if (!result["--success"]) {
     result["--success"] = isDark ? "oklch(0.8003 0.1821 151.7)" : "oklch(0.6271 0.1699 149.2)";
