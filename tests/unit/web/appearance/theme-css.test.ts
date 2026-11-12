@@ -154,9 +154,10 @@ describe("contrast & legibility", () => {
         const bg = parseColor(vars["--statusbar"]);
         if (fg && bg) {
           const ratio = contrastRatio(fg, bg);
-          expect(ratio, `${theme.id}/${variant}: --muted-foreground on --statusbar`).toBeGreaterThanOrEqual(
-            4.5,
-          );
+          expect(
+            ratio,
+            `${theme.id}/${variant}: --muted-foreground on --statusbar`,
+          ).toBeGreaterThanOrEqual(4.5);
         }
       }
     }

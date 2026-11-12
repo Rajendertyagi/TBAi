@@ -37,7 +37,6 @@ import {
   parseCounts,
   REQUIRED_SUITES,
   runtimeSuiteNames,
-  sanitizeDiagnostics,
   stripAnsi,
   validateRuntimeSuiteRegistry,
 } from "../../../scripts/run-opencode-runtime-suites.ts";
@@ -93,7 +92,10 @@ describe("the runtime-suite gate (RT-007)", () => {
   });
 
   it("the opencode-runtime CI job runs the gate", () => {
-    const workflow = readFileSync(path.join(REPO_ROOT, ".github", "workflows", "tests.yml"), "utf8");
+    const workflow = readFileSync(
+      path.join(REPO_ROOT, ".github", "workflows", "tests.yml"),
+      "utf8",
+    );
     // The job must exist and its step must invoke the gate script. A renamed
     // command or a deleted step would leave the job green having checked nothing.
     expect(workflow).toContain("opencode-runtime:");
