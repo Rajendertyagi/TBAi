@@ -355,7 +355,11 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetAllBtn).toBeVisible();
     await resetAllBtn.click();
 
-    saved = await readSaved({ interfaceFontFamily: "inter", readingLineHeight: 1.5, codeFontFamily: "jetbrains-mono" } as any);
+    saved = await readSaved({
+      interfaceFontFamily: "inter",
+      readingLineHeight: 1.5,
+      codeFontFamily: "jetbrains-mono",
+    } as any);
     expect(saved).toMatchObject({
       interfaceFontFamily: "inter",
       interfaceFontSize: 15,
@@ -526,7 +530,10 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     );
   });
 
-  test("code word wrap is visual only — copied source is byte-identical", async ({ page, request }) => {
+  test("code word wrap is visual only — copied source is byte-identical", async ({
+    page,
+    request,
+  }) => {
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -700,7 +707,9 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
         async () => {
           const res = await request.get("/api/preferences");
           if (!res.ok()) return null;
-          const snap = (await res.json()) as { preferences?: { appearance?: { typography?: string } } };
+          const snap = (await res.json()) as {
+            preferences?: { appearance?: { typography?: string } };
+          };
           return snap.preferences?.appearance?.typography ?? null;
         },
         { timeout: 10000 },
