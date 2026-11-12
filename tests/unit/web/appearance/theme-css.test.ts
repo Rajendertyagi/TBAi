@@ -69,20 +69,30 @@ describe("theme registry", () => {
     expect(isThemeId(undefined)).toBe(false);
     expect(isThemeId(42)).toBe(false);
     expect(isThemeId("default")).toBe(true);
+    expect(isThemeId("supabase")).toBe(true);
+    // Themes present in the current registry remain valid ids
     expect(isThemeId("claude")).toBe(true);
-    // Legacy themes are removed cleanly
+    expect(isThemeId("neo-brutalism")).toBe(true);
+    // Unknown/legacy-removed themes are rejected
     expect(isThemeId("classic")).toBe(false);
     expect(isThemeId("aura")).toBe(false);
+    expect(isThemeId("not-a-real-theme")).toBe(false);
   });
 });
 
 describe("resolveThemeVars", () => {
-  it("resolves every TBAi token for every theme with full fidelity", () => {
+  it("resolves every standard TBAi token for every theme with full fidelity", () => {
     for (const theme of THEMES) {
       for (const variant of ["light", "dark"] as const) {
         const vars = resolveThemeVars(theme, variant);
-        // Verify vars match the theme's own token definition exactly
-        expect(vars).toBe(theme.tokens[variant]);
+        const expected: Record<string, string> = {};
+        for (const token of TBAI_TOKENS) {
+          const value = theme.tokens[variant][token];
+          if (value !== undefined) {
+            expected[token] = value;
+          }
+        }
+        expect(vars).toEqual(expected);
         for (const token of TBAI_TOKENS) {
           const value = vars[token];
           expect(typeof value, `${theme.id}/${variant} ${token}`).toBe("string");
@@ -93,29 +103,28 @@ describe("resolveThemeVars", () => {
     }
   });
 
-  it("enforces app-wide geometry invariant of 0.625rem radius across all themes", () => {
+  it("does not mix geometry or layout tokens into themes", () => {
     for (const theme of THEMES) {
       for (const variant of ["light", "dark"] as const) {
         const vars = resolveThemeVars(theme, variant);
-        expect(vars["--radius"], `${theme.id}/${variant} radius`).toBe("0.625rem");
+        expect(vars["--radius"]).toBeUndefined();
       }
     }
   });
 
-  it("enforces sleek borderless contract (no harsh black cut lines, card-soft defined)", () => {
+  it("enforces pure standard color tokens without hand-rolled variables", () => {
     for (const theme of THEMES) {
       for (const variant of ["light", "dark"] as const) {
         const vars = resolveThemeVars(theme, variant);
-        // No theme should have pitch black solid cut lines
-        expect(vars["--border"]).not.toBe("oklch(0 0 0)");
-        expect(vars["--border"]).not.toBe("oklch(0.0000 0 0)");
-        expect(vars["--border"]).not.toBe("#000000");
-
-        // Borderless card tokens must be non-empty strings
-        expect(vars["--card-soft"]).toBeString();
-        expect(vars["--card-outline"]).toBeString();
-        expect(vars["--statusbar"]).toBeString();
+        expect(vars["--border"]).toBeString();
         expect(vars["--link"]).toBeString();
+        expect(vars["--sidebar"]).toBeString();
+        expect(vars["--sidebar-border"]).toBeString();
+
+        // No fake synthesized tokens in pure themes
+        expect(vars["--card-soft"]).toBeUndefined();
+        expect(vars["--card-outline"]).toBeUndefined();
+        expect(vars["--statusbar"]).toBeUndefined();
       }
     }
   });
