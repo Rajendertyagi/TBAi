@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -192,6 +193,15 @@ export function generateThemes() {
 
   fs.writeFileSync(outDataPath, dataTsContent, "utf-8");
   console.log(`[themes] Wrote theme registry with full token fidelity to ${outDataPath}`);
+
+  // Keep generated output stable with the repository formatter.
+  const format = spawnSync("bunx", ["biome", "format", "--write", outCssPath, outDataPath], {
+    cwd: path.resolve(webRoot, ".."),
+    stdio: "inherit",
+  });
+  if (format.status !== 0) {
+    throw new Error(`[themes] biome format failed for generated theme files (exit ${format.status ?? "unknown"})`);
+  }
 }
 
 export function resolveThemeVariables(
