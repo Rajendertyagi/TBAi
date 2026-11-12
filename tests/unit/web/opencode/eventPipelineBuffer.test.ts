@@ -1,5 +1,5 @@
-/**
- * M5 — the hydration buffer must not lose streamed text.
+﻿/**
+ * M5 â€” the hydration buffer must not lose streamed text.
  *
  * The defect this pins: every buffered delta was one entry, the buffer was a
  * fixed 512 slots, and overflow dropped the OLDEST entries. A long response
@@ -64,7 +64,12 @@ function toolInputEnded(id: string, toolId: string): V2Event {
 function createHost(overrides: Partial<EventPipelineHost> = {}): EventPipelineHost {
   return {
     isDisposed: false,
-    config: { maxReconnectAttempts: 3, initialReconnectDelayMs: 10, maxReconnectDelayMs: 10 },
+    config: {
+      maxReconnectAttempts: 3,
+      initialReconnectDelayMs: 10,
+      maxReconnectDelayMs: 10,
+      streamIdleTimeoutMs: 30_000,
+    },
     isLive: () => true,
     ownsRuntime: () => true,
     retireAttempt: () => undefined,

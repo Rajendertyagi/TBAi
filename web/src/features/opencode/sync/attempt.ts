@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The connection attempt: one attempt's identity, readiness, abort signals,
  * load promise and hydration outcome.
  *
@@ -101,6 +101,15 @@ export interface Attempt {
    */
   readonly generation: OpenCodeV2Generation | null;
   /**
+   * When this attempt last received transport activity, in the same clock as
+   * `Date.now()`.
+   *
+   * Updated on every `onActivity` report (including keepalives). Used by
+   * foreground health checks to decide whether an established stream is stale
+   * without creating a second watchdog.
+   */
+  readonly lastActivityAt: number;
+  /**
    * Whether this attempt is still awaiting its first history projection.
    *
    * Events are buffered while this is true and applied directly once it is
@@ -158,6 +167,15 @@ export interface Attempt {
    * return unable to settle a newer attempt's readiness.
    */
   markReady(): void;
+  /**
+   * Aborts this attempt's connection without settling the attempt.
+   *
+   * Used by the idle watchdog and foreground health checks to force the
+   * existing reconnect path: the stream reader observes the abort and the
+   * pipeline schedules a replacement. A no-op once the attempt is retired or
+   * the connection is already aborted.
+   */
+  abortConnection(): void;
   /**
    * Fails this attempt terminally: settles it, aborts its connection and
    * rejects its readiness with the real failure.
@@ -222,6 +240,7 @@ export function createAttempt(
   let retired = false;
   let loadPromise: Promise<void> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastActivityAt = Date.now();
   let signalSuperseded: (() => void) | null = null;
   /**
    * Resolved by `retire()` only.
@@ -281,6 +300,11 @@ export function createAttempt(
     detachLifecycleListener();
   }
 
+  function abortConnection(): void {
+    if (retired || connection.signal.aborted) return;
+    connection.abort();
+  }
+
   function onIdle(): void {
     idleTimer = null;
     if (retired) return;
@@ -289,7 +313,7 @@ export function createAttempt(
     // the same situation as a dropped connection: abort the connection and let
     // the stream reader route the failure into the reconnect path, where the
     // attempt is retired and a replacement is scheduled.
-    connection.abort();
+    abortConnection();
   }
 
   function armIdleTimer(): void {
@@ -302,10 +326,15 @@ export function createAttempt(
     idleTimer = setTimeout(onIdle, streamIdleTimeoutMs);
   }
 
+  function onActivity(): void {
+    lastActivityAt = Date.now();
+    armIdleTimer();
+  }
+
   const signals: V2ConnectionSignals = {
     connectionSignal: connection.signal,
     lifecycleSignal,
-    onActivity: armIdleTimer,
+    onActivity,
   };
 
   // A watchdog outliving its controller would keep a Node/Bun process alive
@@ -390,6 +419,9 @@ export function createAttempt(
     get generation(): OpenCodeV2Generation | null {
       return adopted;
     },
+    get lastActivityAt(): number {
+      return lastActivityAt;
+    },
     get hydrating(): boolean {
       return hydrating;
     },
@@ -403,6 +435,7 @@ export function createAttempt(
     projectionCommitted,
     endHydration,
     markReady,
+    abortConnection,
     fail,
     retire,
     load,

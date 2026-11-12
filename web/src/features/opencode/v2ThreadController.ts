@@ -2975,7 +2975,7 @@ export function createV2ThreadController(
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    pipeline.cancelReconnect();
+    pipeline.dispose();
     // Retiring the current attempt rejects its readiness with the superseded
     // sentinel; `awaitReady` then finds a disposed runtime and reports it.
     retireAttempt(currentAttempt);
