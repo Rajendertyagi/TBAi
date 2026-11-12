@@ -29,23 +29,23 @@ export const DEFAULT_THEME_ID = "default";
 
 export const THEMES: readonly ThemeDefinition[] = [
   {
-    "id": "default",
-    "name": "Default",
-    "builtin": true,
-    "swatch": {
-      "light": {
-        "background": "oklch(1 0 0)",
-        "surface": "oklch(1 0 0)",
-        "primary": "oklch(0.2050 0 0)"
+    id: "default",
+    name: "Default",
+    builtin: true,
+    swatch: {
+      light: {
+        background: "oklch(1 0 0)",
+        surface: "oklch(1 0 0)",
+        primary: "oklch(0.2050 0 0)",
       },
-      "dark": {
-        "background": "oklch(0.1450 0 0)",
-        "surface": "oklch(0.2050 0 0)",
-        "primary": "oklch(0.9220 0 0)"
-      }
+      dark: {
+        background: "oklch(0.1450 0 0)",
+        surface: "oklch(0.2050 0 0)",
+        primary: "oklch(0.9220 0 0)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1 0 0)",
         "--foreground": "oklch(0.1450 0 0)",
         "--card": "oklch(1 0 0)",
@@ -88,9 +88,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1450 0 0)",
         "--foreground": "oklch(0.9850 0 0)",
         "--card": "oklch(0.2050 0 0)",
@@ -133,28 +133,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "amber-minimal",
-    "name": "Amber Minimal",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.7686 0.1647 70.0804)"
+    id: "amber-minimal",
+    name: "Amber Minimal",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.7686 0.1647 70.0804)",
       },
-      "dark": {
-        "background": "oklch(0.2046 0 0)",
-        "surface": "oklch(0.2686 0 0)",
-        "primary": "oklch(0.7686 0.1647 70.0804)"
-      }
+      dark: {
+        background: "oklch(0.2046 0 0)",
+        surface: "oklch(0.2686 0 0)",
+        primary: "oklch(0.7686 0.1647 70.0804)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0.2686 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -198,9 +198,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2046 0 0)",
         "--foreground": "oklch(0.9219 0 0)",
         "--card": "oklch(0.2686 0 0)",
@@ -244,28 +244,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "caffeine",
-    "name": "Caffeine",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9821 0 0)",
-        "surface": "oklch(0.9911 0 0)",
-        "primary": "oklch(0.4341 0.0392 41.9938)"
+    id: "caffeine",
+    name: "Caffeine",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9821 0 0)",
+        surface: "oklch(0.9911 0 0)",
+        primary: "oklch(0.4341 0.0392 41.9938)",
       },
-      "dark": {
-        "background": "oklch(0.1776 0 0)",
-        "surface": "oklch(0.2134 0 0)",
-        "primary": "oklch(0.9247 0.0524 66.1732)"
-      }
+      dark: {
+        background: "oklch(0.1776 0 0)",
+        surface: "oklch(0.2134 0 0)",
+        primary: "oklch(0.9247 0.0524 66.1732)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9821 0 0)",
         "--foreground": "oklch(0.2435 0 0)",
         "--card": "oklch(0.9911 0 0)",
@@ -309,9 +309,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1776 0 0)",
         "--foreground": "oklch(0.9491 0 0)",
         "--card": "oklch(0.2134 0 0)",
@@ -355,28 +355,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "catppuccin",
-    "name": "Catppuccin",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9578 0.0058 264.5321)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.5547 0.2503 297.0156)"
+    id: "catppuccin",
+    name: "Catppuccin",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9578 0.0058 264.5321)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.5547 0.2503 297.0156)",
       },
-      "dark": {
-        "background": "oklch(0.2155 0.0254 284.0647)",
-        "surface": "oklch(0.2429 0.0304 283.9110)",
-        "primary": "oklch(0.7871 0.1187 304.7693)"
-      }
+      dark: {
+        background: "oklch(0.2155 0.0254 284.0647)",
+        surface: "oklch(0.2429 0.0304 283.9110)",
+        primary: "oklch(0.7871 0.1187 304.7693)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9578 0.0058 264.5321)",
         "--foreground": "oklch(0.4355 0.0430 279.3250)",
         "--card": "oklch(1.0000 0 0)",
@@ -410,7 +410,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.8083 0.0174 271.1982)",
         "--sidebar-ring": "oklch(0.5547 0.2503 297.0156)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 4px 6px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
+        "--shadow":
+          "0px 4px 6px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.5547 0.2503 297.0156)",
@@ -420,9 +421,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2155 0.0254 284.0647)",
         "--foreground": "oklch(0.8787 0.0426 272.2767)",
         "--card": "oklch(0.2429 0.0304 283.9110)",
@@ -456,7 +457,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.4037 0.0320 280.1520)",
         "--sidebar-ring": "oklch(0.7871 0.1187 304.7693)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 4px 6px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
+        "--shadow":
+          "0px 4px 6px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)",
         "--link": "oklch(0.8711 0.0055 286.3)",
@@ -466,28 +468,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "claude",
-    "name": "Claude",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9818 0.0054 95.0986)",
-        "surface": "oklch(0.9818 0.0054 95.0986)",
-        "primary": "oklch(0.6171 0.1375 39.0427)"
+    id: "claude",
+    name: "Claude",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9818 0.0054 95.0986)",
+        surface: "oklch(0.9818 0.0054 95.0986)",
+        primary: "oklch(0.6171 0.1375 39.0427)",
       },
-      "dark": {
-        "background": "oklch(0.2679 0.0036 106.6427)",
-        "surface": "oklch(0.2679 0.0036 106.6427)",
-        "primary": "oklch(0.6724 0.1308 38.7559)"
-      }
+      dark: {
+        background: "oklch(0.2679 0.0036 106.6427)",
+        surface: "oklch(0.2679 0.0036 106.6427)",
+        primary: "oklch(0.6724 0.1308 38.7559)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9818 0.0054 95.0986)",
         "--foreground": "oklch(0.3438 0.0269 95.7226)",
         "--card": "oklch(0.9818 0.0054 95.0986)",
@@ -531,9 +533,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2679 0.0036 106.6427)",
         "--foreground": "oklch(0.8074 0.0142 93.0137)",
         "--card": "oklch(0.2679 0.0036 106.6427)",
@@ -577,28 +579,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "claymorphism",
-    "name": "Claymorphism",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9232 0.0026 48.7171)",
-        "surface": "oklch(0.9699 0.0013 106.4238)",
-        "primary": "oklch(0.5854 0.2041 277.1173)"
+    id: "claymorphism",
+    name: "Claymorphism",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9232 0.0026 48.7171)",
+        surface: "oklch(0.9699 0.0013 106.4238)",
+        primary: "oklch(0.5854 0.2041 277.1173)",
       },
-      "dark": {
-        "background": "oklch(0.2244 0.0074 67.4370)",
-        "surface": "oklch(0.2801 0.0080 59.3379)",
-        "primary": "oklch(0.6801 0.1583 276.9349)"
-      }
+      dark: {
+        background: "oklch(0.2244 0.0074 67.4370)",
+        surface: "oklch(0.2801 0.0080 59.3379)",
+        primary: "oklch(0.6801 0.1583 276.9349)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9232 0.0026 48.7171)",
         "--foreground": "oklch(0.2795 0.0368 260.0310)",
         "--card": "oklch(0.9699 0.0013 106.4238)",
@@ -632,7 +634,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.8687 0.0043 56.3660)",
         "--sidebar-ring": "oklch(0.5854 0.2041 277.1173)",
         "--letter-spacing": "0em",
-        "--shadow": "2px 2px 10px 4px hsl(240 4% 60% / 0.18), 2px 1px 2px 3px hsl(240 4% 60% / 0.18)",
+        "--shadow":
+          "2px 2px 10px 4px hsl(240 4% 60% / 0.18), 2px 1px 2px 3px hsl(240 4% 60% / 0.18)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.5854 0.2041 277.1173)",
@@ -642,9 +645,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2244 0.0074 67.4370)",
         "--foreground": "oklch(0.9288 0.0126 255.5078)",
         "--card": "oklch(0.2801 0.0080 59.3379)",
@@ -688,28 +691,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "clean-slate",
-    "name": "Clean Slate",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9842 0.0034 247.8575)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.5854 0.2041 277.1173)"
+    id: "clean-slate",
+    name: "Clean Slate",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9842 0.0034 247.8575)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.5854 0.2041 277.1173)",
       },
-      "dark": {
-        "background": "oklch(0.2077 0.0398 265.7549)",
-        "surface": "oklch(0.2795 0.0368 260.0310)",
-        "primary": "oklch(0.6801 0.1583 276.9349)"
-      }
+      dark: {
+        background: "oklch(0.2077 0.0398 265.7549)",
+        surface: "oklch(0.2795 0.0368 260.0310)",
+        primary: "oklch(0.6801 0.1583 276.9349)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9842 0.0034 247.8575)",
         "--foreground": "oklch(0.2795 0.0368 260.0310)",
         "--card": "oklch(1.0000 0 0)",
@@ -753,9 +756,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2077 0.0398 265.7549)",
         "--foreground": "oklch(0.9288 0.0126 255.5078)",
         "--card": "oklch(0.2795 0.0368 260.0310)",
@@ -799,28 +802,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "cosmic-night",
-    "name": "Cosmic Night",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9730 0.0133 286.1503)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.5417 0.1790 288.0332)"
+    id: "cosmic-night",
+    name: "Cosmic Night",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9730 0.0133 286.1503)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.5417 0.1790 288.0332)",
       },
-      "dark": {
-        "background": "oklch(0.1743 0.0227 283.7998)",
-        "surface": "oklch(0.2284 0.0384 282.9324)",
-        "primary": "oklch(0.7162 0.1597 290.3962)"
-      }
+      dark: {
+        background: "oklch(0.1743 0.0227 283.7998)",
+        surface: "oklch(0.2284 0.0384 282.9324)",
+        primary: "oklch(0.7162 0.1597 290.3962)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9730 0.0133 286.1503)",
         "--foreground": "oklch(0.3015 0.0572 282.4176)",
         "--card": "oklch(1.0000 0 0)",
@@ -854,7 +857,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.9115 0.0216 285.9625)",
         "--sidebar-ring": "oklch(0.5417 0.1790 288.0332)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 4px 10px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
+        "--shadow":
+          "0px 4px 10px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.5417 0.1790 288.0332)",
@@ -864,9 +868,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1743 0.0227 283.7998)",
         "--foreground": "oklch(0.9185 0.0257 285.8834)",
         "--card": "oklch(0.2284 0.0384 282.9324)",
@@ -900,7 +904,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.3261 0.0597 282.5832)",
         "--sidebar-ring": "oklch(0.7162 0.1597 290.3962)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 4px 10px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
+        "--shadow":
+          "0px 4px 10px 0px hsl(240 30% 25% / 0.12), 0px 1px 2px -1px hsl(240 30% 25% / 0.12)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)",
         "--link": "oklch(0.8711 0.0055 286.3)",
@@ -910,28 +915,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "darkmatter",
-    "name": "Darkmatter",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.6716 0.1368 48.5130)"
+    id: "darkmatter",
+    name: "Darkmatter",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.6716 0.1368 48.5130)",
       },
-      "dark": {
-        "background": "oklch(0.1797 0.0043 308.1928)",
-        "surface": "oklch(0.1822 0 0)",
-        "primary": "oklch(0.7214 0.1337 49.9802)"
-      }
+      dark: {
+        background: "oklch(0.1797 0.0043 308.1928)",
+        surface: "oklch(0.1822 0 0)",
+        primary: "oklch(0.7214 0.1337 49.9802)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0.2101 0.0318 264.6645)",
         "--card": "oklch(1.0000 0 0)",
@@ -975,9 +980,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1797 0.0043 308.1928)",
         "--foreground": "oklch(0.8109 0 0)",
         "--card": "oklch(0.1822 0 0)",
@@ -1021,28 +1026,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "doom-64",
-    "name": "Doom 64",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.8452 0 0)",
-        "surface": "oklch(0.7572 0 0)",
-        "primary": "oklch(0.5016 0.1887 27.4816)"
+    id: "doom-64",
+    name: "Doom 64",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.8452 0 0)",
+        surface: "oklch(0.7572 0 0)",
+        primary: "oklch(0.5016 0.1887 27.4816)",
       },
-      "dark": {
-        "background": "oklch(0.2178 0 0)",
-        "surface": "oklch(0.2850 0 0)",
-        "primary": "oklch(0.6083 0.2090 27.0276)"
-      }
+      dark: {
+        background: "oklch(0.2178 0 0)",
+        surface: "oklch(0.2850 0 0)",
+        primary: "oklch(0.6083 0.2090 27.0276)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.8452 0 0)",
         "--foreground": "oklch(0.2393 0 0)",
         "--card": "oklch(0.7572 0 0)",
@@ -1086,9 +1091,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2178 0 0)",
         "--foreground": "oklch(0.9067 0 0)",
         "--card": "oklch(0.2850 0 0)",
@@ -1132,28 +1137,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "graphite",
-    "name": "Graphite",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9551 0 0)",
-        "surface": "oklch(0.9702 0 0)",
-        "primary": "oklch(0.4891 0 0)"
+    id: "graphite",
+    name: "Graphite",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9551 0 0)",
+        surface: "oklch(0.9702 0 0)",
+        primary: "oklch(0.4891 0 0)",
       },
-      "dark": {
-        "background": "oklch(0.2178 0 0)",
-        "surface": "oklch(0.2435 0 0)",
-        "primary": "oklch(0.7058 0 0)"
-      }
+      dark: {
+        background: "oklch(0.2178 0 0)",
+        surface: "oklch(0.2435 0 0)",
+        primary: "oklch(0.7058 0 0)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9551 0 0)",
         "--foreground": "oklch(0.3211 0 0)",
         "--card": "oklch(0.9702 0 0)",
@@ -1197,9 +1202,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2178 0 0)",
         "--foreground": "oklch(0.8853 0 0)",
         "--card": "oklch(0.2435 0 0)",
@@ -1243,28 +1248,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "mocha-mousse",
-    "name": "Mocha Mousse",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9529 0.0146 102.4597)",
-        "surface": "oklch(0.9529 0.0146 102.4597)",
-        "primary": "oklch(0.6083 0.0623 44.3588)"
+    id: "mocha-mousse",
+    name: "Mocha Mousse",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9529 0.0146 102.4597)",
+        surface: "oklch(0.9529 0.0146 102.4597)",
+        primary: "oklch(0.6083 0.0623 44.3588)",
       },
-      "dark": {
-        "background": "oklch(0.2721 0.0141 48.1783)",
-        "surface": "oklch(0.3291 0.0156 50.8936)",
-        "primary": "oklch(0.7272 0.0539 52.3320)"
-      }
+      dark: {
+        background: "oklch(0.2721 0.0141 48.1783)",
+        surface: "oklch(0.3291 0.0156 50.8936)",
+        primary: "oklch(0.7272 0.0539 52.3320)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9529 0.0146 102.4597)",
         "--foreground": "oklch(0.4063 0.0255 40.3627)",
         "--card": "oklch(0.9529 0.0146 102.4597)",
@@ -1298,7 +1303,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.6440 0.0405 52.3917)",
         "--sidebar-ring": "oklch(0.6083 0.0623 44.3588)",
         "--letter-spacing": "0em",
-        "--shadow": "2px 2px 0px 0px hsl(20 18% 51% / 0.11), 2px 1px 2px -1px hsl(20 18% 51% / 0.11)",
+        "--shadow":
+          "2px 2px 0px 0px hsl(20 18% 51% / 0.11), 2px 1px 2px -1px hsl(20 18% 51% / 0.11)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.6083 0.0623 44.3588)",
@@ -1308,9 +1314,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2721 0.0141 48.1783)",
         "--foreground": "oklch(0.9529 0.0146 102.4597)",
         "--card": "oklch(0.3291 0.0156 50.8936)",
@@ -1344,7 +1350,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.4063 0.0255 40.3627)",
         "--sidebar-ring": "oklch(0.7272 0.0539 52.3320)",
         "--letter-spacing": "0em",
-        "--shadow": "2px 2px 0px 0px hsl(20 18% 30% / 0.11), 2px 1px 2px -1px hsl(20 18% 30% / 0.11)",
+        "--shadow":
+          "2px 2px 0px 0px hsl(20 18% 30% / 0.11), 2px 1px 2px -1px hsl(20 18% 30% / 0.11)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)",
         "--link": "oklch(0.8711 0.0055 286.3)",
@@ -1354,28 +1361,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "modern-minimal",
-    "name": "Modern Minimal",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.6231 0.1880 259.8145)"
+    id: "modern-minimal",
+    name: "Modern Minimal",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.6231 0.1880 259.8145)",
       },
-      "dark": {
-        "background": "oklch(0.2046 0 0)",
-        "surface": "oklch(0.2686 0 0)",
-        "primary": "oklch(0.6231 0.1880 259.8145)"
-      }
+      dark: {
+        background: "oklch(0.2046 0 0)",
+        surface: "oklch(0.2686 0 0)",
+        primary: "oklch(0.6231 0.1880 259.8145)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0.3211 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -1419,9 +1426,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2046 0 0)",
         "--foreground": "oklch(0.9219 0 0)",
         "--card": "oklch(0.2686 0 0)",
@@ -1465,28 +1472,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "mono",
-    "name": "Mono",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.5555 0 0)"
+    id: "mono",
+    name: "Mono",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.5555 0 0)",
       },
-      "dark": {
-        "background": "oklch(0.1448 0 0)",
-        "surface": "oklch(0.2134 0 0)",
-        "primary": "oklch(0.5555 0 0)"
-      }
+      dark: {
+        background: "oklch(0.1448 0 0)",
+        surface: "oklch(0.2134 0 0)",
+        primary: "oklch(0.5555 0 0)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0.1448 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -1530,9 +1537,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1448 0 0)",
         "--foreground": "oklch(0.9851 0 0)",
         "--card": "oklch(0.2134 0 0)",
@@ -1576,28 +1583,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "mydarktheme",
-    "name": "My Dark Theme",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9911 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.8972 0.1786 126.6652)"
+    id: "mydarktheme",
+    name: "My Dark Theme",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9911 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.8972 0.1786 126.6652)",
       },
-      "dark": {
-        "background": "oklch(0.1457 0.0043 285.8570)",
-        "surface": "oklch(0.1845 0.0101 285.3646)",
-        "primary": "oklch(0.8972 0.1786 126.6652)"
-      }
+      dark: {
+        background: "oklch(0.1457 0.0043 285.8570)",
+        surface: "oklch(0.1845 0.0101 285.3646)",
+        primary: "oklch(0.8972 0.1786 126.6652)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9911 0 0)",
         "--foreground": "oklch(0.1149 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -1641,9 +1648,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1457 0.0043 285.8570)",
         "--foreground": "oklch(0.9842 0.0034 247.8575)",
         "--card": "oklch(0.1845 0.0101 285.3646)",
@@ -1687,28 +1694,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "nature",
-    "name": "Nature",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9711 0.0074 80.7211)",
-        "surface": "oklch(0.9711 0.0074 80.7211)",
-        "primary": "oklch(0.5234 0.1347 144.1672)"
+    id: "nature",
+    name: "Nature",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9711 0.0074 80.7211)",
+        surface: "oklch(0.9711 0.0074 80.7211)",
+        primary: "oklch(0.5234 0.1347 144.1672)",
       },
-      "dark": {
-        "background": "oklch(0.2683 0.0279 150.7681)",
-        "surface": "oklch(0.3327 0.0271 146.9867)",
-        "primary": "oklch(0.6731 0.1624 144.2083)"
-      }
+      dark: {
+        background: "oklch(0.2683 0.0279 150.7681)",
+        surface: "oklch(0.3327 0.0271 146.9867)",
+        primary: "oklch(0.6731 0.1624 144.2083)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9711 0.0074 80.7211)",
         "--foreground": "oklch(0.3000 0.0358 30.2042)",
         "--card": "oklch(0.9711 0.0074 80.7211)",
@@ -1752,9 +1759,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2683 0.0279 150.7681)",
         "--foreground": "oklch(0.9423 0.0097 72.6595)",
         "--card": "oklch(0.3327 0.0271 146.9867)",
@@ -1798,28 +1805,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "neo-brutalism",
-    "name": "Neo Brutalism",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.6489 0.2370 26.9728)"
+    id: "neo-brutalism",
+    name: "Neo Brutalism",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.6489 0.2370 26.9728)",
       },
-      "dark": {
-        "background": "oklch(0 0 0)",
-        "surface": "oklch(0.3211 0 0)",
-        "primary": "oklch(0.7044 0.1872 23.1858)"
-      }
+      dark: {
+        background: "oklch(0 0 0)",
+        surface: "oklch(0.3211 0 0)",
+        primary: "oklch(0.7044 0.1872 23.1858)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -1863,9 +1870,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0 0 0)",
         "--foreground": "oklch(1.0000 0 0)",
         "--card": "oklch(0.3211 0 0)",
@@ -1909,28 +1916,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "notebook",
-    "name": "Notebook",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9821 0 0)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.4891 0 0)"
+    id: "notebook",
+    name: "Notebook",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9821 0 0)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.4891 0 0)",
       },
-      "dark": {
-        "background": "oklch(0.2891 0 0)",
-        "surface": "oklch(0.3211 0 0)",
-        "primary": "oklch(0.7572 0 0)"
-      }
+      dark: {
+        background: "oklch(0.2891 0 0)",
+        surface: "oklch(0.3211 0 0)",
+        primary: "oklch(0.7572 0 0)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9821 0 0)",
         "--foreground": "oklch(0.3485 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -1974,9 +1981,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2891 0 0)",
         "--foreground": "oklch(0.8945 0 0)",
         "--card": "oklch(0.3211 0 0)",
@@ -2020,28 +2027,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "pastel-dreams",
-    "name": "Pastel Dreams",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9689 0.0090 314.7819)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.7090 0.1592 293.5412)"
+    id: "pastel-dreams",
+    name: "Pastel Dreams",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9689 0.0090 314.7819)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.7090 0.1592 293.5412)",
       },
-      "dark": {
-        "background": "oklch(0.2161 0.0061 56.0434)",
-        "surface": "oklch(0.2805 0.0309 307.2326)",
-        "primary": "oklch(0.7874 0.1179 295.7538)"
-      }
+      dark: {
+        background: "oklch(0.2161 0.0061 56.0434)",
+        surface: "oklch(0.2805 0.0309 307.2326)",
+        primary: "oklch(0.7874 0.1179 295.7538)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9689 0.0090 314.7819)",
         "--foreground": "oklch(0.3729 0.0306 259.7328)",
         "--card": "oklch(1.0000 0 0)",
@@ -2085,9 +2092,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.2161 0.0061 56.0434)",
         "--foreground": "oklch(0.9299 0.0334 272.7879)",
         "--card": "oklch(0.2805 0.0309 307.2326)",
@@ -2131,28 +2138,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "sage-garden",
-    "name": "Sage Garden",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9761 0.0041 91.4461)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.6333 0.0309 154.9039)"
+    id: "sage-garden",
+    name: "Sage Garden",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9761 0.0041 91.4461)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.6333 0.0309 154.9039)",
       },
-      "dark": {
-        "background": "oklch(0.1448 0 0)",
-        "surface": "oklch(0.1822 0 0)",
-        "primary": "oklch(0.6333 0.0309 154.9039)"
-      }
+      dark: {
+        background: "oklch(0.1448 0 0)",
+        surface: "oklch(0.1822 0 0)",
+        primary: "oklch(0.6333 0.0309 154.9039)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9761 0.0041 91.4461)",
         "--foreground": "oklch(0.2417 0.0298 269.8827)",
         "--card": "oklch(1.0000 0 0)",
@@ -2186,7 +2193,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.9251 0.0071 88.6450)",
         "--sidebar-ring": "oklch(0.6333 0.0309 154.9039)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 1px 2px 0px hsl(225 27.7778% 14.1176% / 0.04), 0px 1px 2px -1px hsl(225 27.7778% 14.1176% / 0.04)",
+        "--shadow":
+          "0px 1px 2px 0px hsl(225 27.7778% 14.1176% / 0.04), 0px 1px 2px -1px hsl(225 27.7778% 14.1176% / 0.04)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.6333 0.0309 154.9039)",
@@ -2196,9 +2204,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1448 0 0)",
         "--foreground": "oklch(0.9702 0 0)",
         "--card": "oklch(0.1822 0 0)",
@@ -2242,28 +2250,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "soft-pop",
-    "name": "Soft Pop",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9789 0.0082 121.6272)",
-        "surface": "oklch(1.0000 0 0)",
-        "primary": "oklch(0.5106 0.2301 276.9656)"
+    id: "soft-pop",
+    name: "Soft Pop",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9789 0.0082 121.6272)",
+        surface: "oklch(1.0000 0 0)",
+        primary: "oklch(0.5106 0.2301 276.9656)",
       },
-      "dark": {
-        "background": "oklch(0 0 0)",
-        "surface": "oklch(0.2455 0.0217 257.2823)",
-        "primary": "oklch(0.6801 0.1583 276.9349)"
-      }
+      dark: {
+        background: "oklch(0 0 0)",
+        surface: "oklch(0.2455 0.0217 257.2823)",
+        primary: "oklch(0.6801 0.1583 276.9349)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9789 0.0082 121.6272)",
         "--foreground": "oklch(0 0 0)",
         "--card": "oklch(1.0000 0 0)",
@@ -2297,7 +2305,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "color-mix(in srgb, var(--sidebar-foreground) 8%, transparent)",
         "--sidebar-ring": "oklch(0.7853 0.1041 274.7134)",
         "--letter-spacing": "normal",
-        "--shadow": "0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05)",
+        "--shadow":
+          "0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.5106 0.2301 276.9656)",
@@ -2307,9 +2316,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0 0 0)",
         "--foreground": "oklch(1.0000 0 0)",
         "--card": "oklch(0.2455 0.0217 257.2823)",
@@ -2343,7 +2352,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(1.0000 0 0)",
         "--sidebar-ring": "oklch(0.6801 0.1583 276.9349)",
         "--letter-spacing": "normal",
-        "--shadow": "0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05)",
+        "--shadow":
+          "0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)",
         "--link": "oklch(0.8711 0.0055 286.3)",
@@ -2353,28 +2363,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "supabase",
-    "name": "Supabase",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9911 0 0)",
-        "surface": "oklch(0.9911 0 0)",
-        "primary": "oklch(0.8348 0.1302 160.9080)"
+    id: "supabase",
+    name: "Supabase",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9911 0 0)",
+        surface: "oklch(0.9911 0 0)",
+        primary: "oklch(0.8348 0.1302 160.9080)",
       },
-      "dark": {
-        "background": "oklch(0.1822 0 0)",
-        "surface": "oklch(0.2046 0 0)",
-        "primary": "oklch(0.4365 0.1044 156.7556)"
-      }
+      dark: {
+        background: "oklch(0.1822 0 0)",
+        surface: "oklch(0.2046 0 0)",
+        primary: "oklch(0.4365 0.1044 156.7556)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9911 0 0)",
         "--foreground": "oklch(0.2046 0 0)",
         "--card": "oklch(0.9911 0 0)",
@@ -2418,9 +2428,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0.1822 0 0)",
         "--foreground": "oklch(0.9288 0.0126 255.5078)",
         "--card": "oklch(0.2046 0 0)",
@@ -2464,28 +2474,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "twitter",
-    "name": "Twitter",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(1.0000 0 0)",
-        "surface": "oklch(0.9784 0.0011 197.1387)",
-        "primary": "oklch(0.6723 0.1606 244.9955)"
+    id: "twitter",
+    name: "Twitter",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(1.0000 0 0)",
+        surface: "oklch(0.9784 0.0011 197.1387)",
+        primary: "oklch(0.6723 0.1606 244.9955)",
       },
-      "dark": {
-        "background": "oklch(0 0 0)",
-        "surface": "oklch(0.2097 0.0080 274.5332)",
-        "primary": "oklch(0.6692 0.1607 245.0110)"
-      }
+      dark: {
+        background: "oklch(0 0 0)",
+        surface: "oklch(0.2097 0.0080 274.5332)",
+        primary: "oklch(0.6692 0.1607 245.0110)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(1.0000 0 0)",
         "--foreground": "oklch(0.1884 0.0128 248.5103)",
         "--card": "oklch(0.9784 0.0011 197.1387)",
@@ -2519,7 +2529,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.9271 0.0101 238.5177)",
         "--sidebar-ring": "oklch(0.6818 0.1584 243.3540)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00)",
+        "--shadow":
+          "0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 94%, var(--foreground) 6%)",
         "--link": "oklch(0.6723 0.1606 244.9955)",
@@ -2529,9 +2540,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0 0 0)",
         "--foreground": "oklch(0.9328 0.0025 228.7857)",
         "--card": "oklch(0.2097 0.0080 274.5332)",
@@ -2565,7 +2576,8 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--sidebar-border": "oklch(0.3795 0.0220 240.5943)",
         "--sidebar-ring": "oklch(0.6818 0.1584 243.3540)",
         "--letter-spacing": "0em",
-        "--shadow": "0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00)",
+        "--shadow":
+          "0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00)",
         "--radius": "0.625rem",
         "--statusbar": "color-mix(in srgb, var(--background) 90%, var(--foreground) 10%)",
         "--link": "oklch(0.8711 0.0055 286.3)",
@@ -2575,28 +2587,28 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
   },
   {
-    "id": "vercel",
-    "name": "Vercel",
-    "builtin": false,
-    "swatch": {
-      "light": {
-        "background": "oklch(0.9900 0 0)",
-        "surface": "oklch(1 0 0)",
-        "primary": "oklch(0 0 0)"
+    id: "vercel",
+    name: "Vercel",
+    builtin: false,
+    swatch: {
+      light: {
+        background: "oklch(0.9900 0 0)",
+        surface: "oklch(1 0 0)",
+        primary: "oklch(0 0 0)",
       },
-      "dark": {
-        "background": "oklch(0 0 0)",
-        "surface": "oklch(0.1400 0 0)",
-        "primary": "oklch(1 0 0)"
-      }
+      dark: {
+        background: "oklch(0 0 0)",
+        surface: "oklch(0.1400 0 0)",
+        primary: "oklch(1 0 0)",
+      },
     },
-    "tokens": {
-      "light": {
+    tokens: {
+      light: {
         "--background": "oklch(0.9900 0 0)",
         "--foreground": "oklch(0 0 0)",
         "--card": "oklch(1 0 0)",
@@ -2640,9 +2652,9 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.6658 0.1574 58.3)",
         "--warning-foreground": "oklch(0.9851 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 2.5%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
       },
-      "dark": {
+      dark: {
         "--background": "oklch(0 0 0)",
         "--foreground": "oklch(1 0 0)",
         "--card": "oklch(0.1400 0 0)",
@@ -2686,10 +2698,10 @@ export const THEMES: readonly ThemeDefinition[] = [
         "--warning": "oklch(0.8369 0.1644 84.4)",
         "--warning-foreground": "oklch(0.1448 0 0)",
         "--card-soft": "color-mix(in srgb, var(--foreground) 4%, transparent)",
-        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)"
-      }
-    }
-  }
+        "--card-outline": "color-mix(in srgb, var(--foreground) 6%, transparent)",
+      },
+    },
+  },
 ] as const;
 
 export function getTheme(id: string): ThemeDefinition | undefined {
