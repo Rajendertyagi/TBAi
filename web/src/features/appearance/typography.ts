@@ -254,6 +254,9 @@ export const LINE_HEIGHTS = [
 type FontListener = (fontId: string) => void;
 const fontListeners = new Set<FontListener>();
 
+type ConfigListener = (config: TypographyConfig) => void;
+const configListeners = new Set<ConfigListener>();
+
 let currentConfig: TypographyConfig = DEFAULT_TYPOGRAPHY;
 let lastNotifiedFontId: string = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
 
@@ -264,12 +267,29 @@ export function subscribeInterfaceFont(listener: FontListener): () => void {
   };
 }
 
+export function subscribeTypographyConfig(listener: ConfigListener): () => void {
+  configListeners.add(listener);
+  return () => {
+    configListeners.delete(listener);
+  };
+}
+
 function notifyFontIfChanged(nextFontId: string): void {
   if (nextFontId === lastNotifiedFontId) return;
   lastNotifiedFontId = nextFontId;
   for (const listener of fontListeners) {
     try {
       listener(nextFontId);
+    } catch {
+      /* listener error ignored */
+    }
+  }
+}
+
+function notifyConfigChanged(config: TypographyConfig): void {
+  for (const listener of configListeners) {
+    try {
+      listener(config);
     } catch {
       /* listener error ignored */
     }
@@ -510,6 +530,7 @@ export function writeTypography(config: TypographyConfig): void {
 export function applyTypographyToDom(config: TypographyConfig): void {
   currentConfig = config;
   notifyFontIfChanged(config.interfaceFontFamily);
+  notifyConfigChanged(config);
   if (typeof document === "undefined") return;
   const root = document.documentElement;
 

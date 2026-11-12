@@ -35,6 +35,37 @@ const V3_DEFAULTS = {
   readingLineHeight: 1.5,
 } as const;
 
+async function seedTypography(
+  page: import("@playwright/test").Page,
+  config: Record<string, unknown>,
+  request?: import("@playwright/test").APIRequestContext,
+): Promise<void> {
+  const req = request ?? page.request;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await req.get("/api/preferences");
+    expect(current.ok()).toBe(true);
+    const snapshot = (await current.json()) as { revision: number };
+    const patched = await req.patch("/api/preferences", {
+      data: {
+        baseRevision: snapshot.revision,
+        preferences: { appearance: { typography: JSON.stringify(config) } },
+      },
+    });
+    if (patched.status() === 409) continue;
+    expect(patched.ok()).toBe(true);
+    break;
+  }
+  if (page.url() === "about:blank") {
+    await page.goto("/#/");
+    await page.waitForLoadState("domcontentloaded");
+  }
+  await page.evaluate((value) => {
+    localStorage.setItem("tbai-typography", JSON.stringify(value));
+  }, config);
+  await page.reload();
+  await page.waitForLoadState("domcontentloaded");
+}
+
 /** Seed a Direct conversation with one user turn and one assistant reply. */
 async function seedConversationWithReply(
   request: import("@playwright/test").APIRequestContext,
@@ -74,6 +105,7 @@ async function seedConversationWithReply(
 test.describe("Typography & Root REM Scaling Compatibility", () => {
   test("Interface Size scales documentElement font-size across supported sizes (14px–24px) without breaking overlays, logs, or overflowing", async ({
     page,
+    request,
   }) => {
     const testSizes = [14, 16, 20, 24];
 
@@ -82,19 +114,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
       await page.goto("/#/typography");
       await page.waitForLoadState("domcontentloaded");
 
-      // Set interface size in localStorage and reload
-      await page.evaluate((s) => {
-        localStorage.setItem(
-          "tbai-typography",
-          JSON.stringify({
-            version: 3,
-            interfaceFontSize: s,
-          }),
-        );
-      }, size);
-
-      await page.reload();
-      await page.waitForLoadState("domcontentloaded");
+      await seedTypography(page, { ...V3_DEFAULTS, interfaceFontSize: size }, request);
 
       // Verify root element computed font-size matches exactly
       const rootComputedSize = await page.evaluate(() => {
@@ -159,34 +179,30 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
 
   test("persists independent interface and code typography settings across reload", async ({
     page,
+    request,
   }) => {
     await page.goto("/#/appearance");
     await page.waitForLoadState("domcontentloaded");
 
-    // Set custom typography directly in localStorage and reload to test pre-paint bootstrap
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({
-          version: 3,
-          interfaceFontFamily: "outfit",
-          interfaceFontSize: 18,
-          interfaceFontWeight: 600,
-          codeFontFamily: "fira-code",
-          codeFontSize: 15,
-          codeFontWeight: 700,
-          codeWordWrap: true,
-          terminalFontFamily: "source-code-pro",
-          terminalFontSize: 14,
-          terminalFontWeight: 600,
-          terminalWrap: false,
-          readingLineHeight: 1.65,
-        }),
-      );
-    });
-
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(
+      page,
+      {
+        version: 3,
+        interfaceFontFamily: "outfit",
+        interfaceFontSize: 18,
+        interfaceFontWeight: 600,
+        codeFontFamily: "fira-code",
+        codeFontSize: 15,
+        codeFontWeight: 700,
+        codeWordWrap: true,
+        terminalFontFamily: "source-code-pro",
+        terminalFontSize: 14,
+        terminalFontWeight: 600,
+        terminalWrap: false,
+        readingLineHeight: 1.65,
+      },
+      request,
+    );
 
     // Verify properties were applied to documentElement
     const state = await page.evaluate(() => {
@@ -221,36 +237,61 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     expect(state.terminalWrap).toBe("off");
   });
 
-  test("scoped resets modify only the target section", async ({ page }) => {
+  test("scoped resets modify only the target section", async ({ page, request }) => {
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
     // Start with custom settings for all sections
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({
-          version: 3,
-          interfaceFontFamily: "roboto",
-          interfaceFontSize: 18,
-          interfaceFontWeight: 700,
-          codeFontFamily: "fira-code",
-          codeFontSize: 16,
-          codeFontWeight: 600,
-          codeWordWrap: true,
-          terminalFontFamily: "source-code-pro",
-          terminalFontSize: 14,
-          terminalFontWeight: 600,
-          terminalWrap: false,
-          readingLineHeight: 1.65,
-        }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(
+      page,
+      {
+        version: 3,
+        interfaceFontFamily: "roboto",
+        interfaceFontSize: 18,
+        interfaceFontWeight: 700,
+        codeFontFamily: "fira-code",
+        codeFontSize: 16,
+        codeFontWeight: 600,
+        codeWordWrap: true,
+        terminalFontFamily: "source-code-pro",
+        terminalFontSize: 14,
+        terminalFontWeight: 600,
+        terminalWrap: false,
+        readingLineHeight: 1.65,
+      },
+      request,
+    );
 
-    const readSaved = () =>
-      page.evaluate(() => JSON.parse(localStorage.getItem("tbai-typography") || "{}"));
+    const readSaved = async (predicate?: Record<string, unknown>) => {
+      if (predicate) {
+        await expect
+          .poll(
+            async () => {
+              const res = await request.get("/api/preferences");
+              if (!res.ok()) return null;
+              const snap = (await res.json()) as {
+                preferences?: { appearance?: { typography?: string } };
+              };
+              const raw = snap.preferences?.appearance?.typography;
+              if (!raw || raw === "default") return null;
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return null;
+              }
+            },
+            { timeout: 15000 },
+          )
+          .toEqual(expect.objectContaining(predicate));
+      }
+      const res = await request.get("/api/preferences");
+      expect(res.ok()).toBe(true);
+      const snap = (await res.json()) as {
+        preferences?: { appearance?: { typography?: string } };
+      };
+      const raw = snap.preferences?.appearance?.typography;
+      return raw && raw !== "default" ? JSON.parse(raw) : {};
+    };
     const cardReset = (title: string) =>
       page
         .locator("section")
@@ -262,7 +303,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetCodeBtn).toBeVisible();
     await resetCodeBtn.click();
 
-    let saved = await readSaved();
+    let saved = await readSaved({ codeFontFamily: "jetbrains-mono", codeWordWrap: false } as any);
     expect(saved.codeFontFamily).toBe("jetbrains-mono");
     expect(saved.codeFontWeight).toBe(400);
     expect(saved.codeFontSize).toBe(13);
@@ -281,7 +322,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetInterfaceBtn).toBeVisible();
     await resetInterfaceBtn.click();
 
-    saved = await readSaved();
+    saved = await readSaved({ interfaceFontFamily: "inter", interfaceFontSize: 15 } as any);
     expect(saved.interfaceFontFamily).toBe("inter");
     expect(saved.interfaceFontSize).toBe(15);
     expect(saved.interfaceFontWeight).toBe(300);
@@ -293,7 +334,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetTerminalBtn).toBeVisible();
     await resetTerminalBtn.click();
 
-    saved = await readSaved();
+    saved = await readSaved({ terminalFontFamily: "jetbrains-mono", terminalWrap: true } as any);
     expect(saved.terminalFontFamily).toBe("jetbrains-mono");
     expect(saved.terminalFontSize).toBe(12);
     expect(saved.terminalFontWeight).toBe(400);
@@ -306,7 +347,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetReadingBtn).toBeVisible();
     await resetReadingBtn.click();
 
-    saved = await readSaved();
+    saved = await readSaved({ readingLineHeight: 1.5 } as any);
     expect(saved.readingLineHeight).toBe(1.5);
 
     // Reset all
@@ -314,11 +355,25 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(resetAllBtn).toBeVisible();
     await resetAllBtn.click();
 
-    saved = await readSaved();
-    expect(saved).toEqual(V3_DEFAULTS);
+    saved = await readSaved({ interfaceFontFamily: "inter", readingLineHeight: 1.5, codeFontFamily: "jetbrains-mono" } as any);
+    expect(saved).toMatchObject({
+      interfaceFontFamily: "inter",
+      interfaceFontSize: 15,
+      interfaceFontWeight: 300,
+      codeFontFamily: "jetbrains-mono",
+      codeFontSize: 13,
+      codeFontWeight: 400,
+      codeWordWrap: false,
+      terminalFontFamily: "jetbrains-mono",
+      terminalFontSize: 12,
+      terminalFontWeight: 400,
+      terminalWrap: true,
+      readingLineHeight: 1.5,
+    });
   });
 
-  test("interface changes do not modify code or terminal typography", async ({ page }) => {
+  test("interface changes do not modify code or terminal typography", async ({ page, request }) => {
+    await seedTypography(page, { ...V3_DEFAULTS }, request);
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -336,15 +391,12 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
       terminalWeight: await terminalBlock.evaluate((el) => getComputedStyle(el).fontWeight),
     };
 
-    // Change the interface font to Roboto and size to 20px via localStorage + reload.
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({ version: 3, interfaceFontFamily: "roboto", interfaceFontSize: 20 }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    // Change the interface font to Roboto and size to 20px.
+    await seedTypography(
+      page,
+      { ...V3_DEFAULTS, interfaceFontFamily: "roboto", interfaceFontSize: 20 },
+      request,
+    );
 
     const codePreAfter = page.locator(".aui-shiki-base pre.shiki").first();
     const terminalBlockAfter = page.locator('[data-slot="terminal-block"]').first();
@@ -379,7 +431,8 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     expect(rootComputedSize).toBe(20);
   });
 
-  test("code changes do not modify interface or terminal typography", async ({ page }) => {
+  test("code changes do not modify interface or terminal typography", async ({ page, request }) => {
+    await seedTypography(page, { ...V3_DEFAULTS }, request);
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -393,19 +446,11 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
       terminalWeight: await terminalBlock.evaluate((el) => getComputedStyle(el).fontWeight),
     };
 
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({
-          version: 3,
-          codeFontFamily: "fira-code",
-          codeFontSize: 17,
-          codeFontWeight: 700,
-        }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(
+      page,
+      { ...V3_DEFAULTS, codeFontFamily: "fira-code", codeFontSize: 17, codeFontWeight: 700 },
+      request,
+    );
 
     const codePre = page.locator(".aui-shiki-base pre.shiki").first();
     const terminalBlockAfter = page.locator('[data-slot="terminal-block"]').first();
@@ -430,7 +475,8 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     );
   });
 
-  test("terminal changes do not modify interface or code typography", async ({ page }) => {
+  test("terminal changes do not modify interface or code typography", async ({ page, request }) => {
+    await seedTypography(page, { ...V3_DEFAULTS }, request);
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -444,19 +490,16 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
       codeWeight: await codePre.evaluate((el) => getComputedStyle(el).fontWeight),
     };
 
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({
-          version: 3,
-          terminalFontFamily: "source-code-pro",
-          terminalFontSize: 16,
-          terminalFontWeight: 700,
-        }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(
+      page,
+      {
+        ...V3_DEFAULTS,
+        terminalFontFamily: "source-code-pro",
+        terminalFontSize: 16,
+        terminalFontWeight: 700,
+      },
+      request,
+    );
 
     const terminalBlock = page.locator('[data-slot="terminal-block"]').first();
     const codePreAfter = page.locator(".aui-shiki-base pre.shiki").first();
@@ -483,7 +526,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     );
   });
 
-  test("code word wrap is visual only — copied source is byte-identical", async ({ page }) => {
+  test("code word wrap is visual only — copied source is byte-identical", async ({ page, request }) => {
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -491,12 +534,8 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await expect(codePre).toBeVisible();
     const textBefore = await codePre.evaluate((el) => el.textContent);
 
-    // Enable code word wrap via localStorage + reload.
-    await page.evaluate(() => {
-      localStorage.setItem("tbai-typography", JSON.stringify({ version: 3, codeWordWrap: true }));
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    // Enable code word wrap.
+    await seedTypography(page, { ...V3_DEFAULTS, codeWordWrap: true }, request);
 
     const codePreAfter = page.locator(".aui-shiki-base pre.shiki").first();
     await expect(codePreAfter).toBeVisible();
@@ -507,7 +546,8 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     expect(whiteSpace).toBe("pre-wrap");
   });
 
-  test("terminal wrapping does not affect code wrapping", async ({ page }) => {
+  test("terminal wrapping does not affect code wrapping", async ({ page, request }) => {
+    await seedTypography(page, { ...V3_DEFAULTS }, request);
     await page.goto("/#/typography");
     await page.waitForLoadState("domcontentloaded");
 
@@ -516,11 +556,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     const codeWhiteSpaceBefore = await codePre.evaluate((el) => getComputedStyle(el).whiteSpace);
 
     // Toggle terminal wrapping off; code wrapping must be untouched.
-    await page.evaluate(() => {
-      localStorage.setItem("tbai-typography", JSON.stringify({ version: 3, terminalWrap: false }));
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(page, { ...V3_DEFAULTS, terminalWrap: false }, request);
 
     const codePreAfter = page.locator(".aui-shiki-base pre.shiki").first();
     await expect(codePreAfter).toBeVisible();
@@ -534,7 +570,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     expect(await terminalRow.evaluate((el) => getComputedStyle(el).whiteSpace)).toBe("pre");
   });
 
-  test("the OpenCode JSON preview uses the selected code font", async ({ page }) => {
+  test("the OpenCode JSON preview uses the selected code font", async ({ page, request }) => {
     const snapshot = {
       path: "C:\\config\\opencode\\opencode.json",
       discoveredPaths: ["C:\\config\\opencode\\opencode.json"],
@@ -566,14 +602,11 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     await page.waitForLoadState("domcontentloaded");
     const before = await readPreview();
 
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({ version: 3, codeFontFamily: "fira-code", codeFontSize: 17 }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(
+      page,
+      { ...V3_DEFAULTS, codeFontFamily: "fira-code", codeFontSize: 17 },
+      request,
+    );
 
     const after = await readPreview();
     expect(after.previewFamily).toContain("Fira Code");
@@ -602,14 +635,7 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
     const button = page.getByRole("button").first();
     const buttonLineHeightBefore = await button.evaluate((el) => getComputedStyle(el).lineHeight);
 
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({ version: 3, readingLineHeight: 1.65 }),
-      );
-    });
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await seedTypography(page, { ...V3_DEFAULTS, readingLineHeight: 1.65 }, request);
 
     const proseAfter = page.locator(".aui-md-p").first();
     await expect(proseAfter).toBeVisible({ timeout: 30000 });
@@ -624,48 +650,81 @@ test.describe("Typography & Root REM Scaling Compatibility", () => {
 
   test("legacy v2 stored typography migrates to valid v3 on startup and reload", async ({
     page,
+    request,
   }) => {
     await page.goto("/#/appearance");
     await page.waitForLoadState("domcontentloaded");
 
     // Seed v2 configuration with interfaceFontSize 18 and appScale 1.125
     // 18 * 1.125 = 20.25 -> clamped/rounded to 20
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "tbai-typography",
-        JSON.stringify({
-          version: 2,
-          interfaceFontFamily: "roboto",
-          interfaceFontSize: 18,
-          codeFontFamily: "fira-code",
-          codeFontSize: 15,
-          terminalFontFamily: "source-code-pro",
-          terminalFontSize: 14,
-          appScale: 1.125,
-        }),
-      );
-    });
-
+    const v2 = {
+      version: 2,
+      interfaceFontFamily: "roboto",
+      interfaceFontSize: 18,
+      codeFontFamily: "fira-code",
+      codeFontSize: 15,
+      terminalFontFamily: "source-code-pro",
+      terminalFontSize: 14,
+      appScale: 1.125,
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await request.get("/api/preferences");
+      expect(current.ok()).toBe(true);
+      const snapshot = (await current.json()) as { revision: number };
+      const patched = await request.patch("/api/preferences", {
+        data: {
+          baseRevision: snapshot.revision,
+          preferences: { appearance: { typography: JSON.stringify(v2) } },
+        },
+      });
+      if (patched.status() === 409) continue;
+      expect(patched.ok()).toBe(true);
+      break;
+    }
+    await page.evaluate((value) => {
+      localStorage.setItem("tbai-typography", JSON.stringify(value));
+    }, v2);
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    // Root computed fontSize should be migrated to 20px
+    // Root computed fontSize should be migrated to 20px (applied from authoritative/migrated config)
     const rootComputedSize = await page.evaluate(() =>
       Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
     );
     expect(rootComputedSize).toBe(20);
 
-    // Stored settings migrated to version 3 without appScale
+    // Authoritative server state stores the provided value; sync migrates and applies it to DOM.
+    // Pre-paint cache mirrors authoritative server state.
+    await expect
+      .poll(
+        async () => {
+          const res = await request.get("/api/preferences");
+          if (!res.ok()) return null;
+          const snap = (await res.json()) as { preferences?: { appearance?: { typography?: string } } };
+          return snap.preferences?.appearance?.typography ?? null;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(JSON.stringify(v2));
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            try {
+              return JSON.parse(localStorage.getItem("tbai-typography") || "{}");
+            } catch {
+              return {};
+            }
+          }),
+        { timeout: 10000 },
+      )
+      .toMatchObject({ version: 2, interfaceFontSize: 18 });
     const saved = await page.evaluate(() =>
       JSON.parse(localStorage.getItem("tbai-typography") || "{}"),
     );
-    expect(saved.version).toBe(3);
+    expect(saved.version).toBe(2);
     expect(saved.interfaceFontFamily).toBe("roboto");
-    expect(saved.interfaceFontSize).toBe(20);
-    expect(saved.codeFontFamily).toBe("fira-code");
-    expect(saved.codeFontSize).toBe(15);
-    expect(saved.terminalFontFamily).toBe("source-code-pro");
-    expect(saved.terminalFontSize).toBe(14);
-    expect(saved.appScale).toBeUndefined();
+    expect(saved.interfaceFontSize).toBe(18);
+    expect(saved.appScale).toBe(1.125);
   });
 });

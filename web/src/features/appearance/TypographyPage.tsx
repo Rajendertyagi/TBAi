@@ -25,6 +25,7 @@ import {
   resetReadingTypography,
   resetTerminalTypography,
   resetTypography,
+  subscribeTypographyConfig,
   TERMINAL_FONT_SIZE_CONFIG,
   UI_FONTS,
   writeTypography,
@@ -126,6 +127,12 @@ export function TypographyPage() {
       off();
       window.removeEventListener("storage", onStorage);
     };
+  }, []);
+
+  useEffect(() => {
+    return subscribeTypographyConfig((config) => {
+      setTypography(config);
+    });
   }, []);
 
   const updateTypography = useCallback((patch: Partial<TypographyConfig>) => {

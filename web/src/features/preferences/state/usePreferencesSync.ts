@@ -71,16 +71,13 @@ export function usePreferencesSync(): void {
       try {
         const parsed = JSON.parse(a.typography) as unknown;
         const config = migrateTypography(parsed);
-        suppressAppearancePatch();
         applyTypographyToDom(config);
       } catch {
         // Invalid authoritative typography: apply safe canonical default (no DB migration).
-        suppressAppearancePatch();
         applyTypographyToDom(DEFAULT_TYPOGRAPHY);
       }
     } else {
       // Authoritative default: replace any stale cached/custom typography.
-      suppressAppearancePatch();
       applyTypographyToDom(DEFAULT_TYPOGRAPHY);
     }
     if (a.themeMode === "light" || a.themeMode === "dark" || a.themeMode === "system") {
