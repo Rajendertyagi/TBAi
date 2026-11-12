@@ -162,7 +162,10 @@ test.describe("compact tiers and the 9px floor", () => {
     });
   }
 
-  test("no rendered text falls below 9px at the minimum interface size", async ({ page, request }) => {
+  test("no rendered text falls below 9px at the minimum interface size", async ({
+    page,
+    request,
+  }) => {
     await page.goto("/#/typography");
     await applyTypography(page, { interfaceFontSize: 12 }, request);
 
@@ -328,7 +331,10 @@ test.describe("badge at the maximum interface size", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("SidebarSection row does not clip at 24px interface font size", async ({ page, request }) => {
+  test("SidebarSection row does not clip at 24px interface font size", async ({
+    page,
+    request,
+  }) => {
     await page.goto("/#/");
     await applyTypography(page, { interfaceFontSize: 24 }, request);
 
@@ -428,12 +434,16 @@ test.describe("structured tool payload follows the Code channel", () => {
       await page.goto(`/#/chat/${conversationId}`);
       // Fira Code + weight 500, deliberately NOT the fixed metadata stack, so
       // the exit line and the header pill can be told apart by computed style.
-      await applyTypography(page, {
-        interfaceFontSize: 16,
-        terminalFontSize: 14,
-        terminalFontFamily: "fira-code",
-        terminalFontWeight: 500,
-      }, request);
+      await applyTypography(
+        page,
+        {
+          interfaceFontSize: 16,
+          terminalFontSize: 14,
+          terminalFontFamily: "fira-code",
+          terminalFontWeight: 500,
+        },
+        request,
+      );
 
       await request.post(`${STUB}/__e2e/text`, { data: { text: FINAL_ANSWER } });
       const armed = await request.post(`${STUB}/__e2e/tool`, {
@@ -600,10 +610,14 @@ test.describe("Mermaid renderer font and scaling integration", () => {
 
       // 1. Initial render with Roboto at 16px
       await page.goto(`/#/chat/${conversationId}`);
-      await applyTypography(page, {
-        interfaceFontFamily: "roboto",
-        interfaceFontSize: 16,
-      }, request);
+      await applyTypography(
+        page,
+        {
+          interfaceFontFamily: "roboto",
+          interfaceFontSize: 16,
+        },
+        request,
+      );
 
       // Verify the rendered SVG appears
       const diagram = page.locator('[data-slot="mermaid-diagram"]');
@@ -737,10 +751,14 @@ test.describe("Sonner toast typography inheritance", () => {
 
       for (const size of sizes) {
         await page.goto("/#/quick-messages");
-        await applyTypography(page, {
-          interfaceFontFamily: "outfit",
-          interfaceFontSize: size,
-        }, request);
+        await applyTypography(
+          page,
+          {
+            interfaceFontFamily: "outfit",
+            interfaceFontSize: size,
+          },
+          request,
+        );
 
         await expect(page.getByRole("heading", { name: "Quick Messages", level: 1 })).toBeVisible({
           timeout: 15000,
