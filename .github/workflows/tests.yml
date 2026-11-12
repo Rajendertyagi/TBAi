@@ -38,7 +38,7 @@ on:
         type: string
         required: false
   push:
-    branches: [main, ci/tauri-e2e-verify]
+    branches: [main, develop, ci/tauri-e2e-verify]
   pull_request:
     branches: [main]
 
@@ -50,12 +50,13 @@ env:
 
   # OpenCode CLI, for the integration tests that drive the managed server.
   #
-  # 2.2.0 is the audited target: it sits inside the range
-  # src/config/opencode.ts enforces for the managed server (>=2.0.15 <2.2.1),
-  # and it is the version both manifests pin for `@opencode/client`. Compared
-  # against 2.1.2, the published 2.2.0 client typings removed no route and no
-  # `V2Event` member, and added only two OPTIONAL fields
-  # (`ModelInfo.type?`, `ServerInfo.hostname?`).
+  # CI pins the managed OpenCode CLI to 2.2.0, the minimum supported runtime
+  # floor declared in src/config/opencode.ts (minimumVersion "2.2.0"). The
+  # application manifests currently pin `@opencode/client` 2.2.6 (root and web),
+  # so CI exercises the minimum supported server with the current client SDK.
+  # Local runtime verification for this branch was performed against OpenCode
+  # CLI 2.2.6; do not change this pin or the SDK versions without evidence that
+  # the supported matrix remains valid.
   #
   # The npm package ships the prebuilt Windows binary; there are no GitHub
   # release assets for the 2.x tags, and `opencode-ai` on npm is the unrelated
