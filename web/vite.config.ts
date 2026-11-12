@@ -2,6 +2,22 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
+import { generateThemes } from "./scripts/generate-themes";
+
+function themesPlugin() {
+  return {
+    name: "tbai-themes",
+    buildStart() {
+      generateThemes();
+    },
+    handleHotUpdate({ file, server }: any) {
+      if (file.includes("themes") && file.endsWith(".json")) {
+        generateThemes();
+        server.ws.send({ type: "full-reload" });
+      }
+    },
+  };
+}
 
 /**
  * Vite configuration.
@@ -99,14 +115,14 @@ const PROFILE_OUT_DIR = "dist-profile";
 const DEV_SERVER_PORT = 5173;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [themesPlugin(), react(), tailwindcss()],
   server: {
     port: DEV_SERVER_PORT,
     strictPort: true,
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: isProfileBuild

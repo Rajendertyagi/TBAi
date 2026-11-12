@@ -22,9 +22,9 @@ describe("sectionOrder frontend/backend parity", () => {
       ["folders", "folders", "chats"],
     ];
     for (const value of cases) {
-      expect([...normalizeSectionOrder(value)] as string[]).toEqual(
-        [...normalizeSectionOrderStrict(value)] as string[],
-      );
+      expect([...normalizeSectionOrder(value)] as string[]).toEqual([
+        ...normalizeSectionOrderStrict(value),
+      ] as string[]);
     }
   });
 

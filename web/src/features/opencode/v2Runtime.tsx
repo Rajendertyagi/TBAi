@@ -15,13 +15,18 @@ export function useV2AssistantRuntime(
     controller.getState,
     controller.getState,
   );
+  const projection = useSyncExternalStore(
+    controller.subscribe,
+    controller.getProjection,
+    controller.getProjection,
+  );
   // Built once per controller so its cache survives the per-event adapter
   // rebuilds below; a factory recreated each render would drop the cache.
   const buildStore = useMemo(
     () => createV2RuntimeStoreFactory(controller, conversationId),
     [controller, conversationId],
   );
-  const adapter = useMemo(() => buildStore(state), [buildStore, state]);
+  const adapter = useMemo(() => buildStore(state, projection), [buildStore, state, projection]);
   return useExternalStoreRuntime(adapter);
 }
 

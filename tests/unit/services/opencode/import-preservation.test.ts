@@ -21,7 +21,9 @@ describe("OpenCode import service contracts", () => {
   it("rejects invalid sourceRef payloads", () => {
     expect(decodeSourceRef("not-base64url-json")).toBeNull();
     expect(
-      decodeSourceRef(Buffer.from(JSON.stringify({ mode: "nope", origin: "x" }), "utf8").toString("base64url")),
+      decodeSourceRef(
+        Buffer.from(JSON.stringify({ mode: "nope", origin: "x" }), "utf8").toString("base64url"),
+      ),
     ).toBeNull();
   });
 

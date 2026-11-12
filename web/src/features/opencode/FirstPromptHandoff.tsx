@@ -84,8 +84,9 @@ export function endHandoffOperation(reason: string): void {
  *   have reached the server (M19).
  *
  * The claim carries the message id, so a dispatch that is resumed after a
- * crash is the SAME prompt server-side (M13). The server admits a repeated
- * message id as the existing prompt, so the resume cannot double it.
+ * crash can resume the same logical prompt attempt (M13). TBAi reuses the same
+ * message id and does not auto-resubmit on ambiguity; server-side same-ID
+ * idempotency is unverified and not relied upon.
  */
 export async function fireFirstPromptHandoff(args: {
   conversationId: string | undefined;

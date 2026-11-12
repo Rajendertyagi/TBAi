@@ -115,7 +115,10 @@ describe("IndexRedirect redirect decision (canonical)", () => {
     const ls = typeof window !== "undefined" ? window.localStorage : undefined;
     ls?.setItem(
       "tbai:openTabs",
-      JSON.stringify({ tabs: [{ key: "chat:legacy", kind: "chat", ref: "legacy" }], activeKey: "chat:legacy" }),
+      JSON.stringify({
+        tabs: [{ key: "chat:legacy", kind: "chat", ref: "legacy" }],
+        activeKey: "chat:legacy",
+      }),
     );
     usePreferencesStore.setState({
       hydration: "ready",

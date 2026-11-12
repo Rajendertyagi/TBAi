@@ -73,7 +73,7 @@ gets it here, in the module that owns it:
 | A bounded readiness gate with a typed failure | `startupGate.ts` (`waitWithDeadline`) | M3, M4 | 5 | **delivered** |
 | The claim that one answer per request reaches the transport, and the release of a claim that failed definitively | `v2ThreadController.ts` (`claimPermission` / `releasePermission`, `claimForm` / `releaseForm`) | M6 | 5 | **delivered** |
 | The pending cancel that is owed against the admitted inbox id, and the inbox id that makes it unique | `v2ThreadController.ts` (`cancelAdmittedPrompt`) + `v2Events.ts` (the `cancelling` state's `cancelRequested`) | M7 | 5 | **delivered** |
-| The first-prompt handoff's identity: the message id that makes a resumed dispatch the SAME prompt | `web/src/features/chat/state/pendingFirstMessage.ts` | M13, M19 | 5 | **delivered** |
+| The first-prompt handoff's identity: the message id reused for a resumed dispatch of the same logical prompt attempt (server-side same-ID idempotency unverified) | `web/src/features/chat/state/pendingFirstMessage.ts` | M13, M19 | 5 | **delivered** |
 | The retention policy for the long-lived per-controller collections: a cap, a last-touch TTL, and the protection an in-flight entry has against eviction | `retention.ts` | L1 | 6 | **delivered** |
 | The loss the hydration buffer's backstop carried, and the refusal to claim a successful reconciliation | `eventPipeline.ts` (`buffer` / `droppedEventCount`) + `v2ThreadController.ts` (`reportBufferOverflow`) + `v2Events.ts` (the `events_dropped` reducer) | M5 (hold) | 6 | **delivered** |
 | The exhaustive form-field projection, so an unknown type is reported rather than mis-projected | `v2Forms.ts` (`projectV2Form`) | M15, M16 | 7 | **delivered** |

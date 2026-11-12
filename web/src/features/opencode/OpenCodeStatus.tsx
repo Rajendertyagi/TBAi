@@ -64,11 +64,8 @@ export function OpenCodeStatus({
     load: state.load,
     // Confirmed process-local activity is a RUN, not an idle connection: a
     // server that still owns a drain must not render as Connected.
-    running:
-      state.execution.type === "streaming" ||
-      state.execution.type === "executing" ||
-      state.activity === "running",
-    cancelled: state.execution.type === "cancelling",
+    running: extras?.projection?.hasActiveSessionWork ?? false,
+    cancelled: extras?.projection?.pendingLifecycle?.cancellationPending ?? false,
     recoveryBlocked,
     retry: state.retry ? { attempt: state.retry.attempt } : null,
     maxAttempts: OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,

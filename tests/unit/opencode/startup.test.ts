@@ -374,7 +374,7 @@ describe("the revalidation loop", () => {
     expect(isOpenCodeRevalidationRunning()).toBe(false);
   });
 
-  it("stops itself once the target is no longer adopted", async () => {
+  it("stops itself once the target is no longer adopted and no lost recovery is pending", async () => {
     installAdoptedTarget({ origin: ADOPTED_ORIGIN, password: "synthetic-adopted-password" });
     let probes = 0;
     startOpenCodeRevalidation(TICK_CONFIG, {
@@ -385,7 +385,7 @@ describe("the revalidation loop", () => {
     });
     expect(isOpenCodeRevalidationRunning()).toBe(true);
 
-    // The target becomes managed (a confirmed-loss fallback does exactly this).
+    // The target becomes managed (no adopted affinity recovery pending).
     // The check runs synchronously before the first await, so the very first
     // tick must stop the loop WITHOUT probing.
     installManagedTarget({ baseUrl: MANAGED_URL, password: getOpenCodeAuthPassword() });
@@ -410,19 +410,59 @@ describe("the revalidation loop", () => {
     expect(isOpenCodeRevalidationRunning()).toBe(true);
   });
 
-  it("stops after a confirmed-loss fallback", async () => {
+  it("keeps running after confirmed loss when affinity-safe recovery is pending/unavailable", async () => {
     installAdoptedTarget({ origin: ADOPTED_ORIGIN, password: "synthetic-adopted-password" });
     let probes = 0;
     startOpenCodeRevalidation(TICK_CONFIG, {
       revalidate: async () => {
         probes += 1;
-        return { status: "fallback", managedBaseUrl: MANAGED_URL };
+        // Simulate P3-A: adopted lost, target cleared, recovery pending/unavailable.
+        // Don't reset; instead emulate state via recovery module by returning unavailable
+        // while lost recovery state would exist in real flow. Here we just ensure loop
+        // continues when target not adopted but recovery may be pending is handled by
+        // production logic; for injected seam, return unavailable.
+        return {
+          status: "unavailable",
+          origin: ADOPTED_ORIGIN,
+          reason: "cannot_rediscover",
+        } as any;
       },
+    });
+    // Force lost recovery state so loop condition keeps it alive.
+    const recovery = await import("@/services/opencode/recovery.ts");
+    // Create a minimal lost state by triggering real loss path is complex here; instead
+    // directly set via internal behavior not exposed. Simpler: install adopted then clear
+    // and set lost state through a real revalidate call with seams.
+    resetOpenCodeRuntimeStartupForTests();
+    resetConnectionStateForTests();
+    installAdoptedTarget({ origin: ADOPTED_ORIGIN, password: "synthetic-adopted-password" });
+    probes = 0;
+    startOpenCodeRevalidation(TICK_CONFIG, {
+      revalidate: async () => {
+        probes += 1;
+        return {
+          status: "unavailable",
+          origin: ADOPTED_ORIGIN,
+          reason: "cannot_rediscover",
+        } as any;
+      },
+    });
+    // Manually create lost recovery state by invoking real recovery once with seams.
+    await recovery.revalidateAdoptedTarget({
+      config: TICK_CONFIG,
+      probeTransport: Object.assign(
+        async () => {
+          throw new Error("down");
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      ) as any,
+      rediscover: async () => null,
+      verifySessionAvailability: async () => true,
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(probes).toBeGreaterThan(0);
-    expect(isOpenCodeRevalidationRunning()).toBe(false);
+    expect(isOpenCodeRevalidationRunning()).toBe(true);
   });
 
   it("stops when a tick is refused by shutdown", async () => {

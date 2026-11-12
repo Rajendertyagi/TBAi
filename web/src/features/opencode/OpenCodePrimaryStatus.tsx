@@ -66,6 +66,7 @@ export function OpenCodePrimaryStatus() {
   if (extras === null) return null;
 
   const state = extras.state;
+  const projection = extras.projection;
   if (
     !isConnectionHealthy({
       connection: state.connection,
@@ -76,7 +77,11 @@ export function OpenCodePrimaryStatus() {
     return null;
   }
 
-  if (state.execution.type === "cancelling") {
+  // The cancellation intent store is the sole authority; there is no separate
+  // "cancelling" execution state to read (it was removed with the legacy cancel
+  // flag), so this must not compare against one.
+  const cancelling = projection?.pendingLifecycle.cancellationPending === true;
+  if (cancelling) {
     return (
       <PrimaryRow>
         <AgentStatus
@@ -124,8 +129,9 @@ export function OpenCodePrimaryStatus() {
     );
   }
 
+  const hasActiveSessionWork = projection?.hasActiveSessionWork ?? isRunning;
   const activity =
-    isRunning && lastMessage?.role === "assistant"
+    (isRunning || hasActiveSessionWork) && lastMessage?.role === "assistant"
       ? activityFromParts(lastMessage.content, opencodeToolActivityLabel)
       : null;
   if (activity === null) return null;

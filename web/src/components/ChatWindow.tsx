@@ -662,6 +662,15 @@ function AssistantTurnFooter() {
   // completed message looked live for as long as any turn was streaming — a
   // spinner on all history, and the provenance row hidden behind it.
   const isRunningMessage = useAuiState((s) => s.message.status?.type === "running");
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+  const threadExtras = useAuiState((s) => s.thread.extras);
+  const threadHasActiveWork =
+    threadExtras &&
+    typeof threadExtras === "object" &&
+    (threadExtras as { kind?: unknown }).kind === "tbai-opencode-v2"
+      ? ((threadExtras as { projection?: { hasActiveSessionWork?: boolean } }).projection
+          ?.hasActiveSessionWork ?? false)
+      : threadIsRunning;
   const custom = useAuiState(
     (s) =>
       (s.message.role === "assistant"
@@ -695,7 +704,9 @@ function AssistantTurnFooter() {
   // while the thread settles) shows the settled duration, not a live count.
   const settledDurationMs = custom?.turnTiming?.durationMs;
   const liveAnchor =
-    settledDurationMs === undefined && isRunningMessage ? custom?.turnStartedAt : undefined;
+    settledDurationMs === undefined && isRunningMessage && threadHasActiveWork
+      ? custom?.turnStartedAt
+      : undefined;
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -855,8 +866,17 @@ function AssistantPart({
   // Thread-level, so it is read here rather than threaded down from the message:
   // the streaming affordance below is about the THREAD still working, and the
   // library's per-message condition would keep it lit forever after an errored
-  // turn that produced no text.
+  // turn that produced no text. For OpenCode, "working" is actual session work,
+  // not Composer Stop availability.
   const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+  const threadExtras = useAuiState((s) => s.thread.extras);
+  const threadHasActiveWork =
+    threadExtras &&
+    typeof threadExtras === "object" &&
+    (threadExtras as { kind?: unknown }).kind === "tbai-opencode-v2"
+      ? ((threadExtras as { projection?: { hasActiveSessionWork?: boolean } }).projection
+          ?.hasActiveSessionWork ?? false)
+      : threadIsRunning;
 
   switch (part.type) {
     case "group-reasoning": {
@@ -916,7 +936,7 @@ function AssistantPart({
     // "no-text"). Gated on the THREAD (see above) so it can only appear while
     // work is real.
     case "indicator":
-      return threadIsRunning ? <ThinkingIndicator /> : null;
+      return threadHasActiveWork ? <ThinkingIndicator /> : null;
     default:
       return null;
   }

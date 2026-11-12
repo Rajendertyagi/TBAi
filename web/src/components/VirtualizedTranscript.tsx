@@ -215,7 +215,15 @@ export function VirtualizedTranscript({
   const writtenTopRef = useRef<number | null>(null);
 
   const rows = useAuiState(selectTranscriptRows);
-  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+  const extras = useAuiState((s) => s.thread.extras);
+  const isRunning =
+    extras &&
+    typeof extras === "object" &&
+    (extras as { kind?: unknown }).kind === "tbai-opencode-v2"
+      ? ((extras as { projection?: { hasActiveSessionWork?: boolean } }).projection
+          ?.hasActiveSessionWork ?? false)
+      : threadIsRunning;
   const prevIsRunningRef = useRef(isRunning);
 
   // Memoized because TanStack documents it: the virtualizer invalidates its

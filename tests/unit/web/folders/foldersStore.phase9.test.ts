@@ -113,7 +113,11 @@ describe("loadFolders — soft references preserved across hydration/refresh", (
 
   it("missing folder after successful folder-list refresh is preserved", async () => {
     globalThis.fetch = (async () => okFolders([folder("a")])) as unknown as typeof fetch;
-    useFoldersStore.setState({ selectedFolderId: "a", foldersLoaded: true, folders: [folder("a")] });
+    useFoldersStore.setState({
+      selectedFolderId: "a",
+      foldersLoaded: true,
+      folders: [folder("a")],
+    });
     await useFoldersStore.getState().loadFolders();
     expect(useFoldersStore.getState().selectedFolderId).toBe("a");
 
@@ -174,7 +178,8 @@ describe("loadFolders — soft references preserved across hydration/refresh", (
     const patchPreferences = mock(async () => null);
     usePreferencesStore.setState({ patchPreferences } as any);
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "DELETE") return { ok: true, status: 200, json: async () => ({}) } as Response;
+      if (init?.method === "DELETE")
+        return { ok: true, status: 200, json: async () => ({}) } as Response;
       return okFolders([folder("other")]);
     }) as unknown as typeof fetch;
     useFoldersStore.setState({

@@ -55,12 +55,32 @@ const SETTINGS_ROUTES = [
   { path: "/logs", heading: "Runtime Logs", strip: "Logs" },
 ] as const;
 
-/** Seed the stored typography, then reload so the pre-paint bootstrap runs. */
+/** Seed typography in the authoritative preferences store and pre-paint cache, then reload. */
 async function applyTypography(
   page: Page,
   overrides: Partial<TypographyConfig> = {},
+  request?: APIRequestContext,
 ): Promise<void> {
   const config = { ...V3_DEFAULTS, ...overrides };
+  const req = request ?? page.request;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await req.get("/api/preferences");
+    expect(current.ok()).toBe(true);
+    const snapshot = (await current.json()) as { revision: number };
+    const patched = await req.patch("/api/preferences", {
+      data: {
+        baseRevision: snapshot.revision,
+        preferences: { appearance: { typography: JSON.stringify(config) } },
+      },
+    });
+    if (patched.status() === 409) continue;
+    expect(patched.ok()).toBe(true);
+    break;
+  }
+  if (page.url() === "about:blank") {
+    await page.goto("/#/");
+    await page.waitForLoadState("domcontentloaded");
+  }
   await page.evaluate((value) => {
     localStorage.setItem("tbai-typography", JSON.stringify(value));
   }, config);
@@ -112,9 +132,9 @@ test.describe("compact tiers and the 9px floor", () => {
   ] as const;
 
   for (const tier of cases) {
-    test(`renders xs/2xs/3xs at ${tier.size}px`, async ({ page }) => {
+    test(`renders xs/2xs/3xs at ${tier.size}px`, async ({ page, request }) => {
       await page.goto("/#/typography");
-      await applyTypography(page, { interfaceFontSize: tier.size });
+      await applyTypography(page, { interfaceFontSize: tier.size }, request);
       await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
         timeout: 15_000,
       });
@@ -142,9 +162,9 @@ test.describe("compact tiers and the 9px floor", () => {
     });
   }
 
-  test("no rendered text falls below 9px at the minimum interface size", async ({ page }) => {
+  test("no rendered text falls below 9px at the minimum interface size", async ({ page, request }) => {
     await page.goto("/#/typography");
-    await applyTypography(page, { interfaceFontSize: 12 });
+    await applyTypography(page, { interfaceFontSize: 12 }, request);
 
     const tooSmall = await page.evaluate(() => {
       const offenders: string[] = [];
@@ -163,9 +183,9 @@ test.describe("compact tiers and the 9px floor", () => {
 });
 
 test.describe("interface font-size range (12–24px)", () => {
-  test("the 12px minimum paints at 12px and remains selected", async ({ page }) => {
+  test("the 12px minimum paints at 12px and remains selected", async ({ page, request }) => {
     await page.goto("/#/typography");
-    await applyTypography(page, { interfaceFontSize: 12 });
+    await applyTypography(page, { interfaceFontSize: 12 }, request);
     await expect(page.getByRole("heading", { name: "Typography", level: 1 })).toBeVisible({
       timeout: 15_000,
     });
@@ -199,9 +219,9 @@ test.describe("interface font-size range (12–24px)", () => {
 });
 
 test.describe("badge at the maximum interface size", () => {
-  test("does not clip and keeps its 20px minimum at the default", async ({ page }) => {
+  test("does not clip and keeps its 20px minimum at the default", async ({ page, request }) => {
     await page.goto("/#/providers");
-    await applyTypography(page, { interfaceFontSize: 16 });
+    await applyTypography(page, { interfaceFontSize: 16 }, request);
 
     const badge = page.locator('[data-slot="badge"]').first();
     await expect(badge).toBeVisible();
@@ -213,7 +233,7 @@ test.describe("badge at the maximum interface size", () => {
     expect(defaultBox.scroll).toBeLessThanOrEqual(defaultBox.client);
     expect(Math.round(defaultBox.height)).toBe(20);
 
-    await applyTypography(page, { interfaceFontSize: 24 });
+    await applyTypography(page, { interfaceFontSize: 24 }, request);
     const maximumBox = await badge.evaluate((element) => ({
       scroll: element.scrollHeight,
       client: element.clientHeight,
@@ -225,9 +245,10 @@ test.describe("badge at the maximum interface size", () => {
 
   test("ProviderDialog context window input renders compact and grows at 24px", async ({
     page,
+    request,
   }) => {
     await page.goto("/#/providers");
-    await applyTypography(page, { interfaceFontSize: 16 });
+    await applyTypography(page, { interfaceFontSize: 16 }, request);
 
     const editBtn = page.locator('button[aria-label^="Edit "]').first();
     await expect(editBtn).toBeVisible();
@@ -267,7 +288,7 @@ test.describe("badge at the maximum interface size", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
 
-    await applyTypography(page, { interfaceFontSize: 24 });
+    await applyTypography(page, { interfaceFontSize: 24 }, request);
     const editBtn24 = page.locator('button[aria-label^="Edit "]').first();
     await expect(editBtn24).toBeVisible();
     await editBtn24.click();
@@ -307,9 +328,9 @@ test.describe("badge at the maximum interface size", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("SidebarSection row does not clip at 24px interface font size", async ({ page }) => {
+  test("SidebarSection row does not clip at 24px interface font size", async ({ page, request }) => {
     await page.goto("/#/");
-    await applyTypography(page, { interfaceFontSize: 24 });
+    await applyTypography(page, { interfaceFontSize: 24 }, request);
 
     const sectionRow = page.locator(".group\\/section").first();
     await expect(sectionRow).toBeVisible();
@@ -365,7 +386,7 @@ test.describe("structured tool payload follows the Code channel", () => {
     const conversationId = await createConversation(request);
     try {
       await page.goto(`/#/chat/${conversationId}`);
-      await applyTypography(page, { interfaceFontSize: 16, codeFontSize: 13 });
+      await applyTypography(page, { interfaceFontSize: 16, codeFontSize: 13 }, request);
 
       await request.post(`${STUB}/__e2e/text`, { data: { text: FINAL_ANSWER } });
       const armed = await request.post(`${STUB}/__e2e/tool`, {
@@ -384,7 +405,7 @@ test.describe("structured tool payload follows the Code channel", () => {
       expect(atDefault.size).toBeCloseTo(13, 2);
       expect(atDefault.family).toContain("JetBrains Mono");
 
-      await applyTypography(page, { interfaceFontSize: 24, codeFontSize: 13 });
+      await applyTypography(page, { interfaceFontSize: 24, codeFontSize: 13 }, request);
       const afterResize = page.locator('[data-slot="code-payload"]').first();
       await expect(afterResize).toBeVisible({ timeout: 60_000 });
       const computed = await afterResize.evaluate((element) =>
@@ -412,7 +433,7 @@ test.describe("structured tool payload follows the Code channel", () => {
         terminalFontSize: 14,
         terminalFontFamily: "fira-code",
         terminalFontWeight: 500,
-      });
+      }, request);
 
       await request.post(`${STUB}/__e2e/text`, { data: { text: FINAL_ANSWER } });
       const armed = await request.post(`${STUB}/__e2e/tool`, {
@@ -487,9 +508,9 @@ test.describe("structured tool payload follows the Code channel", () => {
 });
 
 test.describe("Lato weight parity", () => {
-  test("registers every advertised weight for both probe texts", async ({ page }) => {
+  test("registers every advertised weight for both probe texts", async ({ page, request }) => {
     await page.goto("/#/appearance");
-    await applyTypography(page, { interfaceFontFamily: "lato" });
+    await applyTypography(page, { interfaceFontFamily: "lato" }, request);
 
     const loaded = await page.evaluate(async () => {
       const weights = [100, 300, 400, 700, 900];
@@ -582,7 +603,7 @@ test.describe("Mermaid renderer font and scaling integration", () => {
       await applyTypography(page, {
         interfaceFontFamily: "roboto",
         interfaceFontSize: 16,
-      });
+      }, request);
 
       // Verify the rendered SVG appears
       const diagram = page.locator('[data-slot="mermaid-diagram"]');
@@ -719,7 +740,7 @@ test.describe("Sonner toast typography inheritance", () => {
         await applyTypography(page, {
           interfaceFontFamily: "outfit",
           interfaceFontSize: size,
-        });
+        }, request);
 
         await expect(page.getByRole("heading", { name: "Quick Messages", level: 1 })).toBeVisible({
           timeout: 15000,
@@ -792,10 +813,11 @@ test.describe("Dialog viewport constraints", () => {
   for (const vp of viewports) {
     test(`ProviderDialog stays within viewport and maintains internal scroll at ${vp.height}px height`, async ({
       page,
+      request,
     }) => {
       await page.setViewportSize(vp);
       await page.goto("/#/providers");
-      await applyTypography(page, { interfaceFontSize: 16 });
+      await applyTypography(page, { interfaceFontSize: 16 }, request);
 
       const editBtn = page.locator('button[aria-label^="Edit "]').first();
       await expect(editBtn).toBeVisible();
@@ -885,15 +907,22 @@ test.describe("Typography settings previews", () => {
       .poll(() => readingPreview.evaluate((element) => getComputedStyle(element).lineHeight))
       .not.toBe(readingLineHeightBefore);
     await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (
-              JSON.parse(localStorage.getItem("tbai-typography") || "{}") as {
-                readingLineHeight?: number;
-              }
-            ).readingLineHeight,
-        ),
+      .poll(
+        async () => {
+          const res = await page.request.get("/api/preferences");
+          if (!res.ok()) return undefined;
+          const snap = (await res.json()) as {
+            preferences?: { appearance?: { typography?: string } };
+          };
+          const raw = snap.preferences?.appearance?.typography;
+          if (!raw || raw === "default") return undefined;
+          try {
+            return (JSON.parse(raw) as { readingLineHeight?: number }).readingLineHeight;
+          } catch {
+            return undefined;
+          }
+        },
+        { timeout: 15000 },
       )
       .toBe(1.65);
   });

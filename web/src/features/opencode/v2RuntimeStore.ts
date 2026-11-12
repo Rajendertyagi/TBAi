@@ -11,17 +11,7 @@ import { projectV2RepositoryItems, repositoryHeadId } from "./v2MessageProjectio
 import { createV2ThreadListAdapter } from "./v2ThreadList";
 import type { V2ThreadController } from "./v2ThreadController";
 import type { V2ThreadState } from "./v2Types";
-
-function executionIsRunning(state: V2ThreadState): boolean {
-  return (
-    state.execution.type === "submitting" ||
-    state.execution.type === "admitted" ||
-    state.execution.type === "reconciling" ||
-    state.execution.type === "executing" ||
-    state.execution.type === "streaming" ||
-    state.execution.type === "cancelling"
-  );
-}
+import type { V2LifecycleProjection } from "./sync/lifecycleProjection";
 
 function permissionViews(state: V2ThreadState): readonly V2PermissionView[] {
   return state.permissions
@@ -41,17 +31,28 @@ function permissionViews(state: V2ThreadState): readonly V2PermissionView[] {
  */
 function toMessageNotSentError(error: unknown): Error {
   if (error instanceof MessageNotSentError) return error;
-  if (
-    error !== null &&
-    typeof error === "object" &&
-    "kind" in error &&
-    (error as { readonly kind?: unknown }).kind === "ambiguous"
-  ) {
-    const detail =
-      "error" in error && typeof (error as { readonly error?: unknown }).error === "object"
-        ? (error as { readonly error: { readonly message?: string } }).error
-        : null;
-    return new Error(detail?.message ?? "OpenCode V2 prompt could not be confirmed");
+  if (error !== null && typeof error === "object" && "kind" in error) {
+    const kind = (error as { readonly kind?: unknown }).kind;
+    if (kind === "capacity-backpressure") {
+      // Refused before dispatch, and recoverable: the prompt never reached the
+      // server, so "not sent" is literally true. The message names the cause so
+      // it is not mistaken for a network or server failure.
+      const detail =
+        "error" in error && typeof (error as { readonly error?: unknown }).error === "object"
+          ? (error as { readonly error: { readonly message?: string } }).error
+          : null;
+      return new MessageNotSentError(
+        detail?.message ??
+          "Prompt capacity is temporarily full; retry after queued prompts settle.",
+      );
+    }
+    if (kind === "ambiguous") {
+      const detail =
+        "error" in error && typeof (error as { readonly error?: unknown }).error === "object"
+          ? (error as { readonly error: { readonly message?: string } }).error
+          : null;
+      return new Error(detail?.message ?? "OpenCode V2 prompt could not be confirmed");
+    }
   }
   const message = error instanceof Error ? error.message : "OpenCode V2 prompt could not be sent";
   return new MessageNotSentError(message);
@@ -66,16 +67,18 @@ function toMessageNotSentError(error: unknown): Error {
 function buildV2RuntimeStore(
   controller: V2ThreadController,
   state: V2ThreadState,
+  projection: V2LifecycleProjection,
   conversationId: string | null,
   messageRepository: ExportedMessageRepository,
   permissions: readonly V2PermissionView[],
 ): ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } {
-  const extras = createV2RuntimeExtras(controller, state, permissions);
+  const extras = createV2RuntimeExtras(controller, state, projection, permissions);
   const adapter: ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } = {
     messageRepository,
-    isLoading: state.load.type !== "ready",
-    isRunning: executionIsRunning(state),
-    isSendDisabled: state.revertRecovery.type !== "none",
+    isLoading: projection.isLoading,
+    // Composer Stop compatibility only.
+    isRunning: projection.isRunning,
+    isSendDisabled: projection.isSendDisabled,
     extras,
     adapters: { threadList: createV2ThreadListAdapter(state, conversationId) },
     setMessages: (messages) => {
@@ -88,7 +91,9 @@ function buildV2RuntimeStore(
         throw toMessageNotSentError(error);
       }
     },
-    onCancel: () => controller.cancel(),
+    onCancel: async () => {
+      await controller.stopComposer();
+    },
     onReload: async (parentId: string | null) => {
       await controller.regenerate(parentId);
     },
@@ -135,10 +140,8 @@ type RepositoryCacheEntry = {
  * controller it was built for.
  *
  * `extras` is deliberately NOT memoized: it embeds the whole
- * `V2ThreadState`, and the context ring and status chip read
- * `extras.state.*` live. Holding it stable would hand them a stale snapshot.
- * A new extras object is a plain assignment in assistant-ui (line 159) and
- * costs nothing next to the repository walk it gates.
+ * `V2ThreadState` and lifecycle projection, and consumers read them live.
+ * Holding it stable would hand them a stale snapshot.
  *
  * @param controller - The controller whose state this builder is fed.
  * @param conversationId - Conversation identity for the thread-list adapter.
@@ -149,10 +152,11 @@ export function createV2RuntimeStoreFactory(
   conversationId: string | null,
 ): (
   state: V2ThreadState,
+  projection: V2LifecycleProjection,
 ) => ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } {
   let cache: RepositoryCacheEntry | null = null;
 
-  return (state: V2ThreadState) => {
+  return (state: V2ThreadState, projection: V2LifecycleProjection) => {
     if (
       cache === null ||
       cache.messages !== state.messages ||
@@ -175,6 +179,7 @@ export function createV2RuntimeStoreFactory(
     return buildV2RuntimeStore(
       controller,
       state,
+      projection,
       conversationId,
       cache.repository,
       cache.permissionViews,

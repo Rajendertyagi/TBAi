@@ -79,7 +79,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // One effect for the whole DOM write, so class and attribute can never disagree.
   useEffect(() => {
     applyThemeToDom(theme, themeIds[resolvedTheme]);
-  }, [theme, themeIds, resolvedTheme, systemPrefersDark]);
+  }, [theme, themeIds, resolvedTheme]);
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next);

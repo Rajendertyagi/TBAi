@@ -24,6 +24,7 @@ import {
   readConversationHistoryOwner,
   type OpenCodeHistoryOwner,
 } from "./historyBoundary";
+import { getLostAdoptedRecovery, isConversationBoundToLostAdopted } from "./recovery";
 import { openCodeServerManager } from "./serverManager";
 
 /** The service one history operation is allowed to use. Immutable. */
@@ -69,6 +70,20 @@ export async function resolveOpenCodeServiceAccess(
 
   const recorded = readConversationHistoryOwner(conversation);
 
+  // Affinity-safe adopted recovery: conversations bound to a lost adopted
+  // service must not be silently switched to another server (including managed
+  // fallback). Refuse as unavailable until the original service is restored.
+  if (isConversationBoundToLostAdopted(conversation)) {
+    const lost = getLostAdoptedRecovery()?.lost;
+    const owner = lost?.owner ?? recorded;
+    throw new OpenCodeHistoryBoundaryError(
+      "adopted_unavailable",
+      conversation.id,
+      `This conversation's OpenCode history belongs to ${owner ? describeHistoryOwner(owner) : "the adopted OpenCode service"}, ` +
+        "which is not available.",
+    );
+  }
+
   const installedTarget = readConnectionState().target;
   if (installedTarget.mode !== "unresolved") {
     const active = historyOwnerFromTarget(installedTarget) as OpenCodeHistoryOwner;
@@ -96,6 +111,18 @@ export async function resolveOpenCodeServiceAccess(
   const publishedTarget = readConnectionState().target;
   if (publishedTarget.mode !== "unresolved") {
     const active = historyOwnerFromTarget(publishedTarget) as OpenCodeHistoryOwner;
+    // A restored adopted service must not silently take over conversations that
+    // correctly started using managed fallback.
+    if (isConversationBoundToLostAdopted(conversation)) {
+      const lost = getLostAdoptedRecovery()?.lost;
+      const owner = lost?.owner ?? recorded;
+      throw new OpenCodeHistoryBoundaryError(
+        "adopted_unavailable",
+        conversation.id,
+        `This conversation's OpenCode history belongs to ${owner ? describeHistoryOwner(owner) : "the adopted OpenCode service"}, ` +
+          "which is not available.",
+      );
+    }
     assertSameHistoryOwner(conversation.id, recorded, active);
     return captureInstalledAccess(active);
   }

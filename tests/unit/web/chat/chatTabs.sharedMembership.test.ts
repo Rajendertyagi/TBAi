@@ -133,7 +133,10 @@ describe("batch close suppresses delayed membership additions (race)", () => {
 
   it("Close All suppresses delayed add that enters after batch close", async () => {
     usePreferencesStore.setState({
-      snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }]),
+      snapshot: snapWithTabs([
+        { kind: "chat", ref: "a" },
+        { kind: "chat", ref: "b" },
+      ]),
     } as any);
     let openCalls = 0;
     let batchCalls = 0;
@@ -177,7 +180,13 @@ describe("batch close suppresses delayed membership additions (race)", () => {
     usePreferencesStore.setState({
       openSharedTab: async (id: string) => {
         opened.push(id);
-        return snapWithTabs([{ kind: "chat", ref: "b" }, { kind: "chat", ref: id }], 3);
+        return snapWithTabs(
+          [
+            { kind: "chat", ref: "b" },
+            { kind: "chat", ref: id },
+          ],
+          3,
+        );
       },
       closeSharedTabsBatch: async () => ({
         ok: true,
@@ -186,7 +195,9 @@ describe("batch close suppresses delayed membership additions (race)", () => {
       refresh: async () => usePreferencesStore.getState().snapshot,
     } as any);
 
-    await useChatTabsStore.getState().requestSharedCloseBatch({ mode: "others", anchorConversationId: "b" });
+    await useChatTabsStore
+      .getState()
+      .requestSharedCloseBatch({ mode: "others", anchorConversationId: "b" });
     useChatTabsStore.getState().requestDelayedSharedOpen("a", "chat"); // removed
     useChatTabsStore.getState().requestDelayedSharedOpen("c", "chat"); // removed
     await new Promise((r) => setTimeout(r, 20));
@@ -205,16 +216,31 @@ describe("batch close suppresses delayed membership additions (race)", () => {
     usePreferencesStore.setState({
       openSharedTab: async (id: string) => {
         opened.push(id);
-        return snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }, { kind: "chat", ref: id }], 3);
+        return snapWithTabs(
+          [
+            { kind: "chat", ref: "a" },
+            { kind: "chat", ref: "b" },
+            { kind: "chat", ref: id },
+          ],
+          3,
+        );
       },
       closeSharedTabsBatch: async () => ({
         ok: true,
-        snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 2),
+        snapshot: snapWithTabs(
+          [
+            { kind: "chat", ref: "a" },
+            { kind: "chat", ref: "b" },
+          ],
+          2,
+        ),
       }),
       refresh: async () => usePreferencesStore.getState().snapshot,
     } as any);
 
-    await useChatTabsStore.getState().requestSharedCloseBatch({ mode: "right", anchorConversationId: "b" });
+    await useChatTabsStore
+      .getState()
+      .requestSharedCloseBatch({ mode: "right", anchorConversationId: "b" });
     useChatTabsStore.getState().requestDelayedSharedOpen("c", "chat"); // removed (right of b)
     await new Promise((r) => setTimeout(r, 20));
     expect(opened).toEqual([]);
@@ -224,7 +250,13 @@ describe("batch close suppresses delayed membership additions (race)", () => {
     // Deterministic, deferred: hold delayed add's openSharedTab pending; request Close All;
     // batch returns conflict; resolve delayed add. Must NOT issue individual closeSharedTab.
     usePreferencesStore.setState({
-      snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 1),
+      snapshot: snapWithTabs(
+        [
+          { kind: "chat", ref: "a" },
+          { kind: "chat", ref: "b" },
+        ],
+        1,
+      ),
     } as any);
 
     let resolveOpen!: (v: any) => void;
@@ -250,7 +282,13 @@ describe("batch close suppresses delayed membership additions (race)", () => {
         return {
           ok: false,
           reason: "conflict",
-          snapshot: snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 5),
+          snapshot: snapWithTabs(
+            [
+              { kind: "chat", ref: "a" },
+              { kind: "chat", ref: "b" },
+            ],
+            5,
+          ),
         };
       },
       refresh: async () => usePreferencesStore.getState().snapshot,
@@ -268,7 +306,15 @@ describe("batch close suppresses delayed membership additions (race)", () => {
     expect(individualCloseCalls).toBe(0);
 
     // 3. Resolve the delayed addition — suppression branch must not auto-issue individual close.
-    resolveOpen(snapWithTabs([{ kind: "chat", ref: "a" }, { kind: "chat", ref: "b" }], 2));
+    resolveOpen(
+      snapWithTabs(
+        [
+          { kind: "chat", ref: "a" },
+          { kind: "chat", ref: "b" },
+        ],
+        2,
+      ),
+    );
     await new Promise((r) => setTimeout(r, 20));
 
     expect(batchCalls).toBe(1); // batch was the explicit operation
@@ -296,7 +342,12 @@ describe("batch close suppresses delayed membership additions (race)", () => {
       },
       closeSharedTabsBatch: async () => {
         batchCalls++;
-        return { ok: false, reason: "error", error: "server error", snapshot: snapWithTabs([{ kind: "chat", ref: "a" }], 1) };
+        return {
+          ok: false,
+          reason: "error",
+          error: "server error",
+          snapshot: snapWithTabs([{ kind: "chat", ref: "a" }], 1),
+        };
       },
       refresh: async () => usePreferencesStore.getState().snapshot,
     } as any);

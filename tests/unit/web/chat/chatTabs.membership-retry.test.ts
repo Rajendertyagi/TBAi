@@ -75,7 +75,9 @@ describe("shared membership failure and explicit retry", () => {
     await useChatTabsStore.getState().retrySharedOpen("c1", "chat");
     expect(openCalls).toBe(2); // only membership op retried
     expect(useChatTabsStore.getState().membershipFailures.c1).toBeUndefined();
-    expect(usePreferencesStore.getState().snapshot?.sharedTabs).toEqual([{ ref: "c1", kind: "chat" }]);
+    expect(usePreferencesStore.getState().snapshot?.sharedTabs).toEqual([
+      { ref: "c1", kind: "chat" },
+    ]);
   });
 
   it("stale 409 on explicit retry refreshes authoritative state and does not auto-retry with fresh revision", async () => {

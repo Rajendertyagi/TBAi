@@ -44,7 +44,8 @@ export interface PendingFirstPrompt {
    * The prompt's identity on the server, allocated with the claim.
    *
    * Every dispatch of this entry carries it, so a resumed dispatch is the
-   * same prompt server-side rather than a second one.
+   * same logical prompt attempt rather than generating a new one. Server-side
+   * same-ID idempotency is unverified and not relied upon.
    */
   messageId?: string;
   /**

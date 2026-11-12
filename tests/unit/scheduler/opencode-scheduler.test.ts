@@ -568,11 +568,15 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           list: async () => ({
             data: [{ id: promptId, text: testJob.prompt }],
           }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -600,9 +604,13 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           list: async () => ({ data: [] }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -634,9 +642,13 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           list: async () => ({ data: [] }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -674,9 +686,13 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           list: async () => ({ data: [] }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -713,16 +729,20 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async (_args: any, opts: any) => {
-          // Simulate timeout/abort
-          return new Promise((_resolve, reject) => {
-            opts.signal.addEventListener("abort", () => {
-              reject(new Error("aborted"));
-            });
-          });
-        },
         interrupt: async () => {
           interruptCalled = true;
+        },
+      },
+      experimental: {
+        session: {
+          wait: async (_args: any, opts: any) => {
+            // Simulate timeout/abort
+            return new Promise((_resolve, reject) => {
+              opts.signal.addEventListener("abort", () => {
+                reject(new Error("aborted"));
+              });
+            });
+          },
         },
       },
     };
@@ -830,12 +850,16 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           cancel: async () => {
             cancelCalled = true;
           },
           list: async () => ({ data: [] }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -848,14 +872,17 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     setTimeout(() => controller.abort(), 10);
     mockOpenCodeClient = {
       ...mockOpenCodeClient,
-      session: {
-        ...mockOpenCodeClient.session,
-        wait: async (_args: any, opts: any) => {
-          return new Promise((resolve) => {
-            const onAbort = () => resolve({});
-            if (opts?.signal?.aborted) return resolve({});
-            opts?.signal?.addEventListener("abort", onAbort, { once: true });
-          });
+      experimental: {
+        ...mockOpenCodeClient.experimental,
+        session: {
+          ...mockOpenCodeClient.experimental?.session,
+          wait: async (_args: any, opts: any) => {
+            return new Promise((resolve) => {
+              const onAbort = () => resolve({});
+              if (opts?.signal?.aborted) return resolve({});
+              opts?.signal?.addEventListener("abort", onAbort, { once: true });
+            });
+          },
         },
       },
     };
@@ -897,18 +924,22 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async (_args: any, opts: any) => {
-          return new Promise((resolve) => {
-            const onAbort = () => resolve({});
-            if (opts?.signal?.aborted) return resolve({});
-            opts?.signal?.addEventListener("abort", onAbort, { once: true });
-            setTimeout(() => controller.abort(), 10);
-          });
-        },
         inbox: {
           cancel: async () => ({}),
           list: async () => {
             throw new Error("inbox list failed");
+          },
+        },
+      },
+      experimental: {
+        session: {
+          wait: async (_args: any, opts: any) => {
+            return new Promise((resolve) => {
+              const onAbort = () => resolve({});
+              if (opts?.signal?.aborted) return resolve({});
+              opts?.signal?.addEventListener("abort", onAbort, { once: true });
+              setTimeout(() => controller.abort(), 10);
+            });
           },
         },
       },
@@ -953,10 +984,14 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     mockOpenCodeClient = {
       session: {
         prompt: async () => ({}),
-        wait: async () => ({}),
         inbox: {
           cancel: async () => ({}),
           list: async () => ({ data: [] }),
+        },
+      },
+      experimental: {
+        session: {
+          wait: async () => ({}),
         },
       },
       message: {
@@ -967,15 +1002,18 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     const controller = new AbortController();
     mockOpenCodeClient = {
       ...mockOpenCodeClient,
-      session: {
-        ...mockOpenCodeClient.session,
-        wait: async (_args: any, opts: any) => {
-          return new Promise((resolve) => {
-            const onAbort = () => resolve({});
-            if (opts?.signal?.aborted) return resolve({});
-            opts?.signal?.addEventListener("abort", onAbort, { once: true });
-            setTimeout(() => controller.abort(), 10);
-          });
+      experimental: {
+        ...mockOpenCodeClient.experimental,
+        session: {
+          ...mockOpenCodeClient.experimental?.session,
+          wait: async (_args: any, opts: any) => {
+            return new Promise((resolve) => {
+              const onAbort = () => resolve({});
+              if (opts?.signal?.aborted) return resolve({});
+              opts?.signal?.addEventListener("abort", onAbort, { once: true });
+              setTimeout(() => controller.abort(), 10);
+            });
+          },
         },
       },
     };

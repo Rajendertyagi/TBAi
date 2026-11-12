@@ -66,7 +66,10 @@ export interface V2EventReader {
 export interface V2HistoryReader {
   readonly [V2_HISTORY_READER_BRAND]: true;
   readonly sessionId: string;
-  list(input: MessageListInput): Promise<SessionMessagesResponse>;
+  list(
+    input: MessageListInput,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SessionMessagesResponse>;
 }
 
 export interface V2ConnectionSignals {
@@ -92,7 +95,10 @@ export interface OpenCodeV2GenerationOperations {
   prompt(input: SessionPromptInput): Promise<SessionInboxUser>;
   compact(input: SessionCompactInput): Promise<SessionInboxCompaction>;
   interrupt(input: SessionInterruptInput): Promise<SessionInterruptResponse>;
-  inboxList(input: SessionInboxListInput): Promise<SessionInboxInfo[]>;
+  inboxList(
+    input: SessionInboxListInput,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SessionInboxInfo[]>;
   inboxCancel(input: SessionInboxCancelInput): Promise<void>;
   revertStage(input: SessionRevertStageInput): Promise<SessionRevert>;
   revertCommit(input: SessionRevertCommitInput): Promise<void>;
@@ -227,10 +233,36 @@ export function createOpenCodeV2Client(
       assertScopedSession(input, scope.sessionId);
       return callWithGeneration(state, signal, (requestOptions) => call(input, requestOptions));
     };
-    const connectionOperation = <TInput extends SessionScopedInput, TResult>(
+    const withComposedSignal = async <T>(
+      base: AbortSignal,
+      extra: AbortSignal | undefined,
+      run: (signal: AbortSignal) => Promise<T>,
+    ): Promise<T> => {
+      if (!extra) return run(base);
+      if (extra.aborted) return run(extra);
+      if (base.aborted) return run(base);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      base.addEventListener("abort", abort, { once: true });
+      extra.addEventListener("abort", abort, { once: true });
+      try {
+        if (base.aborted || extra.aborted) controller.abort();
+        return await run(controller.signal);
+      } finally {
+        base.removeEventListener("abort", abort);
+        extra.removeEventListener("abort", abort);
+      }
+    };
+    const connectionOperation = async <TInput extends SessionScopedInput, TResult>(
       input: TInput,
       call: (scopedInput: TInput, requestOptions: OfficialRequestOptions) => Promise<TResult>,
-    ): Promise<TResult> => scoped(input, state.connectionSignal, call);
+      extraSignal?: AbortSignal,
+    ): Promise<TResult> => {
+      assertScopedSession(input, scope.sessionId);
+      return withComposedSignal(state.connectionSignal, extraSignal, (signal) =>
+        callWithGeneration(state, signal, (requestOptions) => call(input, requestOptions)),
+      );
+    };
     const lifecycleOperation = <TInput extends SessionScopedInput, TResult>(
       input: TInput,
       call: (scopedInput: TInput, requestOptions: OfficialRequestOptions) => Promise<TResult>,
@@ -238,9 +270,11 @@ export function createOpenCodeV2Client(
     const history: V2HistoryReader = {
       [V2_HISTORY_READER_BRAND]: true,
       sessionId: scope.sessionId,
-      list: (input) =>
-        connectionOperation(input, (scopedInput, requestOptions) =>
-          officialClient.message.list(scopedInput, requestOptions),
+      list: (input, options) =>
+        connectionOperation(
+          input,
+          (scopedInput, requestOptions) => officialClient.message.list(scopedInput, requestOptions),
+          options?.signal,
         ),
     };
     const operations: OpenCodeV2GenerationOperations = {
@@ -272,9 +306,12 @@ export function createOpenCodeV2Client(
         connectionOperation(input, (scopedInput, requestOptions) =>
           officialClient.session.interrupt(scopedInput, requestOptions),
         ),
-      inboxList: (input) =>
-        connectionOperation(input, (scopedInput, requestOptions) =>
-          officialClient.session.inbox.list(scopedInput, requestOptions),
+      inboxList: (input, options) =>
+        connectionOperation(
+          input,
+          (scopedInput, requestOptions) =>
+            officialClient.session.inbox.list(scopedInput, requestOptions),
+          options?.signal,
         ),
       inboxCancel: (input) =>
         connectionOperation(input, (scopedInput, requestOptions) =>

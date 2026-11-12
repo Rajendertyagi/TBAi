@@ -80,7 +80,46 @@ let runtimeAvailable = true;
 
 mock.module("@web/features/opencode/v2RuntimeExtras.ts", () => ({
   useOptionalV2RuntimeExtras: () =>
-    runtimeAvailable ? { state: runtimeState, permissions } : null,
+    runtimeAvailable
+      ? {
+          state: runtimeState,
+          permissions,
+          projection: {
+            isLoading: runtimeState.load?.type !== "ready",
+            isRunning:
+              runtimeState.execution?.type === "executing" ||
+              runtimeState.execution?.type === "streaming",
+            composerStopAvailable:
+              runtimeState.execution?.type === "executing" ||
+              runtimeState.execution?.type === "streaming",
+            composerStopOperation:
+              runtimeState.execution?.type === "executing" ||
+              runtimeState.execution?.type === "streaming"
+                ? {
+                    kind: "stop-current-execution",
+                    intentId: null,
+                    promptId: null,
+                    inboxId: null,
+                    assistantMessageId: null,
+                    scope: "session-wide",
+                  }
+                : { kind: "none" },
+            hasActiveSessionWork:
+              runtimeState.execution?.type === "executing" ||
+              runtimeState.execution?.type === "streaming" ||
+              runtimeState.execution?.type === "cancelling",
+            pendingLifecycle: {
+              submissionPending: false,
+              cancellationPending: runtimeState.execution?.type === "cancelling",
+              reasons: [],
+            },
+            queuedPromptActions: [],
+            isSendDisabled: false,
+            primaryStatus: runtimeState.execution?.type === "cancelling" ? "cancelling" : "idle",
+            detail: "",
+          },
+        }
+      : null,
 }));
 
 // ── the components, imported AFTER the mock is registered ────────────────────

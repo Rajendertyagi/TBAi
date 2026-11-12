@@ -71,16 +71,13 @@ export function usePreferencesSync(): void {
       try {
         const parsed = JSON.parse(a.typography) as unknown;
         const config = migrateTypography(parsed);
-        suppressAppearancePatch();
         applyTypographyToDom(config);
       } catch {
         // Invalid authoritative typography: apply safe canonical default (no DB migration).
-        suppressAppearancePatch();
         applyTypographyToDom(DEFAULT_TYPOGRAPHY);
       }
     } else {
       // Authoritative default: replace any stale cached/custom typography.
-      suppressAppearancePatch();
       applyTypographyToDom(DEFAULT_TYPOGRAPHY);
     }
     if (a.themeMode === "light" || a.themeMode === "dark" || a.themeMode === "system") {
@@ -131,7 +128,9 @@ export function usePreferencesSync(): void {
       w.scopeMode === "project" && w.folderId
         ? { mode: "project" as const, folderId: w.folderId }
         : { mode: "simple" as const, folderId: null };
-    const nextTab = isQuickActionTabId(w.quickActionTab) ? w.quickActionTab : DEFAULT_QUICK_ACTION_TAB;
+    const nextTab = isQuickActionTabId(w.quickActionTab)
+      ? w.quickActionTab
+      : DEFAULT_QUICK_ACTION_TAB;
     const scopeChanged =
       scopeState.scope.mode !== nextScope.mode || scopeState.scope.folderId !== nextScope.folderId;
     const tabChanged = scopeState.quickActionTab !== nextTab;

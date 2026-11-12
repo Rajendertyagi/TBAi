@@ -132,7 +132,10 @@ describe("workspace preferences service (canonical)", () => {
     const rawBefore = readRawSnapshotRow();
     expect(() => getWorkspacePreferences()).toThrow(WorkspacePreferencesCorruptError);
     expect(() =>
-      patchWorkspacePreferences({ baseRevision: 1, preferences: { appearance: { themeMode: "dark" } } }),
+      patchWorkspacePreferences({
+        baseRevision: 1,
+        preferences: { appearance: { themeMode: "dark" } },
+      }),
     ).toThrow(WorkspacePreferencesCorruptError);
     expect(() => openSharedTab({ baseRevision: 1, kind: "chat", conversationId: "c1" })).toThrow(
       WorkspacePreferencesCorruptError,
@@ -140,9 +143,9 @@ describe("workspace preferences service (canonical)", () => {
     expect(() => closeSharedTab({ baseRevision: 1, conversationId: "c1" })).toThrow(
       WorkspacePreferencesCorruptError,
     );
-    expect(() =>
-      closeSharedTabsBatch({ baseRevision: 1, mode: "all" }),
-    ).toThrow(WorkspacePreferencesCorruptError);
+    expect(() => closeSharedTabsBatch({ baseRevision: 1, mode: "all" })).toThrow(
+      WorkspacePreferencesCorruptError,
+    );
     expect(() => reorderSharedTab({ baseRevision: 1, conversationId: "c1", toIndex: 0 })).toThrow(
       WorkspacePreferencesCorruptError,
     );
@@ -163,7 +166,10 @@ describe("workspace preferences service (canonical)", () => {
       const rawBefore = readRawSnapshotRow();
       expect(() => getWorkspacePreferences()).toThrow(WorkspacePreferencesCorruptError);
       expect(() =>
-        patchWorkspacePreferences({ baseRevision: 1, preferences: { appearance: { themeMode: "dark" } } }),
+        patchWorkspacePreferences({
+          baseRevision: 1,
+          preferences: { appearance: { themeMode: "dark" } },
+        }),
       ).toThrow(WorkspacePreferencesCorruptError);
       expect(readRawSnapshotRow()?.value).toBe(rawBefore?.value);
       clearSnapshot();
@@ -246,7 +252,10 @@ describe("sectionOrder strict normalization (backend parity)", () => {
   it("valid known IDs deduped and missing appended in default order", () => {
     expect(normalizeSectionOrderStrict(["chats", "folders"])).toEqual(["chats", "folders"]);
     expect(normalizeSectionOrderStrict(["chats"])).toEqual(["chats", "folders"]);
-    expect(normalizeSectionOrderStrict(["folders", "folders", "chats"])).toEqual(["folders", "chats"]);
+    expect(normalizeSectionOrderStrict(["folders", "folders", "chats"])).toEqual([
+      "folders",
+      "chats",
+    ]);
   });
 
   it("non-array, invalid element types, unknown IDs => corruption error", () => {
@@ -357,10 +366,19 @@ describe("workspace preferences shared tabs (CAS, canonical)", () => {
   it("emits preferences change after committed mutation with originWindowId", () => {
     const events: Array<{ revision: number; changedKeys?: string[]; originWindowId?: string }> = [];
     const unsub = subscribePreferencesChanges((e) =>
-      events.push({ revision: e.revision, changedKeys: e.changedKeys, originWindowId: e.originWindowId }),
+      events.push({
+        revision: e.revision,
+        changedKeys: e.changedKeys,
+        originWindowId: e.originWindowId,
+      }),
     );
     try {
-      openSharedTab({ baseRevision: 0, kind: "chat", conversationId: "c1", originWindowId: "win-1" });
+      openSharedTab({
+        baseRevision: 0,
+        kind: "chat",
+        conversationId: "c1",
+        originWindowId: "win-1",
+      });
       expect(events.length).toBeGreaterThan(0);
       expect(events[events.length - 1]?.revision).toBe(1);
       expect(events[events.length - 1]?.changedKeys).toContain("sharedTabs");

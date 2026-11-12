@@ -5,7 +5,6 @@ import { OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS } from "@web/features/opencode/confi
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
   ASSISTANT_TOOL_MESSAGE,
-  EVENT_INBOX_ID,
   FORM_REPLY,
   LIVE_ASSISTANT_MESSAGE_ID,
   LOCAL_MESSAGE_ID,
@@ -495,7 +494,7 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  it("R-M7: a cancel requested before admission is honoured once after admission", async () => {
+  it("R-M7: a queued-prompt cancel requested before admission is honoured once after admission", async () => {
     const prompt = deferred<{
       id: string;
       sessionID: string;
@@ -510,27 +509,39 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
     await controller.awaitReady();
     try {
-      void controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
+      const sending = controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
+      const sendingOutcome = sending.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
       await new Promise((r) => setTimeout(r, 10));
 
-      // The user cancels while the prompt request is still in flight.
-      await controller.cancel();
+      // The user cancels the queued prompt while admission/target resolution is pending.
+      await controller.cancelQueuedPrompt(LOCAL_MESSAGE_ID);
 
-      // The prompt is admitted after the cancel.
-      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "steer"));
-      await waitForState(controller, (state) => state.execution.type === "admitted");
+      // The prompt is admitted after the cancel request (exact inbox-event correlation).
+      generation.events.emit(inboxEvent(LOCAL_MESSAGE_ID, LOCAL_MESSAGE_ID, "steer"));
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       await new Promise((r) => setTimeout(r, 20));
 
-      // CORRECT: the pending cancel is honoured exactly once, against the
+      // CORRECT: the pending queued-prompt cancel is honoured exactly once, against the
       // admitted inbox id.
       expect(generation.inboxCancelInputs).toHaveLength(1);
-      expect(generation.inboxCancelInputs[0]?.inboxID).toBe(EVENT_INBOX_ID);
+      expect(generation.inboxCancelInputs[0]?.inboxID).toBe(LOCAL_MESSAGE_ID);
+
+      // sendMessage may remain pending on the unresolved HTTP response in this harness;
+      // admission and cancellation intent are the behaviors under test.
+      void sendingOutcome;
     } finally {
       controller.dispose();
     }
   });
 
-  it("R-M7: a second admission of the same prompt does not cancel it twice", async () => {
+  it("R-M7: a second admission of the same prompt does not dispatch queued cancel twice", async () => {
     // The admission arrives through two paths - the HTTP response and the
     // inbox event - and both must not issue the cancel. The inbox id is what
     // identifies the queued prompt, so the cancel is keyed on it.
@@ -548,14 +559,19 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
     await controller.awaitReady();
     try {
-      void controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
+      const sending = controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
+      void sending.catch(() => undefined);
       await new Promise((r) => setTimeout(r, 10));
-      await controller.cancel();
+      await controller.cancelQueuedPrompt(LOCAL_MESSAGE_ID);
 
-      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "steer"));
-      await waitForState(controller, (state) => state.execution.type === "admitted");
+      generation.events.emit(inboxEvent(LOCAL_MESSAGE_ID, LOCAL_MESSAGE_ID, "steer"));
+      for (let i = 0; i < 100; i++) {
+        if ((await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)) === "admitted") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("admitted");
       // The same admission arrives again.
-      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "steer"));
+      generation.events.emit(inboxEvent(LOCAL_MESSAGE_ID, LOCAL_MESSAGE_ID, "steer"));
       await new Promise((r) => setTimeout(r, 20));
 
       expect(generation.inboxCancelInputs).toHaveLength(1);

@@ -99,6 +99,15 @@ export const OPENCODE_V2_RETENTION_CAP = 256;
  */
 export const OPENCODE_V2_RETENTION_TTL_MS = 30 * 60 * 1000;
 export const OPENCODE_V2_DIAGNOSTIC_COUNT_CAP = 256;
+/**
+ * How many authoritative re-reads a degraded lifecycle gets before it stops
+ * retrying by itself.
+ *
+ * Bounded on purpose: a fault that keeps repeating must leave the runtime
+ * visibly degraded rather than spin forever. Recovery stays available through
+ * `reconcileLifecycle`, `refresh` and `retry`.
+ */
+export const OPENCODE_V2_LIFECYCLE_RECOVERY_ATTEMPTS = 3;
 export const OPENCODE_V2_FORM_FIELD_LIMIT = 100;
 export const OPENCODE_V2_FORM_OPTION_LIMIT = 100;
 

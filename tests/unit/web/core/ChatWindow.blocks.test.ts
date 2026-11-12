@@ -88,7 +88,8 @@ describe("assistant message — block structure", () => {
   it("only shows the indicator while the thread is actually running", () => {
     // The library's own condition is per-MESSAGE, so a message left marked
     // `running` (an errored turn that produced no text) would pulse forever
-    // beside a live composer. Gate on the thread signal the composer trusts.
-    expect(source).toMatch(/case "indicator":\s*return threadIsRunning \?/);
+    // beside a live composer. Gate on the thread/session work signal the
+    // composer trusts (OpenCode-aware `threadHasActiveWork`).
+    expect(source).toMatch(/case "indicator":\s*return threadHasActiveWork \?/);
   });
 });

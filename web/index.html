@@ -34,7 +34,7 @@
         root.classList.remove("light", "dark");
         root.classList.add(theme);
         var id = localStorage.getItem(theme === "dark" ? "tbai-theme-dark" : "tbai-theme-light");
-        if (id && id !== "classic") root.setAttribute("data-tbai-theme", id);
+        if (id && id !== "classic" && id !== "default") root.setAttribute("data-tbai-theme", id);
         // Browser chrome should match the resolved background, whatever it turned
         // out to be. Read it back from the cascade rather than duplicating colours.
         var meta = document.querySelector('meta[name="theme-color"]');
