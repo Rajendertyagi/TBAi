@@ -61,22 +61,17 @@ import { cn } from "@/lib/utils";
  * `router.tsx` adds the route behind `import.meta.env.DEV`, so it is compiled
  * out of production.
  *
- * WHY THIS EXISTS. The theme system was verified by screenshotting the welcome
- * screen across 22 combinations. Every other surface — menus, popovers, selects,
- * dialogs, toasts, markdown, code blocks, tool cards, hover and selected rows —
- * had never been rendered under any palette. That is a real gap: a colour mapping
- * can resolve every token without error and still render badly, because "no
- * error" and "readable" are different claims.
+ * WHY THIS EXISTS. The theme system was verified across various combinations.
+ * Every surface — menus, popovers, selects, dialogs, toasts, markdown, code blocks,
+ * tool cards, hover and selected rows — can be rendered under any palette.
  *
  * This page puts every one of those surfaces on screen at once so a palette can
  * be judged against all of them instead of one lucky route.
  *
  * Each specimen carries a `data-lab` attribute naming what it is. That name is
- * the contract with `scripts/theme-audit.mjs`, which walks the rendered DOM,
- * computes each element's real foreground against its real composited
- * background, and reports failures keyed by that name. Without a stable label
- * per element the report can only say "something on this theme is unreadable",
- * which is not actionable.
+ * the contract for theme auditing, which walks the rendered DOM, computes each
+ * element's real foreground against its real composited background, and reports
+ * failures keyed by that name.
  *
  * This is a measuring instrument, not a design. It is not linked from any
  * navigation and nothing in the app imports it.
@@ -190,7 +185,7 @@ function MarkdownSpecimen() {
               theme
             </td>
             <td className="aui-md-td border-muted-foreground/20 border-s border-b px-3 py-1.5">
-              openchamber
+              default
             </td>
           </tr>
         </tbody>
@@ -202,7 +197,7 @@ function MarkdownSpecimen() {
 
 export function ThemeLab() {
   const [switchOn, setSwitchOn] = useState(true);
-  const [selectValue, setSelectValue] = useState("openchamber");
+  const [selectValue, setSelectValue] = useState("default");
 
   return (
     <div className="mx-auto h-full w-full max-w-5xl overflow-y-auto pb-24">
@@ -395,9 +390,6 @@ export function ThemeLab() {
             <Button variant="link">Link</Button>
           </Specimen>
           <Specimen name="md/link-inline" label="link on card">
-            {/* Descriptive link text: a screen-reader user hears the destination,
-                not the word "link", and `href="#"` is a dead target - both are
-                what the two a11y rules here are pointing at. */}
             <a className="text-link underline underline-offset-2" href="#anchor-specimens">
               Inline link specimen
             </a>
@@ -449,8 +441,8 @@ export function ThemeLab() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openchamber">OpenChamber</SelectItem>
-                <SelectItem value="nord">Nord</SelectItem>
+                <SelectItem value="default">Default</SelectItem>
+                <SelectItem value="claude">Claude</SelectItem>
               </SelectContent>
             </Select>
           </Specimen>
@@ -478,9 +470,9 @@ export function ThemeLab() {
                 <DropdownMenuLabel>Theme</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
-                  OpenChamber <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
+                  Default <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem>Catppuccin</DropdownMenuItem>
+                <DropdownMenuItem>Claude</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
               </DropdownMenuContent>
@@ -611,10 +603,7 @@ export function ThemeLab() {
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <ArrowRight className="size-3.5" /> <TriangleAlert className="size-3.5 text-warning" />
-          <span>
-            Accent rows are the most theme-sensitive element: 6 of 20 palettes do not define a
-            subtle surface.
-          </span>
+          <span>Accent rows use the theme's accent surface and foreground.</span>
         </div>
       </Section>
     </div>
