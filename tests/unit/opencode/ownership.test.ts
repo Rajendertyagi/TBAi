@@ -219,18 +219,43 @@ describe("OpenCodeDatabaseOwnership", () => {
   });
 
   it("refuses when an independent OpenCode process holds an open file handle on the default database", async () => {
-    const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => defaultDb,
-      findProcessesUsingFiles: () => [17064],
-      findRunningOpenCodePids: () => [],
-    });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
-    if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
-    expect(error.details.pids).toEqual([17064]);
-    expect(released).toHaveLength(1);
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-home-"));
+    const prevUserProfile = process.env.USERPROFILE;
+    const prevHome = process.env.HOME;
+    const prevLocalAppData = process.env.LOCALAPPDATA;
+    process.env.USERPROFILE = tempHome;
+    process.env.HOME = tempHome;
+    process.env.LOCALAPPDATA = path.join(tempHome, "AppData", "Local");
+    try {
+      const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
+      fs.mkdirSync(path.dirname(defaultDb), { recursive: true });
+      fs.writeFileSync(defaultDb, "sqlite");
+      let fileHolderCalls = 0;
+      const { deps, released } = fakeDeps({
+        resolveDatabasePath: async () => defaultDb,
+        findProcessesUsingFiles: (files) => {
+          fileHolderCalls += 1;
+          expect(files).toContain(defaultDb);
+          return [17064];
+        },
+        findRunningOpenCodePids: () => [],
+      });
+      const lease = new OpenCodeDatabaseOwnership({ deps });
+      const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
+      if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
+      expect(error.details.pids).toEqual([17064]);
+      expect(fileHolderCalls).toBeGreaterThan(0);
+      expect(released).toHaveLength(1);
+    } finally {
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = prevLocalAppData;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("detects a foreign OpenCode process on the canonical default database via global enumeration even when XDG_DATA_HOME is isolated", async () => {
