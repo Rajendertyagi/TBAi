@@ -61,8 +61,10 @@ describe("OpenCodeView loading surface", () => {
     expect(source).not.toContain("aboveComposerExtra");
     expect(source).not.toContain("belowComposerExtra");
 
-    // Interactive content: queued prompt controls and the question dock, at natural height.
-    expect(source).toContain("<OpenCodeQueuedPrompts />");
+    // Interactive content: the question dock at natural height. The visible
+    // queued-prompt strip was removed from the normal OpenCode chat interface
+    // by user direction; underlying prompt tracking/cancellation remains.
+    expect(source).not.toContain("<OpenCodeQueuedPrompts");
     expect(source).toContain("<OpenCodeQuestions />");
 
     // Status region: exactly the primary and the restoration notice.
