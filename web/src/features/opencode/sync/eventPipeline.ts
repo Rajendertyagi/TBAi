@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The event pipeline: consuming OpenCode's event stream, and scheduling the
  * retry when it fails.
  *
@@ -26,7 +26,7 @@
  *
  * Every event carries an ordinal: a local counter over the events this client
  * has applied, which says nothing about the server's clock. It answers exactly
- * one question �?" which of the buffered events arrived after the history read
+ * one question — which of the buffered events arrived after the history read
  * that is in flight. Ordering a *snapshot* against live events is done on
  * identity, never on an ordinal: the snapshot and the events are reconciled by
  * the ids the client held and the ids the events touched, because a snapshot
@@ -53,7 +53,7 @@
  * after an attempt reports a completed hydration and passes its identity
  * check. The counter is not attempt-scoped, and that is deliberate: the
  * ceiling is a property of the runtime, not of one attempt. What changed in
- * Phase 3 is *who may reset it* �?" a superseded attempt can no longer report
+ * Phase 3 is *who may reset it* — a superseded attempt can no longer report
  * completion for the live one, so M1 (a stale attempt resetting the counter)
  * is closed by construction rather than by a guard.
  *
@@ -65,9 +65,9 @@
  *
  * ## THE DELAY POLICY
  *
- * The exponential backoff is bounded twice: by the configured ceiling, and �?" while
+ * The exponential backoff is bounded twice: by the configured ceiling, and — while
  * the document is visible and online, the case a reader is actually waiting
- * through �?" by the shorter foreground cap. When the environment cannot report
+ * through — by the shorter foreground cap. When the environment cannot report
  * visibility or connectivity, the controller is assumed to be visible and
  * online, which is the *shorter* ceiling and therefore the safe assumption.
  *
@@ -201,7 +201,7 @@ export interface BufferedEvent {
  * applied-id set. That is a known, accepted limit: deltas carry no durable
  * sequence in this protocol (only `*.started`/`*.ended` do), the server does not
  * re-send them on replay, and nothing else suppresses a re-delivery. Should a
- * delta ever be redelivered, it would be applied twice �?" folded or not.
+ * delta ever be redelivered, it would be applied twice — folded or not.
  *
  * @param previous - The buffered event immediately before `next`.
  * @param next - The arriving event.
@@ -392,7 +392,7 @@ export interface EventPipeline {
   /**
    * Resets the retry budget.
    *
-   * Called by the controller �?" never by a superseded attempt �?" after an
+   * Called by the controller — never by a superseded attempt — after an
    * attempt reports a completed hydration.
    */
   resetAttempt(): void;
@@ -509,15 +509,27 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     attempt.abortConnection();
   }
 
+  function isExplicitlyOffline(): boolean {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  }
+
   function onVisibilityChange(): void {
     if (typeof document === "undefined" || document.visibilityState !== "visible") return;
-    if (wakePendingRetry()) return;
+    if (retryWait !== null) {
+      // A pending retry must not be accelerated by visibility/pageshow while the
+      // browser explicitly reports offline; it wakes on online instead.
+      if (!isExplicitlyOffline()) wakePendingRetry();
+      return;
+    }
     probeHealth();
   }
 
   function onPageShow(event: PageTransitionEvent): void {
     if (!event.persisted) return;
-    if (wakePendingRetry()) return;
+    if (retryWait !== null) {
+      if (!isExplicitlyOffline()) wakePendingRetry();
+      return;
+    }
     probeHealth();
   }
 
@@ -527,16 +539,11 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   }
 
   function onOffline(): void {
-    if (disposed || host.isDisposed) return;
-    // Avoid repeated retries while offline: if a retry is already scheduled it
-    // keeps the long offline/hidden backoff cap and will be wakeable on online.
-    if (retryWait !== null || exhausted) return;
-    const attempt = consumingAttempt;
-    if (!attempt || attempt.retired || !host.isLive(attempt)) return;
-    if (attempt.generation === null) return;
-    // Abort through the existing connection-level failure mechanism so the
-    // pipeline schedules reconnect with offline-aware backoff.
-    attempt.abortConnection();
+    // navigator.onLine is only a hint, not proof the OpenCode server is
+    // unreachable. An offline event alone must not abort a healthy established
+    // connection; actual stream failure and the idle watchdog detect failure.
+    // Offline-aware backoff is applied when a retry is scheduled while offline.
+    return;
   }
 
   function installEnvironmentListeners(): void {

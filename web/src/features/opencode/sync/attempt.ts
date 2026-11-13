@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The connection attempt: one attempt's identity, readiness, abort signals,
  * load promise and hydration outcome.
  *
