@@ -38,7 +38,12 @@ import { resolveConversationWorkspace } from "@/services/workspace.ts";
  * refuse a request **even from an allowed origin**.
  */
 
-const PACKAGED_ORIGIN = "http://app.localhost";
+const PACKAGED_ORIGINS = [
+  "http://app.localhost",
+  "https://app.localhost",
+  "app://localhost",
+  "tauri://localhost",
+] as const;
 
 /** The port this file's real listener binds. */
 const TEST_PORT = 45310;
@@ -95,20 +100,22 @@ afterAll(() => {
 });
 
 describe("CORS: the origins TBAi serves", () => {
-  it("trusts the packaged app's origin, and TBAi's own pages on the port it serves", () => {
-    // The packaged origin is fixed by the platform (Windows WebView2's origin
-    // for the custom `app` protocol). The loopback origins are DERIVED from
-    // the live listener — the port is the user's choice, so a policy that named
-    // a fixed port would break the first time the user moved off it.
+  it("trusts the packaged app's origins, and TBAi's own pages on the port it serves", () => {
+    // Packaged origins are the closed set of Tauri v2 webview origin forms for
+    // the `app` custom protocol. The loopback origins are DERIVED from the live
+    // listener — the port is the user's choice, so a policy that named a fixed
+    // port would break the first time the user moved off it.
     const live = getActivePort();
-    expect(isAllowedCorsOrigin(PACKAGED_ORIGIN, [])).toBe(true);
+    for (const origin of PACKAGED_ORIGINS) {
+      expect(isAllowedCorsOrigin(origin, [])).toBe(true);
+    }
     expect(isAllowedCorsOrigin(`http://localhost:${live}`, [live])).toBe(true);
     expect(isAllowedCorsOrigin(`http://127.0.0.1:${live}`, [live])).toBe(true);
     // A port TBAi does not serve is not trusted.
     expect(isAllowedCorsOrigin("http://localhost:3001", [live])).toBe(false);
   });
 
-  it.each([PACKAGED_ORIGIN])("lets %s read the response", async (origin) => {
+  it.each([...PACKAGED_ORIGINS])("lets %s read the response", async (origin) => {
     const response = await get(origin);
 
     expect(response.status).toBe(200);
@@ -138,8 +145,9 @@ describe("CORS: the origins TBAi serves", () => {
     ["the loopback host itself", "http://127.0.0.1:3000"],
     ["the Vite dev server's port", "http://localhost:5173"],
     ["a public origin", "https://evil.example"],
+    ["an arbitrary third-party origin", "http://malicious.com"],
+    ["an arbitrary third-party localhost origin", "http://evil.localhost:8080"],
     ["an opaque origin", "null"],
-    ["the packaged origin over https", "https://app.localhost"],
     ["the packaged origin with a path", "http://app.localhost/evil"],
     ["a lookalike host", "http://app.localhost.evil.example"],
     ["the packaged origin with an explicit default port", "http://app.localhost:80"],
@@ -240,7 +248,7 @@ describe("CORS: across a port change", () => {
 describe("CORS: preflight", () => {
   it("answers TBAi's own pages' preflight for the methods and headers the app uses", async () => {
     const origins = [
-      PACKAGED_ORIGIN,
+      ...PACKAGED_ORIGINS,
       `http://localhost:${getActivePort()}`,
       `http://127.0.0.1:${getActivePort()}`,
     ];
@@ -265,7 +273,7 @@ describe("CORS: preflight", () => {
 
   it("answers TBAi's own pages' preflight with the headers the app sends", async () => {
     for (const origin of [
-      PACKAGED_ORIGIN,
+      ...PACKAGED_ORIGINS,
       `http://localhost:${getActivePort()}`,
       `http://127.0.0.1:${getActivePort()}`,
     ]) {
@@ -298,7 +306,7 @@ describe("CORS: preflight", () => {
 
   it("does not let a browser send the removed workspace header", async () => {
     const response = await preflight({
-      origin: PACKAGED_ORIGIN,
+      origin: PACKAGED_ORIGINS[0],
       method: "POST",
       requestHeaders: "content-type,x-opencode-directory",
       path: "/api/opencode/api/session/ses_x",
@@ -318,22 +326,22 @@ describe("CORS: the server-side controls are independent of it", () => {
   it("refuses an unknown OpenCode session even from an allowed origin", async () => {
     const response = await app.request(
       "http://localhost/api/opencode/api/session/ses_not_a_known_session",
-      { headers: { Origin: PACKAGED_ORIGIN } },
+      { headers: { Origin: PACKAGED_ORIGINS[0] } },
     );
 
     // The origin is trusted, so the browser would happily read this — which
     // is exactly why the refusal has to come from the server and not from
     // CORS.
-    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGIN);
+    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGINS[0]);
     expect(response.status).toBe(403);
   });
 
   it("refuses a route outside the proxy's allowlist even from an allowed origin", async () => {
     const response = await app.request("http://localhost/api/opencode/api/fs/read/etc/passwd", {
-      headers: { Origin: PACKAGED_ORIGIN },
+      headers: { Origin: PACKAGED_ORIGINS[0] },
     });
 
-    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGIN);
+    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGINS[0]);
     expect(response.status).toBe(404);
   });
 });
@@ -382,7 +390,7 @@ describe("CORS: the OpenCode scope headers", () => {
     captured.length = 0;
     const response = await app.request(`http://localhost/api/opencode/api/session/${SESSION_ID}`, {
       headers: {
-        Origin: PACKAGED_ORIGIN,
+        Origin: PACKAGED_ORIGINS[0],
         // The browser's own scope input: which session the request is about.
         "x-tbai-session": SESSION_ID,
         // The removed one: a caller-chosen working directory. It is not in
@@ -393,7 +401,7 @@ describe("CORS: the OpenCode scope headers", () => {
     });
 
     // The response is readable: the origin is trusted.
-    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGIN);
+    expect(response.headers.get("access-control-allow-origin")).toBe(PACKAGED_ORIGINS[0]);
     expect(response.status).toBe(200);
 
     // And the workspace is the SERVER's, never the caller's.

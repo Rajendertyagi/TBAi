@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
 import { assertLoopbackOrigin, canonicalizeOpenCodeOrigin } from "./connectionState";
@@ -448,4 +449,158 @@ export function resolveExplicitServerConfig(
   }
 
   return Object.freeze({ origin, password });
+}
+
+/** The record a TBAi-managed server publishes for discovery by other instances. */
+export type OpenCodeRegistrationPublishRecord = Readonly<{
+  readonly origin: string;
+  readonly pid: number;
+  readonly password: string;
+  readonly version: string;
+  readonly id?: string;
+}>;
+
+export interface OpenCodeRegistrationWriteOptions {
+  readonly path?: string;
+  readonly channel?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDir?: string;
+  readonly config?: OpenCodeConfig;
+}
+
+function validatePublishRecord(
+  record: OpenCodeRegistrationPublishRecord,
+  config: OpenCodeConfig,
+): Omit<OpenCodeRegistrationRecord, "path"> {
+  const origin = parseRegistrationOrigin(record.origin);
+  if (!Number.isInteger(record.pid) || record.pid <= 0) {
+    refuse("registration_invalid_pid", "the OpenCode registration has no usable pid");
+  }
+  if (typeof record.password !== "string" || record.password.trim() === "") {
+    refuse("missing_credential", "the OpenCode registration carries no usable credential");
+  }
+  if (
+    typeof record.version !== "string" ||
+    parseOpenCodeVersion(record.version) === null ||
+    !isStableReleaseVersion(record.version)
+  ) {
+    refuse(
+      "registration_unsupported_version",
+      "the OpenCode registration does not carry a parseable stable version",
+    );
+  }
+  const id =
+    typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : undefined;
+  const validated = {
+    origin,
+    pid: record.pid,
+    password: record.password,
+    version: record.version,
+    ...(id ? { id } : {}),
+  };
+  const serialized = JSON.stringify({
+    url: validated.origin,
+    pid: validated.pid,
+    password: validated.password,
+    version: validated.version,
+    ...(validated.id ? { id: validated.id } : {}),
+  });
+  if (Buffer.byteLength(serialized, "utf8") > config.registrationFileMaxBytes) {
+    refuse("registration_too_large", "the OpenCode registration exceeds the size limit");
+  }
+  return validated;
+}
+
+/**
+ * Atomically publishes a validated registration record for a TBAi-managed server.
+ *
+ * The record is written to a temp file in the same directory and renamed into
+ * place so readers never observe a partial file. The password is never logged.
+ */
+export async function writeOpenCodeRegistration(
+  record: OpenCodeRegistrationPublishRecord,
+  options: OpenCodeRegistrationWriteOptions = {},
+): Promise<OpenCodeRegistrationRecord> {
+  const config = options.config ?? OPENCODE_CONFIG;
+  const file = options.path ?? resolveRegistrationPath(options);
+  const validated = validatePublishRecord(record, config);
+  const dir = path.dirname(file);
+  await fs.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
+  const payload = JSON.stringify({
+    url: validated.origin,
+    pid: validated.pid,
+    password: validated.password,
+    version: validated.version,
+    ...(validated.id ? { id: validated.id } : {}),
+  });
+  try {
+    await fs.writeFile(tmp, payload, { encoding: "utf8", mode: 0o600 });
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return Object.freeze({ path: file, ...validated });
+}
+
+/** Identity of a registration this process published and may safely remove. */
+export type OpenCodeRegistrationOwnership = Readonly<{
+  readonly path: string;
+  readonly pid: number;
+  readonly origin?: string;
+  readonly id?: string;
+}>;
+
+/**
+ * Removes a registration file only when it still identifies the expected owner.
+ *
+ * Missing, unreadable, malformed, or non-matching records are left untouched so
+ * a stale/crashed publisher cannot delete another instance's live registration.
+ */
+export async function removeOpenCodeRegistrationIfOwned(
+  expected: OpenCodeRegistrationOwnership,
+  options: OpenCodeRegistrationReadOptions = {},
+): Promise<boolean> {
+  const file = expected.path;
+  let current: OpenCodeRegistrationRecord;
+  try {
+    current = await readOpenCodeRegistration({ ...options, path: file });
+  } catch {
+    return false;
+  }
+  if (current.pid !== expected.pid) return false;
+  if (expected.origin && current.origin !== expected.origin) return false;
+  if (expected.id && current.id !== expected.id) return false;
+  try {
+    // Re-check identity immediately before unlink is not atomic on all platforms,
+    // but the pid/origin/id guard prevents deleting a clearly different owner.
+    const latest = await readOpenCodeRegistration({ ...options, path: file }).catch(() => null);
+    if (!latest || latest.pid !== expected.pid) return false;
+    if (expected.origin && latest.origin !== expected.origin) return false;
+    if (expected.id && latest.id !== expected.id) return false;
+    await fs.unlink(file);
+    return true;
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw error;
+  }
+}
+
+/** Reads a registration, returning null when no record is present. Never throws. */
+export async function readOpenCodeRegistrationIfPresent(
+  options: OpenCodeRegistrationReadOptions = {},
+): Promise<OpenCodeRegistrationRecord | null> {
+  try {
+    return await readOpenCodeRegistration(options);
+  } catch (error) {
+    if (
+      error instanceof OpenCodeRegistrationRefusalError &&
+      error.refusal === "registration_missing"
+    ) {
+      return null;
+    }
+    // Presence helper must never throw unhandled errors; treat unreadable/invalid as absent.
+    return null;
+  }
 }

@@ -70,8 +70,28 @@
  * authorization, which hold regardless of the origin.
  */
 
-/** The packaged desktop app's webview origin (Windows WebView2). */
-export const PACKAGED_APP_ORIGIN = "http://app.localhost";
+/**
+ * The packaged desktop app's webview origins (closed set).
+ *
+ * The desktop webview loads via Tauri v2's custom protocol (`app://localhost`).
+ * Depending on platform/engine/protocol handling, the browser `Origin` header
+ * may be emitted as:
+ * - `http://app.localhost` (Windows WebView2 default HTTP mapping)
+ * - `https://app.localhost` (WebView2 with HTTPS scheme)
+ * - `app://localhost` (direct custom protocol scheme form)
+ * - `tauri://localhost` (Tauri default fallback)
+ *
+ * This is a fixed allowlist for TBAi's own packaged pages — never a wildcard.
+ */
+export const PACKAGED_APP_ORIGINS = [
+  "http://app.localhost",
+  "https://app.localhost",
+  "app://localhost",
+  "tauri://localhost",
+] as const;
+
+/** @deprecated Use PACKAGED_APP_ORIGINS; kept for compatibility. */
+export const PACKAGED_APP_ORIGIN = PACKAGED_APP_ORIGINS[0];
 
 /**
  * The loopback origins TBAi serves its own pages on, for one port.
@@ -99,6 +119,6 @@ export function loopbackOriginsForPort(port: number): string[] {
  * @returns True only for the packaged webview and for TBAi's own pages.
  */
 export function isAllowedCorsOrigin(origin: string, servedPorts: readonly number[]): boolean {
-  if (origin === PACKAGED_APP_ORIGIN) return true;
+  if ((PACKAGED_APP_ORIGINS as readonly string[]).includes(origin)) return true;
   return servedPorts.some((port) => loopbackOriginsForPort(port).includes(origin));
 }

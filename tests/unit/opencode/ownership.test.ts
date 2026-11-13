@@ -5,16 +5,11 @@ import path from "node:path";
 
 import {
   existingDatabaseFiles,
-  foreignProcessIds,
-  OpenCodeDatabaseBusyError,
-  OpenCodeDatabaseCheckError,
   OpenCodeDatabaseOwnership,
   OpenCodeDatabasePathError,
-  openCodeDatabaseMutexName,
   parseOpenCodeDatabasePath,
-  type OpenCodeDatabaseOwnershipDeps,
+  resolveOpenCodeDatabasePath,
 } from "@/services/opencode/ownership.ts";
-import type { NamedMutexLease } from "@/services/process-ownership.ts";
 
 const DB_PATH = path.join(os.tmpdir(), "tbai-ownership-test", "opencode.db");
 
@@ -25,54 +20,18 @@ function tempDatabaseFile(): { dir: string; file: string } {
   return { dir, file };
 }
 
-function fakeDeps(overrides: Partial<OpenCodeDatabaseOwnershipDeps> = {}): {
-  deps: Partial<OpenCodeDatabaseOwnershipDeps>;
-  released: NamedMutexLease[];
-} {
-  const released: NamedMutexLease[] = [];
-  return {
-    released,
-    deps: {
-      platform: "win32",
-      pid: 100,
-      resolveDatabasePath: async () => DB_PATH,
-      findProcessesUsingFiles: () => [],
-      acquireMutex: () => ({ handle: 0n }),
-      releaseMutex: (lease) => released.push(lease),
-      ...overrides,
-    },
-  };
-}
-
 describe("parseOpenCodeDatabasePath", () => {
-  it("takes the last non-empty line", () => {
-    expect(parseOpenCodeDatabasePath("\r\nC:\\data\\opencode.db\r\n")).toBe(
-      "C:\\data\\opencode.db",
-    );
+  it("returns the last non-empty line", () => {
+    expect(parseOpenCodeDatabasePath("\n  /tmp/opencode.db  \n")).toBe("/tmp/opencode.db");
   });
 
-  it("refuses empty output instead of guessing a default", () => {
-    expect(() => parseOpenCodeDatabasePath("\n \r\n")).toThrow(OpenCodeDatabasePathError);
-  });
-});
-
-describe("openCodeDatabaseMutexName", () => {
-  it("is stable for the same path and ignores Windows case", () => {
-    const a = openCodeDatabaseMutexName("C:\\Data\\OpenCode\\opencode.db");
-    const b = openCodeDatabaseMutexName("c:\\data\\opencode\\OPENCODE.DB");
-    expect(a).toBe(b);
-    expect(a.startsWith("Local\\TBAi.OpenCode.Database.")).toBe(true);
-  });
-
-  it("differs for different paths", () => {
-    expect(openCodeDatabaseMutexName("C:\\a\\opencode.db")).not.toBe(
-      openCodeDatabaseMutexName("C:\\b\\opencode.db"),
-    );
+  it("throws on empty output", () => {
+    expect(() => parseOpenCodeDatabasePath(" \n ")).toThrow(OpenCodeDatabasePathError);
   });
 });
 
 describe("existingDatabaseFiles", () => {
-  it("includes only files that exist", () => {
+  it("returns only files that exist", () => {
     const { dir, file } = tempDatabaseFile();
     try {
       expect(existingDatabaseFiles(file)).toEqual([file]);
@@ -82,248 +41,102 @@ describe("existingDatabaseFiles", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
 
-  it("returns an empty list when the database does not exist yet", () => {
-    expect(existingDatabaseFiles(path.join(os.tmpdir(), "tbai-missing", "opencode.db"))).toEqual(
-      [],
-    );
+describe("resolveOpenCodeDatabasePath", () => {
+  it("throws a path error when the binary cannot be run", async () => {
+    await expect(
+      resolveOpenCodeDatabasePath("definitely-not-a-real-opencode-binary", process.cwd(), 500),
+    ).rejects.toBeInstanceOf(OpenCodeDatabasePathError);
   });
 });
 
-describe("foreignProcessIds", () => {
-  it("drops ignored PIDs, duplicates, and non-positive entries", () => {
-    expect(foreignProcessIds([100, 200, 200, 0, 300], [100, 300])).toEqual([200]);
-  });
-});
-
-describe("OpenCodeDatabaseOwnership", () => {
-  it("is a no-op off Windows", async () => {
-    const { deps } = fakeDeps({ platform: "linux" });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    expect(await lease.acquire("opencode", "C:\\work")).toBeNull();
-    await lease.verifyChild(123, DB_PATH);
-    lease.release();
-  });
-
-  it("exempts :memory: because there is no shared file", async () => {
-    const { deps, released } = fakeDeps({ resolveDatabasePath: async () => ":memory:" });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    expect(await lease.acquire("opencode", "C:\\work")).toBeNull();
-    expect(released).toEqual([]);
-  });
-
-  it("refuses when another TBAi backend holds the named mutex", async () => {
-    const { deps, released } = fakeDeps({ acquireMutex: () => null });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    await expect(lease.acquire("opencode", "C:\\work")).rejects.toBeInstanceOf(
-      OpenCodeDatabaseBusyError,
-    );
-    expect(released).toEqual([]);
-  });
-
-  it("refuses when a foreign process already holds the database, and releases the mutex", async () => {
-    const { dir, file } = tempDatabaseFile();
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => [4242],
-    });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      const error = await lease.acquire("opencode", dir).catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
-      if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
-      expect(error.details.pids).toEqual([4242]);
-      expect(released).toHaveLength(1);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("treats an unanswerable Restart Manager query as a refusal, not as 'no holder'", async () => {
-    const { dir, file } = tempDatabaseFile();
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => {
-        throw new Error("RmGetList failed");
-      },
-    });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      await expect(lease.acquire("opencode", dir)).rejects.toBeInstanceOf(
-        OpenCodeDatabaseCheckError,
-      );
-      expect(released).toHaveLength(1);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("acquires a fresh database and verifies that only the managed child holds it", async () => {
-    const { dir, file } = tempDatabaseFile();
-    let calls = 0;
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => {
-        calls += 1;
-        return calls === 1 ? [100] : [100, 777];
-      },
-    });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      expect(await lease.acquire("opencode", dir)).toBe(file);
-      await lease.verifyChild(777, file);
-      expect(released).toEqual([]);
-      lease.release();
-      expect(released).toHaveLength(1);
-      lease.release();
-      expect(released).toHaveLength(1);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses when a foreign process opens the database during startup", async () => {
-    const { dir, file } = tempDatabaseFile();
-    let calls = 0;
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => {
-        calls += 1;
-        return calls === 1 ? [100] : [777, 999];
-      },
-    });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      expect(await lease.acquire("opencode", dir)).toBe(file);
-      const error = await lease.verifyChild(777, file).catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
-      if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
-      expect(error.details.pids).toEqual([999]);
-      expect(released).toEqual([]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses to verify when the database file never appeared", async () => {
-    const { dir, file } = tempDatabaseFile();
-    fs.rmSync(file);
-    const { deps } = fakeDeps({ resolveDatabasePath: async () => file });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      expect(await lease.acquire("opencode", dir)).toBe(file);
-      await expect(lease.verifyChild(777, file)).rejects.toBeInstanceOf(OpenCodeDatabaseCheckError);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses when an independent OpenCode process holds an open file handle on the default database", async () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-home-"));
-    const prevUserProfile = process.env.USERPROFILE;
-    const prevHome = process.env.HOME;
-    const prevLocalAppData = process.env.LOCALAPPDATA;
-    process.env.USERPROFILE = tempHome;
-    process.env.HOME = tempHome;
-    process.env.LOCALAPPDATA = path.join(tempHome, "AppData", "Local");
-    try {
-      const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
-      fs.mkdirSync(path.dirname(defaultDb), { recursive: true });
-      fs.writeFileSync(defaultDb, "sqlite");
-      let fileHolderCalls = 0;
-      const { deps, released } = fakeDeps({
-        resolveDatabasePath: async () => defaultDb,
-        findProcessesUsingFiles: (files) => {
-          fileHolderCalls += 1;
-          expect(files).toContain(defaultDb);
-          return [17064];
+describe("OpenCodeDatabaseOwnership (Phase 1 decommissioned watchdog)", () => {
+  it("resolves the database path without acquiring mutexes or querying OS file holders", async () => {
+    let resolveCalls = 0;
+    let holderCalls = 0;
+    let mutexCalls = 0;
+    const lease = new OpenCodeDatabaseOwnership({
+      deps: {
+        platform: "win32",
+        resolveDatabasePath: async () => {
+          resolveCalls += 1;
+          return DB_PATH;
         },
-        findRunningOpenCodePids: () => [],
-      });
-      const lease = new OpenCodeDatabaseOwnership({ deps });
-      const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
-      if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
-      expect(error.details.pids).toEqual([17064]);
-      expect(fileHolderCalls).toBeGreaterThan(0);
-      expect(released).toHaveLength(1);
-    } finally {
-      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = prevUserProfile;
-      if (prevHome === undefined) delete process.env.HOME;
-      else process.env.HOME = prevHome;
-      if (prevLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-      else process.env.LOCALAPPDATA = prevLocalAppData;
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it("detects a foreign OpenCode process on the canonical default database via global enumeration even when XDG_DATA_HOME is isolated", async () => {
-    const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
-    const previousXdg = process.env.XDG_DATA_HOME;
-    const isolatedXdg = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-xdg-isolated-"));
-    process.env.XDG_DATA_HOME = isolatedXdg;
-    let enumerated = 0;
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => defaultDb,
-      findProcessesUsingFiles: () => [],
-      findRunningOpenCodePids: () => {
-        enumerated += 1;
-        return [17064];
+        findProcessesUsingFiles: () => {
+          holderCalls += 1;
+          return [4242];
+        },
+        acquireMutex: () => {
+          mutexCalls += 1;
+          return { handle: 0n };
+        },
+        releaseMutex: () => {
+          mutexCalls += 1;
+        },
       },
     });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
-      if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
-      expect(error.details.pids).toEqual([17064]);
-      expect(enumerated).toBeGreaterThan(0);
-      expect(released).toHaveLength(1);
-    } finally {
-      if (previousXdg === undefined) delete process.env.XDG_DATA_HOME;
-      else process.env.XDG_DATA_HOME = previousXdg;
-      fs.rmSync(isolatedXdg, { recursive: true, force: true });
-    }
+
+    await expect(lease.acquire("opencode", "C:\\work")).resolves.toBe(DB_PATH);
+    await expect(lease.verifyChild(777, DB_PATH)).resolves.toBeUndefined();
+    lease.release();
+
+    expect(resolveCalls).toBe(1);
+    expect(holderCalls).toBe(0);
+    expect(mutexCalls).toBe(0);
   });
 
-  it("permits acquisition on an isolated test database even when foreign OpenCode processes exist", async () => {
-    const { dir, file } = tempDatabaseFile();
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => [100],
-      findRunningOpenCodePids: () => [17064],
+  it("returns null for an in-memory database without locking or holder inspection", async () => {
+    let holderCalls = 0;
+    let mutexCalls = 0;
+    const lease = new OpenCodeDatabaseOwnership({
+      deps: {
+        platform: "win32",
+        resolveDatabasePath: async () => ":memory:",
+        findProcessesUsingFiles: () => {
+          holderCalls += 1;
+          return [4242];
+        },
+        acquireMutex: () => {
+          mutexCalls += 1;
+          return { handle: 0n };
+        },
+      },
     });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      expect(await lease.acquire("opencode", dir)).toBe(file);
-      expect(released).toEqual([]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+
+    await expect(lease.acquire("opencode", "C:\\work")).resolves.toBeNull();
+    expect(holderCalls).toBe(0);
+    expect(mutexCalls).toBe(0);
   });
 
-  it("permits first-time acquisition of an isolated database without global process enumeration when db/wal/shm are absent", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-ownership-isolated-"));
-    const file = path.join(dir, "opencode.db");
-    let enumerated = 0;
-    const { deps, released } = fakeDeps({
-      resolveDatabasePath: async () => file,
-      findProcessesUsingFiles: () => {
-        throw new Error("should not query file holders when database files do not exist");
-      },
-      findRunningOpenCodePids: () => {
-        enumerated += 1;
-        return [17064];
+  it("skips resolution on non-Windows platforms", async () => {
+    let resolveCalls = 0;
+    const lease = new OpenCodeDatabaseOwnership({
+      deps: {
+        platform: "linux",
+        resolveDatabasePath: async () => {
+          resolveCalls += 1;
+          return DB_PATH;
+        },
       },
     });
-    const lease = new OpenCodeDatabaseOwnership({ deps });
-    try {
-      expect(await lease.acquire("opencode", dir)).toBe(file);
-      expect(enumerated).toBe(0);
-      expect(released).toEqual([]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+
+    await expect(lease.acquire("opencode", "C:\\work")).resolves.toBeNull();
+    expect(resolveCalls).toBe(0);
+  });
+
+  it("propagates database path resolution failures", async () => {
+    const lease = new OpenCodeDatabaseOwnership({
+      deps: {
+        platform: "win32",
+        resolveDatabasePath: async () => {
+          throw new OpenCodeDatabasePathError("cannot resolve");
+        },
+      },
+    });
+
+    await expect(lease.acquire("opencode", "C:\\work")).rejects.toBeInstanceOf(
+      OpenCodeDatabasePathError,
+    );
   });
 });

@@ -134,3 +134,7 @@ docs/tool-ui-atlas.html
 # Playwright or test artifacts in root
 /test-results/
 
+# Local diagnostic scripts and user scratch directories
+/start-tbai.ps1
+/user/
+

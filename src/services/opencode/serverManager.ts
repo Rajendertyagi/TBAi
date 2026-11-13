@@ -45,6 +45,11 @@ import {
   type ManagedChildStopProvider,
   type OpenCodeShutdownResult,
 } from "./connectionState";
+import {
+  removeOpenCodeRegistrationIfOwned,
+  writeOpenCodeRegistration,
+  type OpenCodeRegistrationOwnership,
+} from "./registration";
 
 /** Appends a chunk to a bounded tail buffer, keeping only the last `maxBytes`. Pure. */
 export function appendTail(tail: string, chunk: string, maxBytes: number): string {
@@ -473,6 +478,8 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   private childDiagnostics = new WeakMap<Subprocess, { stdout: string; stderr: string }>();
   /** Database ownership lease for this manager's lifetime (G2). */
   private readonly databaseLease: OpenCodeDatabaseLease;
+  /** Registration published by this manager for its current managed child, if any. */
+  private publishedRegistration: OpenCodeRegistrationOwnership | null = null;
 
   /** All starts this manager has allocated, keyed by start id. */
   private readonly startRecords = new Map<number, StartRecord>();
@@ -878,15 +885,52 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     return this.stopping || readShutdownState().shutdownStarted;
   }
 
+  protected async publishManagedRegistration(input: {
+    readonly baseUrl: string;
+    readonly pid: number;
+    readonly version: string;
+  }): Promise<void> {
+    const record = await writeOpenCodeRegistration(
+      {
+        origin: input.baseUrl,
+        pid: input.pid,
+        password: getOpenCodeAuthPassword(this.config),
+        version: input.version,
+      },
+      { config: this.config },
+    );
+    this.publishedRegistration = {
+      path: record.path,
+      pid: record.pid,
+      origin: record.origin,
+      ...(record.id ? { id: record.id } : {}),
+    };
+  }
+
+  protected async removeOwnedRegistration(): Promise<void> {
+    const owned = this.publishedRegistration;
+    if (!owned) return;
+    try {
+      await removeOpenCodeRegistrationIfOwned(owned, { config: this.config });
+    } catch (error) {
+      logger.warn("opencode", "opencode.registration_cleanup_failed", {
+        path: owned.path,
+        pid: owned.pid,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.publishedRegistration = null;
+    }
+  }
+
   private async runManagedStart(record: StartRecord): Promise<void> {
     if (this.shutdownBegun()) throw new OpenCodeReadinessCancelledError();
     // Preflight before spawning: a missing or unsupported binary must surface
     // as an actionable error, never as a spawn failure deep in startup.
     const binary = this.resolveBinary();
     fs.mkdirSync(this.config.serverHomeDir, { recursive: true });
-    // Resolve the database the child will use and take the per-path lease
-    // BEFORE spawning. A foreign holder or another TBAi backend is a refusal,
-    // not a second server.
+    // Resolve the database path for diagnostics/verification context. Phase 1
+    // decommissioned mutex/holder policing: acquisition never blocks or refuses.
     const dbPath = await this.databaseLease.acquire(binary, this.config.serverHomeDir);
     if (this.shutdownBegun()) {
       this.databaseLease.release();
@@ -1031,6 +1075,11 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
         }
       }, stabilityMs);
     }
+    await this.publishManagedRegistration({
+      baseUrl,
+      pid: servicePid,
+      version: capabilities.capabilities.version,
+    });
     logger.info("opencode", "opencode.spawn", { port: target.port, pid: child.pid });
     this.settleFulfilled(record, baseUrl);
   }
@@ -1190,6 +1239,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
    */
   private onExit(child: Subprocess, startId: number, code: number): void {
     const record = this.startRecords.get(startId);
+    const servicePid = this.servicePids.get(child) ?? child.pid;
     this.liveChildren.delete(child);
     // Reap the per-instance job if the child exited on its own.
     const job = this.managedJobs.get(child);
@@ -1241,6 +1291,9 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
         this.publishedTargetId = null;
       }
       this.publishedChild = null;
+    }
+    if (this.publishedRegistration?.pid === servicePid) {
+      void this.removeOwnedRegistration();
     }
 
     if (this.shutdownBegun() || intentionallyStopped) return;
@@ -1531,6 +1584,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     this.stopping = true;
     const stops = this.stopAllChildrenForShutdown();
     await Promise.allSettled(stops);
+    await this.removeOwnedRegistration();
     this.child = null;
     this.port = null;
     this.readyAtMs = null;

@@ -208,9 +208,10 @@ async function runStartup(options: OpenCodeStartupOptions): Promise<OpenCodeStar
 /**
  * Starts the managed child after adoption could not supply a service (H5/B2).
  *
- * `ensureBaseUrl()` publishes the managed target before it resolves, so the
- * base URL returned here is already the connection state's target. A shutdown
- * that lands mid-start is not a failure to report as a refusal.
+ * Adopt-first flow: adoption is attempted once before managed fallback. If no
+ * compatible service is adopted and no explicit external config is in force,
+ * the managed child is started, verified, and published as the runtime target.
+ * A shutdown that lands mid-start is not reported as a refusal.
  */
 async function startManagedFallback(
   options: OpenCodeStartupOptions,

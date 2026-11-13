@@ -22,10 +22,7 @@ import {
 } from "@/services/opencode/errors.ts";
 import { authorizeOpenCodeProxyRequest } from "@/services/opencode/proxyAuthorization.ts";
 import { encodeSourceRef, importOpenCodeSession } from "@/services/opencode/import.ts";
-import {
-  OpenCodeDatabaseBusyError,
-  OpenCodeDatabaseOwnership,
-} from "@/services/opencode/ownership.ts";
+import { OpenCodeDatabaseOwnership } from "@/services/opencode/ownership.ts";
 import { startOpenCodeRuntime } from "@/services/opencode/startup.ts";
 
 describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection", () => {
@@ -422,23 +419,41 @@ describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection
     expect(res2.sessionId).toBe("ses_scen_8");
   });
 
-  // Safeguard 1: Two TBAi instances cannot independently start competing managed servers
-  it("Safeguard 1: Two TBAi instances cannot start competing managed servers for the same database", async () => {
-    const competingLease = new OpenCodeDatabaseOwnership({
+  // Safeguard 1: client-daemon contract — canonical DB path resolves without mutex/holder policing
+  it("Safeguard 1: OpenCode database ownership resolves the canonical path without mutex or busy/contended errors", async () => {
+    const canonicalDb = "C:\\Users\\test\\.local\\share\\opencode\\opencode.db";
+    let resolveCalls = 0;
+    let mutexCalls = 0;
+    let holderCalls = 0;
+    const lease = new OpenCodeDatabaseOwnership({
       deps: {
         platform: "win32",
         pid: 1234,
-        resolveDatabasePath: async () => "C:\\Users\\test\\.local\\share\\opencode\\opencode.db",
-        acquireMutex: () => null, // Mutex already held by another TBAi instance!
-        releaseMutex: () => {},
-        findProcessesUsingFiles: () => [],
-        findRunningOpenCodePids: () => [],
+        resolveDatabasePath: async () => {
+          resolveCalls += 1;
+          return canonicalDb;
+        },
+        acquireMutex: () => {
+          mutexCalls += 1;
+          return null;
+        },
+        releaseMutex: () => {
+          mutexCalls += 1;
+        },
+        findProcessesUsingFiles: () => {
+          holderCalls += 1;
+          return [9999];
+        },
+        isOpenCodeCoTenant: () => false,
       },
     });
 
-    await expect(competingLease.acquire("opencode", "C:\\Users\\test")).rejects.toBeInstanceOf(
-      OpenCodeDatabaseBusyError,
-    );
+    await expect(lease.acquire("opencode", "C:\\Users\\test")).resolves.toBe(canonicalDb);
+    await expect(lease.verifyChild(7777, canonicalDb)).resolves.toBeUndefined();
+    lease.release();
+    expect(resolveCalls).toBe(1);
+    expect(mutexCalls).toBe(0);
+    expect(holderCalls).toBe(0);
   });
 
   // Safeguard 2: An adopted server is never terminated when TBAi closes

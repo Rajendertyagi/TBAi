@@ -18,9 +18,12 @@ import {
   OpenCodeRegistrationRefusalError,
   hasExplicitServerConfig,
   readOpenCodeRegistration,
+  readOpenCodeRegistrationIfPresent,
   registrationFilenameForChannel,
+  removeOpenCodeRegistrationIfOwned,
   resolveExplicitServerConfig,
   resolveRegistrationPath,
+  writeOpenCodeRegistration,
   type OpenCodeRegistrationReadOptions,
   type OpenCodeRegistrationRefusalCode,
   type RegistrationFileOpener,
@@ -318,8 +321,7 @@ describe("BT9 — URL validation", () => {
 
 /**
  * File-symlink capability probe. This host measured EPERM, so the file-symlink
- * case is BLOCKED rather than exercised; directory reparse points are covered
- * unconditionally below.
+ * case is BLOCKED rather than exercised.
  */
 const symlinkAvailable = (() => {
   const probe = mkdtempSync(path.join(tmpdir(), "tbai-symlink-probe-"));
@@ -327,6 +329,28 @@ const symlinkAvailable = (() => {
     const target = path.join(probe, "target");
     writeFileSync(target, "x");
     symlinkSync(target, path.join(probe, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+/**
+ * Directory reparse-point capability probe (junction on Windows, directory
+ * symlink elsewhere). Skips gracefully in environments without required privileges.
+ */
+const directoryReparseAvailable = (() => {
+  const probe = mkdtempSync(path.join(tmpdir(), "tbai-junction-probe-"));
+  try {
+    const target = path.join(probe, "target-directory");
+    mkdirSync(target, { recursive: true });
+    symlinkSync(
+      target,
+      path.join(probe, "link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     return true;
   } catch {
     return false;
@@ -347,14 +371,14 @@ describe("BT10 — non-regular files", () => {
     },
   );
 
-  it("refuses a directory reparse point at lstat", async () => {
+  it.skipIf(!directoryReparseAvailable)("refuses a directory reparse point at lstat", async () => {
     const target = path.join(root, "target-directory");
     mkdirSync(target, { recursive: true });
     writeFileSync(path.join(target, "service.json"), JSON.stringify(record()));
     const link = path.join(root, "service-junction.json");
     // A directory junction on Windows, a directory symlink elsewhere: both are
-    // reparse points and neither needs elevation. The lstat assertion proves a
-    // real reparse point was created before the reader is asked to refuse it.
+    // reparse points. The lstat assertion proves a real reparse point was created
+    // before the reader is asked to refuse it.
     symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     const error = await refusalOf(read(link));
@@ -385,14 +409,18 @@ describe("BT10 — non-regular files", () => {
   });
 });
 
-describe("BT11 — TBAi never writes the registration", () => {
-  it("opens the record readonly and contains no write or rename path", () => {
+describe("BT11 — registration publication is explicit and safe", () => {
+  it("reads through a readonly handle and publishes atomically with owned cleanup", () => {
     const source = stripComments(
       readFileSync(path.join(REPO_ROOT, "src/services/opencode/registration.ts"), "utf8"),
     );
+    // Discovery reads never mutate the record.
     expect(source).toContain('fs.open(file, "r")');
-    expect(source).not.toMatch(/fs\.(rewrite|writeFile|appendFile|rename|unlink|rm)\b/);
-    expect(source).not.toMatch(/open\([^)]*["'](w|a|r\+)/);
+    // Managed publication is atomic (temp file + rename) and cleanup is ownership-guarded.
+    expect(source).toContain("writeOpenCodeRegistration");
+    expect(source).toContain("removeOpenCodeRegistrationIfOwned");
+    expect(source).toContain("fs.rename(tmp, file)");
+    expect(source).toContain("current.pid !== expected.pid");
   });
 });
 
@@ -570,6 +598,162 @@ describe("BT16 — the deadline is checked after parsing", () => {
 
     const error = await refusalOf(read(file, { openFile, now }));
     expect(error.refusal).toBe("registration_read_timeout");
+  });
+});
+
+describe("writeOpenCodeRegistration", () => {
+  it("writes valid JSON atomically with 0600 mode", async () => {
+    const file = path.join(root, "state", "opencode", "service.json");
+    const written = await writeOpenCodeRegistration(
+      { origin: ORIGIN, pid: PID, password: PASSWORD, version: VERSION, id: "svc-1" },
+      { path: file },
+    );
+
+    expect(written).toEqual({
+      path: file,
+      origin: ORIGIN,
+      pid: PID,
+      password: PASSWORD,
+      version: VERSION,
+      id: "svc-1",
+    });
+    const raw = readFileSync(file, "utf8");
+    expect(JSON.parse(raw)).toEqual({
+      url: ORIGIN,
+      pid: PID,
+      password: PASSWORD,
+      version: VERSION,
+      id: "svc-1",
+    });
+    if (process.platform !== "win32") {
+      const mode = lstatSync(file).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
+    // No temp files left behind in the target directory.
+    const entries = await fs.readdir(path.dirname(file));
+    expect(entries).toEqual(["service.json"]);
+  });
+
+  it("enforces valid positive PID, loopback origin, non-empty password, and stable version", async () => {
+    const file = path.join(root, "bad.json");
+    const cases: Array<[Record<string, unknown>, OpenCodeRegistrationRefusalCode]> = [
+      [
+        { origin: ORIGIN, pid: 0, password: PASSWORD, version: VERSION },
+        "registration_invalid_pid",
+      ],
+      [
+        { origin: ORIGIN, pid: -1, password: PASSWORD, version: VERSION },
+        "registration_invalid_pid",
+      ],
+      [
+        { origin: ORIGIN, pid: 1.5, password: PASSWORD, version: VERSION },
+        "registration_invalid_pid",
+      ],
+      [
+        { origin: "http://10.0.0.5:4096", pid: PID, password: PASSWORD, version: VERSION },
+        "registration_non_loopback",
+      ],
+      [{ origin: ORIGIN, pid: PID, password: "", version: VERSION }, "missing_credential"],
+      [{ origin: ORIGIN, pid: PID, password: "   ", version: VERSION }, "missing_credential"],
+      [
+        { origin: ORIGIN, pid: PID, password: PASSWORD, version: "latest" },
+        "registration_unsupported_version",
+      ],
+      [
+        { origin: ORIGIN, pid: PID, password: PASSWORD, version: "2.2.0-beta.1" },
+        "registration_unsupported_version",
+      ],
+    ];
+
+    for (const [input, expected] of cases) {
+      const error = await refusalOf(writeOpenCodeRegistration(input as never, { path: file }));
+      expect(error).toBeInstanceOf(OpenCodeRegistrationRefusalError);
+      expect(error.refusal).toBe(expected);
+    }
+  });
+});
+
+describe("removeOpenCodeRegistrationIfOwned", () => {
+  it("removes file and returns true when PID and origin match", async () => {
+    const file = path.join(root, "owned.json");
+    await writeOpenCodeRegistration(
+      { origin: ORIGIN, pid: PID, password: PASSWORD, version: VERSION, id: "svc-1" },
+      { path: file },
+    );
+
+    const removed = await removeOpenCodeRegistrationIfOwned({
+      path: file,
+      pid: PID,
+      origin: ORIGIN,
+      id: "svc-1",
+    });
+    expect(removed).toBe(true);
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it("leaves file untouched and returns false when PID does not match (foreign owner protection)", async () => {
+    const file = path.join(root, "foreign-pid.json");
+    await writeOpenCodeRegistration(
+      { origin: ORIGIN, pid: PID, password: PASSWORD, version: VERSION },
+      { path: file },
+    );
+
+    const removed = await removeOpenCodeRegistrationIfOwned({
+      path: file,
+      pid: PID + 1,
+      origin: ORIGIN,
+    });
+    expect(removed).toBe(false);
+    const still = await readOpenCodeRegistration({ path: file });
+    expect(still.pid).toBe(PID);
+  });
+
+  it("leaves file untouched and returns false when origin does not match", async () => {
+    const file = path.join(root, "foreign-origin.json");
+    await writeOpenCodeRegistration(
+      { origin: ORIGIN, pid: PID, password: PASSWORD, version: VERSION },
+      { path: file },
+    );
+
+    const removed = await removeOpenCodeRegistrationIfOwned({
+      path: file,
+      pid: PID,
+      origin: OTHER_ORIGIN,
+    });
+    expect(removed).toBe(false);
+    const still = await readOpenCodeRegistration({ path: file });
+    expect(still.origin).toBe(ORIGIN);
+  });
+
+  it("returns false gracefully when the file does not exist", async () => {
+    const removed = await removeOpenCodeRegistrationIfOwned({
+      path: path.join(root, "missing.json"),
+      pid: PID,
+      origin: ORIGIN,
+    });
+    expect(removed).toBe(false);
+  });
+});
+
+describe("readOpenCodeRegistrationIfPresent", () => {
+  it("returns the parsed record when file exists and is valid", async () => {
+    const file = path.join(root, "present.json");
+    await writeOpenCodeRegistration(
+      { origin: ORIGIN, pid: PID, password: PASSWORD, version: VERSION },
+      { path: file },
+    );
+
+    const found = await readOpenCodeRegistrationIfPresent({ path: file });
+    expect(found).not.toBeNull();
+    expect(found?.origin).toBe(ORIGIN);
+    expect(found?.pid).toBe(PID);
+  });
+
+  it("returns null when file does not exist (no throw)", async () => {
+    const found = await readOpenCodeRegistrationIfPresent({
+      path: path.join(root, "does-not-exist.json"),
+    });
+    expect(found).toBeNull();
   });
 });
 
