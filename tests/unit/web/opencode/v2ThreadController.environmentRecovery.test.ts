@@ -608,6 +608,7 @@ describe("environment-aware recovery", () => {
       expect(exhausted).toBe(true);
       expect(client.connectCount).toBe(2);
       const terminalState = controller.getState();
+      expect(terminalState.session).not.toEqual(SESSION);
 
       // Only after generation 1 is retired and generation 2 exhausted the retry budget,
       // resolve generation 1's previously pending session read successfully.
@@ -617,6 +618,7 @@ describe("environment-aware recovery", () => {
 
       // Late session-read completion from superseded attempt must not dispatch its session,
       // mark ready, alter terminal failure, or reset the exhausted retry budget/start another connection.
+      expect(controller.getState().session).toEqual(terminalState.session);
       expect(controller.getState().load.type).toBe("error");
       expect(controller.getState().connection.type).toBe("failed");
       expect(controller.getState().load).toEqual(terminalState.load);
