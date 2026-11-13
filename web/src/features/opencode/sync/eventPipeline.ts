@@ -6,7 +6,7 @@
  *
  * The **lifecycle of the event stream**: the loop that reads events, the
  * ordinal that dates them, the buffer that holds the ones that arrive while
- * the history is loading, the retry timer, and the counter that charges the
+ * the history is loading, the retry wait, and the counter that charges the
  * retry budget.
  *
  * ## WHAT THIS DOES NOT OWN
@@ -252,11 +252,12 @@ function coalescedDelta(previous: V2Event, next: V2Event): V2Event | null {
 export interface EventPipelineHost {
   /** Whether the runtime has been disposed. */
   readonly isDisposed: boolean;
-  /** The retry budget and the backoff parameters. */
+  /** The retry budget, backoff parameters, and stream health threshold. */
   readonly config: {
     readonly maxReconnectAttempts: number;
     readonly initialReconnectDelayMs: number;
     readonly maxReconnectDelayMs: number;
+    readonly streamIdleTimeoutMs: number;
   };
   /**
    * Whether an attempt is still the one that may commit.
@@ -412,7 +413,19 @@ export interface EventPipeline {
    * @returns True when a retry was pending and has been cancelled.
    */
   cancelReconnect(): boolean;
+  /**
+   * Removes environment listeners and cancels any pending retry wait.
+   *
+   * Idempotent. Called when the owning controller is disposed.
+   */
+  dispose(): void;
 }
+
+type RetryWait = {
+  token: number;
+  timer: ReturnType<typeof setTimeout>;
+  wake: () => void;
+};
 
 /**
  * Creates the event pipeline.
@@ -430,7 +443,8 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
    * the snapshot's own text, not by this boundary - see `historyReplay.ts`.)
    */
   let coalesceFromOrdinal = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryWait: RetryWait | null = null;
+  let nextRetryToken = 0;
   let reconnectAttempt = 0;
   /** True once a failure has arrived with no automatic retries left. */
   let exhausted = false;
@@ -451,10 +465,109 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
    * the count that reaches the domain state is the whole loss.
    */
   let overflowReported = false;
+  /** The attempt whose stream is currently being consumed, if any. */
+  let consumingAttempt: Attempt | null = null;
+  let disposed = false;
+  let removeEnvironmentListeners: (() => void) | null = null;
+
+  function clearRetryWait(token?: number): RetryWait | null {
+    const current = retryWait;
+    if (current === null) return null;
+    if (token !== undefined && current.token !== token) return null;
+    retryWait = null;
+    clearTimeout(current.timer);
+    return current;
+  }
+
+  function triggerReconnect(token: number): void {
+    const current = clearRetryWait(token);
+    if (current === null) return;
+    if (disposed || host.isDisposed || exhausted) return;
+    void host.startConnection().catch(() => undefined);
+  }
+
+  function wakePendingRetry(): boolean {
+    const current = retryWait;
+    if (current === null) return false;
+    // Resolve the wait early; the token guard in triggerReconnect prevents a
+    // stale timer callback from starting a second connection.
+    current.wake();
+    return true;
+  }
+
+  function isStreamStale(attempt: Attempt, now = Date.now()): boolean {
+    return now - attempt.lastActivityAt >= host.config.streamIdleTimeoutMs;
+  }
+
+  function probeHealth(): void {
+    if (disposed || host.isDisposed) return;
+    if (retryWait !== null || exhausted) return;
+    const attempt = consumingAttempt;
+    if (!attempt || attempt.retired || !host.isLive(attempt)) return;
+    if (attempt.generation === null) return;
+    if (!isStreamStale(attempt)) return;
+    attempt.abortConnection();
+  }
+
+  function isExplicitlyOffline(): boolean {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  }
+
+  function onVisibilityChange(): void {
+    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+    if (retryWait !== null) {
+      // A pending retry must not be accelerated by visibility/pageshow while the
+      // browser explicitly reports offline; it wakes on online instead.
+      if (!isExplicitlyOffline()) wakePendingRetry();
+      return;
+    }
+    probeHealth();
+  }
+
+  function onPageShow(event: PageTransitionEvent): void {
+    if (!event.persisted) return;
+    if (retryWait !== null) {
+      if (!isExplicitlyOffline()) wakePendingRetry();
+      return;
+    }
+    probeHealth();
+  }
+
+  function onOnline(): void {
+    if (wakePendingRetry()) return;
+    probeHealth();
+  }
+
+  function onOffline(): void {
+    // navigator.onLine is only a hint, not proof the OpenCode server is
+    // unreachable. An offline event alone must not abort a healthy established
+    // connection; actual stream failure and the idle watchdog detect failure.
+    // Offline-aware backoff is applied when a retry is scheduled while offline.
+    return;
+  }
+
+  function installEnvironmentListeners(): void {
+    if (removeEnvironmentListeners !== null) return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", onPageShow as EventListener);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    removeEnvironmentListeners = () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", onPageShow as EventListener);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      removeEnvironmentListeners = null;
+    };
+  }
+
+  installEnvironmentListeners();
 
   async function consume(attempt: Attempt): Promise<void> {
     const generation = attempt.generation;
     if (generation === null) return;
+    consumingAttempt = attempt;
     try {
       while (!host.isDisposed && host.isLive(attempt)) {
         const result = await generation.events.next();
@@ -465,17 +578,19 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     } catch (error) {
       if (host.isDisposed || !host.isLive(attempt)) return;
       scheduleReconnect(attempt, host.toSafeError(error, "OpenCode V2 event stream failed"));
+    } finally {
+      if (consumingAttempt === attempt) consumingAttempt = null;
     }
   }
 
   function scheduleReconnect(failed: Attempt, error: V2SafeError): void {
-    if (host.isDisposed) return;
+    if (disposed || host.isDisposed) return;
     // A failure reported by an attempt that has already been superseded says
     // nothing about the live one: react only to the attempt that still owns
     // the runtime (M2). Ownership, not liveness, because a failed attempt is
     // no longer live by definition but has not been replaced yet.
     if (!host.ownsRuntime(failed)) return;
-    if (reconnectTimer !== null) return;
+    if (retryWait !== null) return;
     // Terminal failure: no more auto-retries after exhausting the budget.
     if (reconnectAttempt >= host.config.maxReconnectAttempts) {
       exhausted = true;
@@ -502,13 +617,18 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     host.failReady(failed, error);
     const delay = computeReconnectDelay(reconnectAttempt, host.config, readReconnectConditions());
     reconnectAttempt += 1;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      // `startConnection` records the new attempt's load promise itself, so a
-      // concurrent `load()` joins this attempt instead of starting a second
-      // connection.
-      void host.startConnection().catch(() => undefined);
-    }, delay);
+    nextRetryToken += 1;
+    const token = nextRetryToken;
+    const wait: RetryWait = {
+      token,
+      timer: setTimeout(() => {
+        triggerReconnect(token);
+      }, delay),
+      wake: () => {
+        triggerReconnect(token);
+      },
+    };
+    retryWait = wait;
   }
 
   function nextOrdinal(): number {
@@ -609,10 +729,14 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   }
 
   function cancelReconnect(): boolean {
-    if (reconnectTimer === null) return false;
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-    return true;
+    return clearRetryWait() !== null;
+  }
+
+  function dispose(): void {
+    if (disposed) return;
+    disposed = true;
+    clearRetryWait();
+    removeEnvironmentListeners?.();
   }
 
   return {
@@ -630,5 +754,6 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     resetAttempt,
     isExhausted,
     cancelReconnect,
+    dispose,
   };
 }

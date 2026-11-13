@@ -64,7 +64,12 @@ function toolInputEnded(id: string, toolId: string): V2Event {
 function createHost(overrides: Partial<EventPipelineHost> = {}): EventPipelineHost {
   return {
     isDisposed: false,
-    config: { maxReconnectAttempts: 3, initialReconnectDelayMs: 10, maxReconnectDelayMs: 10 },
+    config: {
+      maxReconnectAttempts: 3,
+      initialReconnectDelayMs: 10,
+      maxReconnectDelayMs: 10,
+      streamIdleTimeoutMs: 30_000,
+    },
     isLive: () => true,
     ownsRuntime: () => true,
     retireAttempt: () => undefined,
