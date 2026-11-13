@@ -4,8 +4,10 @@ import {
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
 import {
+  EMPTY_HISTORY,
   createClient,
   createGeneration,
+  deferred,
   waitForState,
 } from "@web/testing/opencode/v2ThreadControllerHarness";
 
@@ -444,7 +446,9 @@ describe("environment-aware recovery", () => {
     const second = createGeneration(2);
     const client = createClient([first, second]);
     const controller = createV2ThreadController(client, {
-      streamIdleTimeoutMs: 5_000,
+      // Keep the active replacement's idle watchdog well beyond the 15s retry-deadline
+      // advancement so this test isolates retry-timer cancellation, not watchdog recovery.
+      streamIdleTimeoutMs: 60_000,
       initialReconnectDelayMs: 10_000,
       maxReconnectDelayMs: 10_000,
     });
@@ -464,9 +468,12 @@ describe("environment-aware recovery", () => {
       expect(client.connectCount).toBe(2);
       expect(controller.getState().connection.type).toBe("connected");
 
-      // Original retry deadline passes; cancelled timer/token must not start another attempt.
+      // Original retry deadline passes; cancelled timer/token must not start another attempt,
+      // and the active replacement's idle watchdog must not fire during this interval.
       jest.advanceTimersByTime(15_000);
       await flushMicrotasks();
+      expect(controller.getState().connection.type).toBe("connected");
+      expect(controller.getState().load.type).toBe("ready");
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
@@ -480,7 +487,9 @@ describe("environment-aware recovery", () => {
     const second = createGeneration(2);
     const client = createClient([first, second]);
     const controller = createV2ThreadController(client, {
-      streamIdleTimeoutMs: 5_000,
+      // Keep the active replacement's idle watchdog well beyond the 15s retry-deadline
+      // advancement so this test isolates retry-timer cancellation, not watchdog recovery.
+      streamIdleTimeoutMs: 60_000,
       initialReconnectDelayMs: 10_000,
       maxReconnectDelayMs: 10_000,
     });
@@ -499,8 +508,12 @@ describe("environment-aware recovery", () => {
       expect(client.connectCount).toBe(2);
       expect(controller.getState().connection.type).toBe("connected");
 
+      // Original retry deadline passes; cancelled timer/token must not start another attempt,
+      // and the active replacement's idle watchdog must not fire during this interval.
       jest.advanceTimersByTime(15_000);
       await flushMicrotasks();
+      expect(controller.getState().connection.type).toBe("connected");
+      expect(controller.getState().load.type).toBe("ready");
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
@@ -547,11 +560,25 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("a stale attempt cannot mark ready or reset the retry budget (late completion from superseded attempt)", async () => {
+  it("a stale attempt cannot mark ready or reset the retry budget (late hydration completion from superseded attempt)", async () => {
     setOnline(true);
     setVisibility("visible");
-    const first = createGeneration(1);
-    const second = createGeneration(2);
+    const historyStarted = deferred<void>();
+    const history = deferred<typeof EMPTY_HISTORY>();
+    const first = createGeneration(1, {
+      // Intentionally non-cooperative with abort: the deferred history read can resolve
+      // after generation 1 is retired, exercising a real late hydration continuation.
+      historyList: async () => {
+        historyStarted.resolve(undefined);
+        return history.promise;
+      },
+    });
+    const second = createGeneration(2, {
+      // Generation 2 connects but fails hydration before becoming ready.
+      sessionGet: async () => {
+        throw new Error("generation 2 hydration failed");
+      },
+    });
     const client = createClient([first, second]);
     const controller = createV2ThreadController(client, {
       streamIdleTimeoutMs: 5_000,
@@ -559,42 +586,49 @@ describe("environment-aware recovery", () => {
       maxReconnectAttempts: 1,
     });
 
+    const loadPromise = controller.load();
+    // Generation 1 is intentionally superseded and generation 2 exhausts retries; attach
+    // handling so the superseded/terminal load promise cannot surface as unhandled.
+    void loadPromise.catch(() => undefined);
+
     try {
-      await controller.awaitReady();
+      await historyStarted.promise;
       expect(client.connectCount).toBe(1);
 
-      // Fail attempt 1 stream -> automatic reconnect to attempt 2; attempt 1 becomes superseded/retired.
+      // Fail generation 1 stream -> automatic recovery retires it and schedules retry.
       first.events.fail(new Error("stream closed"));
-      await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
       await client.waitForConnect(2);
-      await waitForWithin(
+
+      // Generation 2 fails hydration before ready; maxReconnectAttempts: 1 => terminal exhausted.
+      const exhausted = await waitForWithin(
         controller,
-        (state) => state.load.type === "ready" && state.connection.type === "connected",
+        (state) => state.connection.type === "failed" && state.load.type === "error",
         2_000,
       );
+      expect(exhausted).toBe(true);
       expect(client.connectCount).toBe(2);
-      const readyState = controller.getState();
+      const terminalState = controller.getState();
 
-      // Late failure/completion signal from superseded attempt 1 after replacement is ready.
-      first.events.fail(new Error("late superseded stream failure"));
+      // Only after generation 1 is retired and generation 2 exhausted the retry budget,
+      // resolve generation 1's previously pending history successfully.
+      history.resolve(EMPTY_HISTORY);
       await flushMicrotasks();
       await sleep(100);
 
-      // Must not modify current state, mark replacement ready again, reset retry budget,
-      // or create another connection.
-      expect(controller.getState().load.type).toBe("ready");
-      expect(controller.getState().connection.type).toBe("connected");
-      expect(controller.getState().load).toEqual(readyState.load);
+      // Late completion from superseded attempt must not mark ready, change terminal failure,
+      // commit stale history/events, reset exhausted retry budget, or start another connection.
+      expect(controller.getState().load.type).toBe("error");
+      expect(controller.getState().connection.type).toBe("failed");
+      expect(controller.getState().load).toEqual(terminalState.load);
+      expect(controller.getState().connection).toEqual(terminalState.connection);
       expect(client.connectCount).toBe(2);
 
-      setVisibility("visible");
-      dispatchVisibility();
-      setOnline(true);
-      dispatchOnline();
-      dispatchPageShow(true);
-      await sleep(100);
-      expect(controller.getState().load.type).toBe("ready");
-      expect(controller.getState().connection.type).toBe("connected");
+      // Normal load() must still report terminal failure rather than opening a third connection.
+      await expect(controller.load()).rejects.toBeDefined();
+      await flushMicrotasks();
+      await sleep(50);
+      expect(controller.getState().load.type).toBe("error");
+      expect(controller.getState().connection.type).toBe("failed");
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
