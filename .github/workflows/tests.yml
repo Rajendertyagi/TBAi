@@ -40,7 +40,7 @@ on:
   push:
     branches: [main, develop, ci/tauri-e2e-verify]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 env:
   # Pinned, matching tauri-build.yml and the version verified locally. Bun
