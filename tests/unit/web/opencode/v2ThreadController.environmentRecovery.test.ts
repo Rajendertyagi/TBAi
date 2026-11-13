@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, jest } from "bun:test";
 import {
   createV2ThreadController,
   type V2ThreadController,
@@ -8,6 +8,54 @@ import {
   createGeneration,
   waitForState,
 } from "@web/testing/opencode/v2ThreadControllerHarness";
+
+/**
+ * This suite exercises browser-environment recovery (visibility/online/pageshow)
+ * and must run in the main unit batch, which does not preload a DOM. Install a
+ * minimal, test-local browser surface only when absent; never override an
+ * existing DOM (e.g. dom-preload) and always restore globals after the file.
+ */
+type BrowserGlobalSnapshot = {
+  hadWindow: boolean;
+  hadDocument: boolean;
+  windowValue: unknown;
+  documentValue: unknown;
+  navigatorOnLineDescriptor: PropertyDescriptor | undefined;
+};
+
+const browserGlobalSnapshot: BrowserGlobalSnapshot = {
+  hadWindow: typeof (globalThis as { window?: unknown }).window !== "undefined",
+  hadDocument: typeof (globalThis as { document?: unknown }).document !== "undefined",
+  windowValue: (globalThis as { window?: unknown }).window,
+  documentValue: (globalThis as { document?: unknown }).document,
+  navigatorOnLineDescriptor:
+    typeof navigator === "undefined"
+      ? undefined
+      : Object.getOwnPropertyDescriptor(navigator, "onLine"),
+};
+
+function ensureBrowserEnvironment(): void {
+  if (typeof (globalThis as { window?: unknown }).window === "undefined") {
+    (globalThis as { window?: unknown }).window = new EventTarget();
+  }
+  if (typeof (globalThis as { document?: unknown }).document === "undefined") {
+    (globalThis as { document?: unknown }).document = Object.assign(new EventTarget(), {
+      visibilityState: "visible" as DocumentVisibilityState,
+    });
+  }
+  if (typeof navigator !== "undefined") {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, "onLine");
+    if (!descriptor || descriptor.configurable || "value" in descriptor) {
+      Object.defineProperty(navigator, "onLine", {
+        value: descriptor && "value" in descriptor ? descriptor.value : true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+}
+
+ensureBrowserEnvironment();
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,6 +110,11 @@ function dispatchPageShow(persisted: boolean): void {
   window.dispatchEvent(event);
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("environment-aware recovery", () => {
   const originalVisibility = typeof document === "undefined" ? "visible" : document.visibilityState;
   const originalOnLine = typeof navigator === "undefined" ? true : navigator.onLine;
@@ -69,6 +122,27 @@ describe("environment-aware recovery", () => {
   afterEach(() => {
     setVisibility(originalVisibility as DocumentVisibilityState);
     setOnline(originalOnLine);
+    jest.useRealTimers();
+  });
+
+  afterAll(() => {
+    if (browserGlobalSnapshot.hadWindow) {
+      (globalThis as { window?: unknown }).window = browserGlobalSnapshot.windowValue;
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+    if (browserGlobalSnapshot.hadDocument) {
+      (globalThis as { document?: unknown }).document = browserGlobalSnapshot.documentValue;
+    } else {
+      delete (globalThis as { document?: unknown }).document;
+    }
+    if (typeof navigator !== "undefined") {
+      if (browserGlobalSnapshot.navigatorOnLineDescriptor) {
+        Object.defineProperty(navigator, "onLine", browserGlobalSnapshot.navigatorOnLineDescriptor);
+      } else {
+        delete (navigator as { onLine?: unknown }).onLine;
+      }
+    }
   });
 
   it("healthy stream + visibility return = no reconnect", async () => {
@@ -164,6 +238,32 @@ describe("environment-aware recovery", () => {
     }
   });
 
+  it("healthy stream + offline event = no abort and no reconnect", async () => {
+    const generation = createGeneration(1);
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client, {
+      streamIdleTimeoutMs: 5_000,
+      initialReconnectDelayMs: 50,
+    });
+
+    try {
+      await controller.awaitReady();
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("connected");
+
+      setOnline(false);
+      dispatchOffline();
+      await sleep(200);
+
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("connected");
+      expect(controller.getState().load.type).toBe("ready");
+      expect(client.signals[0]?.connectionSignal.aborted).toBe(false);
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("stale stream + online event = guarded recovery", async () => {
     const first = createGeneration(1);
     const second = createGeneration(2);
@@ -205,7 +305,7 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("pending hidden retry + visibility return = early wake", async () => {
+  it("pending hidden retry + visibility return = early wake (hidden before failure, no unrelated wake)", async () => {
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -219,6 +319,8 @@ describe("environment-aware recovery", () => {
       await controller.awaitReady();
       expect(client.connectCount).toBe(1);
 
+      setVisibility("hidden");
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
       const reconnecting = await waitForWithin(
         controller,
@@ -227,6 +329,13 @@ describe("environment-aware recovery", () => {
       );
       expect(reconnecting).toBe(true);
       expect(client.connectCount).toBe(1);
+
+      // Unrelated events while hidden must not start the retry.
+      dispatchVisibility(); // still hidden
+      dispatchPageShow(false);
+      await sleep(200);
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("reconnecting");
 
       const connect2 = client.waitForConnect(2);
       setVisibility("visible");
@@ -244,7 +353,7 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("pending offline retry + online event = early wake", async () => {
+  it("pending offline retry + online event = early wake (visibility/pageshow do not wake while offline)", async () => {
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -258,6 +367,8 @@ describe("environment-aware recovery", () => {
       await controller.awaitReady();
       expect(client.connectCount).toBe(1);
 
+      setOnline(false);
+      setVisibility("visible");
       first.events.fail(new Error("stream closed"));
       const reconnecting = await waitForWithin(
         controller,
@@ -266,6 +377,13 @@ describe("environment-aware recovery", () => {
       );
       expect(reconnecting).toBe(true);
       expect(client.connectCount).toBe(1);
+
+      // While explicitly offline, visibility/pageshow must not accelerate retry.
+      dispatchVisibility();
+      dispatchPageShow(true);
+      await sleep(200);
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("reconnecting");
 
       const connect2 = client.waitForConnect(2);
       setOnline(true);
@@ -295,6 +413,7 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
       await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
 
@@ -304,6 +423,7 @@ describe("environment-aware recovery", () => {
       dispatchOnline();
       dispatchVisibility();
       dispatchOnline();
+      dispatchPageShow(true);
 
       await connect2;
       await waitForWithin(
@@ -311,13 +431,15 @@ describe("environment-aware recovery", () => {
         (state) => state.load.type === "ready" && state.connection.type === "connected",
         2_000,
       );
+      await sleep(100);
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
     }
   });
 
-  it("retry cancellation invalidates the old timer/token", async () => {
+  it("retry cancellation invalidates the old timer/token (manual load takeover)", async () => {
+    jest.useFakeTimers();
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -329,25 +451,31 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
-      await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
+      await flushMicrotasks();
+      expect(controller.getState().connection.type).toBe("reconnecting");
+      expect(client.connectCount).toBe(1);
 
       const connect2 = client.waitForConnect(2);
       const loadPromise = controller.load();
       await connect2;
       await loadPromise;
-      await waitForWithin(
-        controller,
-        (state) => state.load.type === "ready" && state.connection.type === "connected",
-        2_000,
-      );
+      expect(client.connectCount).toBe(2);
+      expect(controller.getState().connection.type).toBe("connected");
+
+      // Original retry deadline passes; cancelled timer/token must not start another attempt.
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
+      jest.useRealTimers();
     }
   });
 
-  it("manual retry takes over pending scheduled retry", async () => {
+  it("manual retry takes over pending scheduled retry and invalidates original timer", async () => {
+    jest.useFakeTimers();
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -359,25 +487,29 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
-      await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
+      await flushMicrotasks();
+      expect(controller.getState().connection.type).toBe("reconnecting");
 
       const connect2 = client.waitForConnect(2);
       const retryPromise = controller.retry();
       await connect2;
       await retryPromise;
-      await waitForWithin(
-        controller,
-        (state) => state.load.type === "ready" && state.connection.type === "connected",
-        2_000,
-      );
+      expect(client.connectCount).toBe(2);
+      expect(controller.getState().connection.type).toBe("connected");
+
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
       expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
+      jest.useRealTimers();
     }
   });
 
-  it("dispose clears listeners, timers and waiters", async () => {
+  it("dispose clears listeners, timers and waiters (no restart after disposal)", async () => {
+    jest.useFakeTimers();
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -389,20 +521,35 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
-      await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
+      await flushMicrotasks();
+      expect(controller.getState().connection.type).toBe("reconnecting");
+      expect(client.connectCount).toBe(1);
+
       controller.dispose();
+
+      // Environment events after disposal must not restart runtime.
       setVisibility("visible");
       dispatchVisibility();
+      dispatchPageShow(true);
+      setOnline(true);
       dispatchOnline();
-      await sleep(200);
+      await flushMicrotasks();
+
+      // Original retry deadline passes; cancelled timer must not reconnect.
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
       expect(client.connectCount).toBe(1);
     } finally {
       // already disposed
+      jest.useRealTimers();
     }
   });
 
-  it("a stale attempt cannot mark ready or reset the retry budget", async () => {
+  it("a stale attempt cannot mark ready or reset the retry budget (late completion from superseded attempt)", async () => {
+    setOnline(true);
+    setVisibility("visible");
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -414,7 +561,11 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      expect(client.connectCount).toBe(1);
+
+      // Fail attempt 1 stream -> automatic reconnect to attempt 2; attempt 1 becomes superseded/retired.
       first.events.fail(new Error("stream closed"));
+      await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
       await client.waitForConnect(2);
       await waitForWithin(
         controller,
@@ -422,11 +573,33 @@ describe("environment-aware recovery", () => {
         2_000,
       );
       expect(client.connectCount).toBe(2);
+      const readyState = controller.getState();
+
+      // Late failure/completion signal from superseded attempt 1 after replacement is ready.
+      first.events.fail(new Error("late superseded stream failure"));
+      await flushMicrotasks();
+      await sleep(100);
+
+      // Must not modify current state, mark replacement ready again, reset retry budget,
+      // or create another connection.
+      expect(controller.getState().load.type).toBe("ready");
+      expect(controller.getState().connection.type).toBe("connected");
+      expect(controller.getState().load).toEqual(readyState.load);
+      expect(client.connectCount).toBe(2);
+
+      setVisibility("visible");
+      dispatchVisibility();
+      setOnline(true);
+      dispatchOnline();
+      dispatchPageShow(true);
+      await sleep(100);
+      expect(controller.getState().load.type).toBe("ready");
+      expect(controller.getState().connection.type).toBe("connected");
+      expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
     }
   });
-
   it("a wake cannot resurrect an exhausted runtime", async () => {
     const first = createGeneration(1);
     const second = createGeneration(2);
@@ -445,11 +618,15 @@ describe("environment-aware recovery", () => {
       second.events.fail(new Error("stream closed again"));
       await waitForWithin(controller, (state) => state.connection.type === "failed", 2_000);
       expect(client.connectCount).toBe(2);
+
       setVisibility("visible");
       dispatchVisibility();
+      setOnline(true);
       dispatchOnline();
+      dispatchPageShow(true);
       await sleep(200);
       expect(client.connectCount).toBe(2);
+      expect(controller.getState().connection.type).toBe("failed");
     } finally {
       controller.dispose();
     }
@@ -467,6 +644,7 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(true);
       first.events.fail(new Error("stream closed"));
       await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
 
@@ -488,7 +666,7 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("offline events do not cause retry storms", async () => {
+  it("offline/online transitions: pending retry not woken by visibility/pageshow while offline, wakes on online", async () => {
     const first = createGeneration(1);
     const second = createGeneration(2);
     const client = createClient([first, second]);
@@ -500,12 +678,14 @@ describe("environment-aware recovery", () => {
 
     try {
       await controller.awaitReady();
+      setOnline(false);
+      setVisibility("visible");
       first.events.fail(new Error("stream closed"));
       await waitForWithin(controller, (state) => state.connection.type === "reconnecting", 2_000);
+      expect(client.connectCount).toBe(1);
 
-      setOnline(false);
-      dispatchOffline();
-      dispatchOffline();
+      dispatchVisibility();
+      dispatchPageShow(true);
       await sleep(200);
       expect(client.connectCount).toBe(1);
 
@@ -524,7 +704,7 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("existing keepalive-only watchdog and in-flight prompt continuity tests remain green", async () => {
+  it("existing keepalive-only watchdog and in-flight prompt continuity remain green", async () => {
     const first = createGeneration(1);
     first.setPromptHandler(() => new Promise(() => undefined));
     const client = createClient([first]);

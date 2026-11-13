@@ -1,5 +1,5 @@
-﻿/**
- * M5 â€” the hydration buffer must not lose streamed text.
+/**
+ * M5 — the hydration buffer must not lose streamed text.
  *
  * The defect this pins: every buffered delta was one entry, the buffer was a
  * fixed 512 slots, and overflow dropped the OLDEST entries. A long response
