@@ -76,7 +76,7 @@ export function StatusBar() {
   const openServer = () => navigate(getNavItem("desktop")?.route ?? appConfig.settingsIndexRoute);
 
   return (
-    <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-statusbar pl-2 pr-4 text-xs text-muted-foreground">
+    <footer className="flex h-8 shrink-0 items-center justify-between border-t border-sidebar-border/50 bg-sidebar pl-2 pr-4 text-xs text-sidebar-foreground/80">
       <div className="flex min-w-0 items-center gap-3">
         <StatusBarQuickActions />
         <button
@@ -84,7 +84,7 @@ export function StatusBar() {
           onClick={openServer}
           title={`${availabilityTitle} — ${serverTitle}`}
           aria-label={serverTitle}
-          className="flex items-center gap-1.5 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex items-center gap-1.5 rounded outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Circle
             aria-hidden="true"
@@ -93,7 +93,7 @@ export function StatusBar() {
               availability === "online" && "text-emerald-500",
               availability === "degraded" && "text-amber-500",
               availability === "offline" && "text-destructive",
-              availability === "unknown" && "text-muted-foreground/40",
+              availability === "unknown" && "text-sidebar-foreground/40",
             )}
           />
           <span>{availabilityLabel}</span>
@@ -108,7 +108,7 @@ export function StatusBar() {
             type="button"
             onClick={openProviders}
             title={copy.openProviders}
-            className="hidden min-w-0 max-w-55 truncate rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring md:block"
+            className="hidden min-w-0 max-w-55 truncate rounded outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-1 focus-visible:ring-ring md:block"
           >
             {rightLabel}
           </button>

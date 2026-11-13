@@ -465,11 +465,11 @@ function UserMessage() {
 
   return (
     <MessagePrimitive.Root className="flex animate-in flex-col items-end fade-in-0 slide-in-from-bottom-1 duration-200">
-      <div className="max-w-[85%] whitespace-pre-wrap rounded-xl border-t border-r border-border/40 bg-foreground px-3.5 py-2.5 text-sm text-background">
+      <div className="max-w-[85%] whitespace-pre-wrap rounded-xl bg-primary px-3.5 py-2.5 text-sm text-primary-foreground shadow-sm">
         <MessagePrimitive.Parts />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
-        {timeStr && <span className="text-2xs tabular-nums text-background/50">{timeStr}</span>}
+        {timeStr && <span className="text-2xs tabular-nums text-muted-foreground">{timeStr}</span>}
         <MessageCopyAction />
       </div>
     </MessagePrimitive.Root>

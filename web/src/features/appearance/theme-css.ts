@@ -4,7 +4,7 @@
  */
 import type { ThemeDefinition, ThemeVariant } from "./theme-data";
 
-/** Every colour token globals.css declares. */
+/** Every standard colour token declared by themes. */
 export const TBAI_TOKENS = [
   "--background",
   "--foreground",
@@ -39,20 +39,25 @@ export const TBAI_TOKENS = [
   "--sidebar-accent-foreground",
   "--sidebar-border",
   "--sidebar-ring",
-  "--statusbar",
-  "--card-soft",
-  "--card-outline",
 ] as const;
 
 /**
- * Resolves all 33 TBAi CSS variables directly from the authoritative theme token definition.
+ * Resolves standard TBAi CSS variables directly from the authoritative theme token definition.
  * ZERO fabrication or guessing — returns the exact theme tokens.
  */
 export function resolveThemeVars(
   theme: ThemeDefinition,
   variant: ThemeVariant,
 ): Record<string, string> {
-  return theme.tokens[variant];
+  const source = theme.tokens[variant];
+  const resolved: Record<string, string> = {};
+  for (const token of TBAI_TOKENS) {
+    const value = source[token];
+    if (value !== undefined) {
+      resolved[token] = value;
+    }
+  }
+  return resolved;
 }
 
 /**

@@ -56,13 +56,13 @@ export function ActivityBar() {
   return (
     <nav
       aria-label="Primary"
-      className="flex w-[var(--activity-bar-width)] shrink-0 flex-col items-center gap-1 border-r border-border bg-muted/40 py-2"
+      className="flex w-[var(--activity-bar-width)] shrink-0 flex-col items-center gap-1 border-r border-sidebar-border bg-sidebar py-2"
     >
       <button
         type="button"
         onClick={() => navigate(ROUTES.CHAT)}
         title={appConfig.branding.appName}
-        className="mb-2 flex h-8 w-8 items-center justify-center rounded bg-foreground text-xs font-bold text-background"
+        className="mb-2 flex h-8 w-8 items-center justify-center rounded bg-primary text-xs font-bold text-primary-foreground"
       >
         {appConfig.branding.logoText}
       </button>
@@ -79,8 +79,8 @@ export function ActivityBar() {
             className={cn(
               "relative flex h-9 w-9 items-center justify-center rounded transition-colors",
               active
-                ? "text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-primary before:content-['']"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                ? "text-sidebar-foreground bg-sidebar-accent/50 before:absolute before:left-0 before:top-1/2 before:h-5 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-sidebar-primary before:content-['']"
+                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
             )}
           >
             <Icon className="h-5 w-5" />
