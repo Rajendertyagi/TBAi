@@ -4,7 +4,7 @@ import {
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
 import {
-  EMPTY_HISTORY,
+  SESSION,
   createClient,
   createGeneration,
   deferred,
@@ -560,17 +560,17 @@ describe("environment-aware recovery", () => {
     }
   });
 
-  it("a stale attempt cannot mark ready or reset the retry budget (late hydration completion from superseded attempt)", async () => {
+  it("a stale attempt cannot mark ready or reset the retry budget (late session-read completion from superseded attempt)", async () => {
     setOnline(true);
     setVisibility("visible");
-    const historyStarted = deferred<void>();
-    const history = deferred<typeof EMPTY_HISTORY>();
+    const sessionReadStarted = deferred<void>();
+    const sessionRead = deferred<typeof SESSION>();
     const first = createGeneration(1, {
-      // Intentionally non-cooperative with abort: the deferred history read can resolve
-      // after generation 1 is retired, exercising a real late hydration continuation.
-      historyList: async () => {
-        historyStarted.resolve(undefined);
-        return history.promise;
+      // Intentionally non-cooperative with abort: the deferred session read can resolve
+      // after generation 1 is retired, exercising a real late session-read continuation.
+      sessionGet: async () => {
+        sessionReadStarted.resolve(undefined);
+        return sessionRead.promise;
       },
     });
     const second = createGeneration(2, {
@@ -592,7 +592,7 @@ describe("environment-aware recovery", () => {
     void loadPromise.catch(() => undefined);
 
     try {
-      await historyStarted.promise;
+      await sessionReadStarted.promise;
       expect(client.connectCount).toBe(1);
 
       // Fail generation 1 stream -> automatic recovery retires it and schedules retry.
@@ -610,13 +610,13 @@ describe("environment-aware recovery", () => {
       const terminalState = controller.getState();
 
       // Only after generation 1 is retired and generation 2 exhausted the retry budget,
-      // resolve generation 1's previously pending history successfully.
-      history.resolve(EMPTY_HISTORY);
+      // resolve generation 1's previously pending session read successfully.
+      sessionRead.resolve(SESSION);
       await flushMicrotasks();
       await sleep(100);
 
-      // Late completion from superseded attempt must not mark ready, change terminal failure,
-      // commit stale history/events, reset exhausted retry budget, or start another connection.
+      // Late session-read completion from superseded attempt must not dispatch its session,
+      // mark ready, alter terminal failure, or reset the exhausted retry budget/start another connection.
       expect(controller.getState().load.type).toBe("error");
       expect(controller.getState().connection.type).toBe("failed");
       expect(controller.getState().load).toEqual(terminalState.load);
