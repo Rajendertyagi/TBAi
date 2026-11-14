@@ -603,7 +603,7 @@
   - **Correction:** removed genuinely unused `HOLD_SCRIPT` constant and applied Biome formatting; test behavior/process-ownership coverage preserved (no refactor). Included in commit `366369f` (see note above).
   - **Evidence:** `bun run lint` -> **exit 0**; `bun run format:check` -> **exit 0**.
 
-- **Cumulative local validation (CI-equivalent sequence, `.github/workflows/tests.yml` `verify` steps; local Bun 1.4.4 vs CI pin 1.4.2):**
+- **Cumulative local validation (CI-equivalent sequence, `.github/workflows/tests.yml` `verify` steps; local/CI Bun pinned to 1.4.4 at time of this update):**
   - `bun run typecheck` -> **exit 0**
   - `bun run lint` -> **exit 0**
   - `bun run format:check` -> **exit 0**
@@ -618,4 +618,4 @@
 
 - **Roadmap status:** `LIB-IMPL-01` through `LIB-IMPL-04` remain **DONE**. No unrelated conditional reliability tasks marked DONE/reopened.
 
-- **Remaining limitations / CI-only:** no live OpenCode server/runtime/browser verification performed. CI-only jobs not executed locally (`opencode-runtime`, scoped `e2e`, `opencode-g3`, `tauri`, dispatch-only jobs). Local Bun version differs from CI pin (1.4.4 vs 1.4.2); no material discrepancy observed in this run. No push/merge performed. `main` untouched.
+- **Remaining limitations / CI-only:** no live OpenCode server/runtime/browser verification performed. CI-only jobs not executed locally (`opencode-runtime`, scoped `e2e`, `opencode-g3`, `tauri`, dispatch-only jobs). Bun pinned to 1.4.4 in workflows/docs as part of follow-up; no material version discrepancy observed in this validation run. No push/merge performed. `main` untouched.

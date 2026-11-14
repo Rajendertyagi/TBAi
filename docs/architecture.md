@@ -545,7 +545,7 @@ Tauri 2 window (no native title bar, decorations:false)
 
 ### bun:sqlite (`bun-types`) binding + query typings
 
-The installed `bun-types` (Bun 1.4.2) types model SQLite bindings strictly:
+The installed `bun-types` (Bun 1.4.4) types model SQLite bindings strictly:
 
 - `db.run(sql, values)` takes the bind parameters as a **single array**
   (`run<ParamsType extends SQLQueryBindings[]>(sql, ...bindings: ParamsType[])`), so call sites

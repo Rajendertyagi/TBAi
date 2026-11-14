@@ -46,7 +46,7 @@ env:
   # Pinned, matching tauri-build.yml and the version verified locally. Bun
   # releases weekly and has shipped breaking changes; `latest` made two builds
   # of one commit differ.
-  BUN_VERSION: "1.4.2"
+  BUN_VERSION: "1.4.4"
 
   # OpenCode CLI, for the integration tests that drive the managed server.
   #

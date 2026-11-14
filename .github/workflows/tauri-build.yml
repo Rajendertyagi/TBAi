@@ -16,8 +16,8 @@ env:
   SIDECAR_NAME: tbai-server
   # Pinned, not floating. Bun releases weekly and has shipped breaking changes;
   # `latest` made two different builds of the same commit differ. Must match the
-  # version used locally (verified 1.4.2).
-  BUN_VERSION: "1.4.2"
+  # version used locally (verified 1.4.4).
+  BUN_VERSION: "1.4.4"
   # Current stable at the time of writing. Frozen so a Rust point release cannot
   # change the artifact under the same tag. Not an MSRV: Cargo.toml's
   # `rust-version` is a floor, this is the exact toolchain.
