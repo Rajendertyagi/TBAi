@@ -651,3 +651,26 @@
   - TBAI_OPENCODE_RUNTIME_TESTS=1 bun run scripts/run-opencode-runtime-suites.ts -> **exit 0** (9/9 required runtime suites passed with real opencode binary v2.2.6)
 
 - **Remaining limitations / CI status:** Verified locally against real OpenCode binary. Windows CI verification on GitHub Actions for the exact candidate SHA must pass on push/PR. No push/merge performed. main untouched.
+
+### 14.23 Removal of obsolete ownership enforcement and alignment of G2 runtime acceptance with Client-Daemon Architecture (2026-11-14, develop)
+
+- **Context & Architectural Correction:**
+  - The earlier interim G2 assertions expecting foreign database-holder refusal (OpenCodeDatabaseBusyError) and Restart Manager file-holder enumeration represented a superseded architecture that conflicted with the accepted ADR: OpenCode Client-Daemon Architecture & Unified Service Discovery (2026-11-13).
+  - Decommissioned watchdog mechanisms (Windows Restart Manager, named Win32 database mutexes, toolhelp process-table scanning, global file-holder policing, and foreign-process refusal) remain decommissioned in production code and unit tests (src/services/process-ownership.ts, src/services/opencode/ownership.ts, tests/unit/opencode/ownership.test.ts, and tests/integration/opencode/process-ownership.test.ts remain clean compatibility stubs identical to published baseline 73c948d).
+  - Real safety guarantees are provided via SQLite WAL co-tenancy, adopt-first service discovery (~/.local/state/opencode/service.json), atomic validated registration, owned-process lifecycle management, and Windows Job Objects with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+
+- **Runtime Acceptance Test Alignment (tests/integration/opencode/opencode-ownership-runtime.test.ts):**
+  - Replaced obsolete foreign-process holder refusal with **SQLite WAL co-tenancy acceptance**: verifies a foreign OpenCode process using the isolated database runs concurrently with TBAi's managed server without conflict, both remain healthy and responding, and neither terminates the other.
+  - Added **Adopt-First Service Discovery acceptance**: verifies that when a compatible registered OpenCode service exists, TBAi adopts it without spawning a competing managed server, and shutting down TBAi leaves the adopted foreign service alive and running.
+  - Corrected **Managed Child Lifecycle acceptance**: verifies hard-killing the desktop shell terminates both the sidecar and its managed OpenCode child via the Windows Job Object contract, discovers the exact managed PID via the manager lifecycle seam (openCodeServerManager.getManagedPid()) verified against the atomic service registration (no file-holder enumeration or heuristic PID scanning), and cleanly restarts on the same database with a new child and updated registration.
+
+- **Validation with Exact CI Binary (OpenCode v2.2.0, Bun 1.4.4, Windows x64):**
+  - bun test tests/integration/opencode/opencode-ownership-runtime.test.ts -> **exit 0** (3 pass, 0 fail, 48 expect() calls against OpenCode v2.2.0)
+  - bun run scripts/run-opencode-runtime-suites.ts -> **exit 0** (**9/9 required runtime suites passed** against OpenCode v2.2.0 on PATH)
+  - bun test tests/integration/opencode/process-ownership.test.ts tests/unit/opencode/ownership.test.ts tests/unit/opencode/registration.test.ts tests/unit/opencode/startup.test.ts tests/unit/opencode/managed-lifecycle.test.ts tests/integration/opencode/serverManager.test.ts -> **exit 0** (163 pass, 1 skip, 0 fail, 618 expect() calls)
+  - bun run typecheck -> **exit 0** (checked clean across all 4 projects)
+  - bun run lint -> **exit 0** (Biome: 1255 files checked, 0 errors, 0 warnings)
+  - bun run format:check -> **exit 0** (Biome: 1255 files formatted)
+  - bun run build -> **exit 0** (web build successful and stamped)
+
+- **Remaining limitations / CI status:** Verified locally against exact pinned CI OpenCode binary v2.2.0. Windows CI verification on GitHub Actions for the candidate SHA must pass on push/PR. No push/merge performed. main untouched.

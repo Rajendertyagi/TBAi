@@ -3,7 +3,7 @@
  *
  * It is the shipped entry point in miniature: install the backend job, join the
  * shell's named job, then start the managed OpenCode server through the real
- * `OpenCodeServerManager` (including the real database-ownership lease).
+ * `OpenCodeServerManager` (or through `startOpenCodeRuntime` when adoption is exercised).
  *
  * On success it writes `ready.json` with the sidecar PID, base URL, and resolved
  * database path, then stays alive until the shell's job kills it. On refusal it
@@ -14,16 +14,15 @@ import path from "node:path";
 
 import { OPENCODE_CONFIG } from "../../src/config/opencode.ts";
 import { openCodeServerManager } from "../../src/services/opencode/serverManager.ts";
-import {
-  existingDatabaseFiles,
-  resolveOpenCodeDatabasePath,
-} from "../../src/services/opencode/ownership.ts";
+import { resolveOpenCodeDatabasePath } from "../../src/services/opencode/ownership.ts";
+import { readConnectionState } from "../../src/services/opencode/connectionState.ts";
+import { readOpenCodeRegistration } from "../../src/services/opencode/registration.ts";
 import {
   backendJobStatus,
-  findProcessesUsingFiles,
   installBackendProcessJob,
   joinShellJob,
 } from "../../src/services/process-ownership.ts";
+import { startOpenCodeRuntime } from "../../src/services/opencode/startup.ts";
 
 const dir = process.env.TBAI_G2_DIR;
 if (!dir) {
@@ -52,21 +51,54 @@ try {
 }
 
 try {
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
+  let baseUrl: string;
+  let mode: "managed" | "adopted" = "managed";
+  let adoptedPid: number | null = null;
+  let managedPid: number | null = null;
+
+  if (process.env.TBAI_G2_ADOPT === "1") {
+    const outcome = await startOpenCodeRuntime({ disabled: false });
+    if (outcome.status === "adopted") {
+      mode = "adopted";
+      const state = readConnectionState();
+      if (state.target.mode !== "adopted") {
+        throw new Error("Expected adopted target mode after adopted outcome");
+      }
+      baseUrl = state.target.baseUrl;
+      try {
+        const reg = await readOpenCodeRegistration({ config: OPENCODE_CONFIG });
+        adoptedPid = reg.pid;
+      } catch {
+        adoptedPid = null;
+      }
+    } else if (outcome.status === "managed") {
+      mode = "managed";
+      baseUrl = outcome.baseUrl;
+      managedPid = openCodeServerManager.getManagedPid();
+    } else {
+      throw new Error(`Unexpected startup outcome: ${outcome.status}`);
+    }
+  } else {
+    baseUrl = await openCodeServerManager.ensureBaseUrl();
+    managedPid = openCodeServerManager.getManagedPid();
+  }
+
   const binary = process.env.OPENCODE_BINARY ?? OPENCODE_CONFIG.binaryName;
+  fs.mkdirSync(OPENCODE_CONFIG.serverHomeDir, { recursive: true });
   const dbPath = await resolveOpenCodeDatabasePath(
     binary,
     OPENCODE_CONFIG.serverHomeDir,
     OPENCODE_CONFIG.databasePathTimeoutMs,
   );
-  const holders = findProcessesUsingFiles(existingDatabaseFiles(dbPath));
   fs.writeFileSync(
     path.join(dir, "ready.json"),
     JSON.stringify({
       sidecarPid: process.pid,
+      managedPid,
+      adoptedPid,
+      mode,
       baseUrl,
       dbPath,
-      holders,
       backendJob,
     }),
   );

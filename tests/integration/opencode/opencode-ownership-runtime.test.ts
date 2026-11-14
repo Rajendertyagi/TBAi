@@ -1,23 +1,25 @@
 /**
  * G2 acceptance against a real OpenCode server (the resolved binary) and an
- * isolated database.
+ * isolated database under the approved Client-Daemon Architecture.
  *
  * Opt-in, exactly like the other runtime suites:
  *
  *   TBAI_OPENCODE_RUNTIME_TESTS=1 \
- *   OPENCODE_BINARY=D:\Coding\OpenCode\opencode.exe \
+ *   OPENCODE_BINARY=C:\path\to\opencode.exe \
  *   bun test tests/integration/opencode/opencode-ownership-runtime.test.ts
  *
  * What it proves:
  *
- * 1. A foreign `opencode serve` that already holds the isolated database makes
- *    the managed sidecar refuse with `OpenCodeDatabaseBusyError`; the foreign
- *    process is left untouched.
- * 2. A managed server started on its own database is killed with the sidecar
- *    when the desktop shell is hard-killed (the named job), not merely when the
- *    sidecar exits gracefully.
- * 3. Restarting on the same database after that kill succeeds, with no orphan
- *    and no second server holding the file.
+ * 1. Foreign `opencode serve` co-tenancy: a foreign OpenCode process holding or
+ *    using the isolated database does NOT cause TBAi to refuse startup. SQLite WAL
+ *    provides safe concurrency; both services remain running and neither process
+ *    is killed or interfered with.
+ * 2. Adopt-first discovery: when a compatible OpenCode service is registered,
+ *    TBAi adopts it without spawning a competing managed server.
+ * 3. Managed process lifecycle: a managed server started on its database is killed
+ *    with the sidecar when the desktop shell is hard-killed (via the Windows Job
+ *    Object contract), its registration is updated on clean restart, and no orphan
+ *    remains.
  *
  * Windows-only. The database is always a fresh path under this test's temp root;
  * every PID it kills came from a file it wrote and a path it asserted.
@@ -28,8 +30,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
-import { existingDatabaseFiles } from "@/services/opencode/ownership.ts";
-import { findProcessesUsingFiles } from "@/services/process-ownership.ts";
 import { resolveManagedBinary } from "@/services/opencode/runtime.ts";
 import {
   allocateTestLoopbackPort,
@@ -57,7 +57,9 @@ interface ReadyRecord {
   readonly sidecarPid: number;
   readonly baseUrl: string;
   readonly dbPath: string;
-  readonly holders: number[];
+  readonly managedPid: number | null;
+  readonly adoptedPid: number | null;
+  readonly mode: "managed" | "adopted";
   readonly backendJob: { readonly status: string };
 }
 
@@ -79,6 +81,7 @@ interface Isolation {
   readonly dataHome: string;
   readonly dataDir: string;
   readonly configHome: string;
+  readonly stateHome: string;
   readonly homeDir: string;
   readonly dbPath: string;
 }
@@ -134,9 +137,19 @@ function createIsolation(label: string): Isolation {
   const dataHome = path.join(root, "xdg-data");
   const dataDir = path.join(root, "tbai-data");
   const configHome = path.join(root, "xdg-config");
+  const stateHome = path.join(root, "xdg-state");
   const homeDir = path.join(root, "home");
   const openCodeConfigDir = path.join(configHome, "opencode");
-  for (const dir of [dataHome, dataDir, configHome, openCodeConfigDir, homeDir]) {
+  const openCodeHome = path.join(dataDir, "opencode-home");
+  for (const dir of [
+    dataHome,
+    dataDir,
+    configHome,
+    stateHome,
+    openCodeConfigDir,
+    openCodeHome,
+    homeDir,
+  ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   const dbPath = path.join(dataHome, "opencode", "opencode.db");
@@ -146,49 +159,33 @@ function createIsolation(label: string): Isolation {
     dataHome,
     dataDir,
     configHome,
+    stateHome,
     homeDir,
     dbPath,
   };
 }
 
-function isolatedEnv(isolation: Isolation, binary: string, runDir: string): Record<string, string> {
+function isolatedEnv(
+  isolation: Isolation,
+  binary: string,
+  runDir: string,
+  extraEnv: Record<string, string> = {},
+): Record<string, string> {
   return {
     ...process.env,
     OPENCODE_BINARY: binary,
     OPENCODE_DB: isolation.dbPath,
     XDG_DATA_HOME: isolation.dataHome,
     XDG_CONFIG_HOME: isolation.configHome,
+    XDG_STATE_HOME: isolation.stateHome,
     OPENCODE_CONFIG_DIR: path.join(isolation.configHome, "opencode"),
     OPENCODE_CONFIG_PROJECT_DISABLE: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
     DATA_DIR: isolation.dataDir,
     TBAI_G2_DIR: runDir,
     TBAI_G2_SIDECAR: REAL_SIDECAR_FIXTURE,
+    ...extraEnv,
   } as Record<string, string>;
-}
-
-function holdersOf(dbPath: string): number[] {
-  if (!fs.existsSync(dbPath)) return [];
-  try {
-    return findProcessesUsingFiles(existingDatabaseFiles(dbPath));
-  } catch {
-    return [];
-  }
-}
-
-async function waitForHolders(
-  dbPath: string,
-  predicate: (pids: number[]) => boolean,
-  timeoutMs = 20000,
-): Promise<number[]> {
-  const deadline = Date.now() + timeoutMs;
-  let pids: number[] = [];
-  while (Date.now() < deadline) {
-    pids = holdersOf(dbPath);
-    if (predicate(pids)) return pids;
-    await Bun.sleep(100);
-  }
-  return pids;
 }
 
 async function waitForPort(baseUrl: string, timeoutMs = 30000): Promise<boolean> {
@@ -204,11 +201,12 @@ async function startRealShell(
   isolation: Isolation,
   binary: string,
   runDir: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<RealRun> {
   fs.mkdirSync(runDir, { recursive: true });
   const child = Bun.spawn(["bun", SHELL_FIXTURE], {
     cwd: REPO_ROOT,
-    env: isolatedEnv(isolation, binary, runDir),
+    env: isolatedEnv(isolation, binary, runDir, extraEnv),
     stdout: "ignore",
     stderr: "ignore",
   });
@@ -244,17 +242,17 @@ async function cleanupRun(run: RealRun): Promise<void> {
   fs.rmSync(run.dir, { recursive: true, force: true });
 }
 
-describeG2("G2 real-server database ownership", () => {
-  it("refuses when a foreign OpenCode already holds the database, and leaves it running", async () => {
+describeG2("G2 real-server client-daemon runtime acceptance", () => {
+  it("allows concurrent database access under SQLite WAL co-tenancy without foreign-holder refusal", async () => {
     const binary = resolveManagedBinary(OPENCODE_CONFIG).path;
-    const isolation = createIsolation("foreign");
+    const isolation = createIsolation("wal-cotenancy");
     const foreignPort = allocateTestLoopbackPort();
     const foreign = Bun.spawn(
       [binary, "serve", "--port", String(foreignPort), "--hostname", "127.0.0.1"],
       {
         cwd: isolation.homeDir,
         env: {
-          ...isolatedEnv(isolation, binary, path.join(isolation.root, "unused")),
+          ...isolatedEnv(isolation, binary, path.join(isolation.root, "foreign-run")),
           OPENCODE_PASSWORD: FOREIGN_PASSWORD,
           OPENCODE_SERVER_PASSWORD: FOREIGN_PASSWORD,
         },
@@ -264,35 +262,111 @@ describeG2("G2 real-server database ownership", () => {
     );
     const runDir = path.join(isolation.root, "managed");
     const foreignUrl = `http://127.0.0.1:${foreignPort}`;
+    let run: RealRun | null = null;
     try {
       expect(await waitForPort(foreignUrl)).toBe(true);
       await fetch(`${foreignUrl}${OPENCODE_CONFIG.readinessProbePath}`, {
         headers: runtimeAuthHeaders(FOREIGN_PASSWORD),
         signal: AbortSignal.timeout(2000),
       }).catch(() => undefined);
-      const foreignPids = await waitForHolders(
-        isolation.dbPath,
-        (pids) => pids.includes(foreign.pid),
-        30000,
-      );
-      expect(foreignPids).toContain(foreign.pid);
+      expect(pidAlive(foreign.pid)).toBe(true);
 
-      const run = await startRealShell(isolation, binary, runDir);
-      try {
-        expect(run.error?.name).toBe("OpenCodeDatabaseBusyError");
-        expect(run.ready).toBeNull();
-        expect(pidAlive(foreign.pid)).toBe(true);
-        // The managed sidecar must be gone: refusal is not a second server.
-        expect(await waitForDead(run.shell.sidecarPid, 10000)).toBe(true);
-        const after = holdersOf(isolation.dbPath);
-        expect(after).toContain(foreign.pid);
-        expect(after).not.toContain(run.shell.sidecarPid);
-      } finally {
-        await cleanupRun(run);
+      // Start TBAi managed sidecar on the same database
+      run = await startRealShell(isolation, binary, runDir);
+      expect(run.error).toBeNull();
+      expect(run.ready).not.toBeNull();
+      if (!run.ready) throw new Error("managed run did not become ready");
+      expect(run.ready.backendJob.status).toBe("installed");
+      expect(path.resolve(run.ready.dbPath)).toBe(path.resolve(isolation.dbPath));
+
+      // Both foreign OpenCode and managed OpenCode must be alive concurrently
+      expect(pidAlive(foreign.pid)).toBe(true);
+      const managedPid = run.ready.managedPid;
+      expect(managedPid).toBeDefined();
+      if (managedPid) {
+        expect(pidAlive(managedPid)).toBe(true);
+        expect(managedPid).not.toBe(foreign.pid);
       }
+      expect(await descendantAlive(foreignUrl)).toBe(true);
+      expect(await descendantAlive(run.ready.baseUrl)).toBe(true);
+
+      // Verify WAL co-tenancy: shutting down managed sidecar leaves foreign OpenCode alive and untouched
+      await cleanupRun(run);
+      run = null;
+      expect(pidAlive(foreign.pid)).toBe(true);
+      expect(await descendantAlive(foreignUrl)).toBe(true);
     } finally {
+      if (run) await cleanupRun(run);
       hardKill(foreign.pid);
       await foreign.exited.catch(() => undefined);
+      fs.rmSync(isolation.root, { recursive: true, force: true });
+    }
+  }, 120000);
+
+  it("adopts a compatible registered OpenCode service without spawning a competing managed server", async () => {
+    const binary = resolveManagedBinary(OPENCODE_CONFIG).path;
+    const isolation = createIsolation("adopt-first");
+    const servicePort = allocateTestLoopbackPort();
+    const serviceUrl = `http://127.0.0.1:${servicePort}`;
+    const service = Bun.spawn(
+      [binary, "serve", "--port", String(servicePort), "--hostname", "127.0.0.1"],
+      {
+        cwd: isolation.homeDir,
+        env: {
+          ...isolatedEnv(isolation, binary, path.join(isolation.root, "service-run")),
+          OPENCODE_PASSWORD: FOREIGN_PASSWORD,
+          OPENCODE_SERVER_PASSWORD: FOREIGN_PASSWORD,
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      },
+    );
+    let run: RealRun | null = null;
+    try {
+      expect(await waitForPort(serviceUrl)).toBe(true);
+      await fetch(`${serviceUrl}${OPENCODE_CONFIG.readinessProbePath}`, {
+        headers: runtimeAuthHeaders(FOREIGN_PASSWORD),
+        signal: AbortSignal.timeout(2000),
+      }).catch(() => undefined);
+      expect(pidAlive(service.pid)).toBe(true);
+
+      // Write valid service.json registration pointing to the running service
+      const regDir = path.join(isolation.stateHome, "opencode");
+      fs.mkdirSync(regDir, { recursive: true });
+      const regPath = path.join(regDir, "service.json");
+      fs.writeFileSync(
+        regPath,
+        JSON.stringify({
+          url: serviceUrl,
+          pid: service.pid,
+          password: FOREIGN_PASSWORD,
+          version: "2.2.0",
+        }),
+      );
+
+      // Start sidecar with TBAI_G2_ADOPT=1
+      const runDir = path.join(isolation.root, "sidecar-run");
+      run = await startRealShell(isolation, binary, runDir, { TBAI_G2_ADOPT: "1" });
+      expect(run.error).toBeNull();
+      expect(run.ready).not.toBeNull();
+      if (!run.ready) throw new Error("sidecar did not become ready");
+
+      expect(run.ready.mode).toBe("adopted");
+      expect(run.ready.baseUrl).toBe(serviceUrl);
+      expect(run.ready.adoptedPid).toBe(service.pid);
+      // No competing managed OpenCode child should have been spawned
+      expect(run.ready.managedPid).toBeNull();
+      expect(pidAlive(service.pid)).toBe(true);
+
+      // Cleaning up the sidecar does NOT terminate the adopted service
+      await cleanupRun(run);
+      run = null;
+      expect(pidAlive(service.pid)).toBe(true);
+      expect(await descendantAlive(serviceUrl)).toBe(true);
+    } finally {
+      if (run) await cleanupRun(run);
+      hardKill(service.pid);
+      await service.exited.catch(() => undefined);
       fs.rmSync(isolation.root, { recursive: true, force: true });
     }
   }, 120000);
@@ -312,28 +386,26 @@ describeG2("G2 real-server database ownership", () => {
       expect(first.ready.backendJob.status).toBe("installed");
       expect(path.resolve(first.ready.dbPath)).toBe(path.resolve(isolation.dbPath));
       const firstSidecarPid = first.shell.sidecarPid;
-
-      const firstHolders = await waitForHolders(
-        isolation.dbPath,
-        (pids) => pids.some((pid) => pid !== firstSidecarPid && pid !== process.pid),
-        20000,
-      );
-      const firstOpenCode = firstHolders.find(
-        (pid) => pid !== firstSidecarPid && pid !== process.pid,
-      );
+      const firstOpenCode = first.ready.managedPid;
       expect(firstOpenCode).toBeDefined();
-      if (firstOpenCode === undefined) throw new Error("no OpenCode holder found");
+      if (firstOpenCode === null || firstOpenCode === undefined) {
+        throw new Error("no managed OpenCode PID found");
+      }
+      expect(pidAlive(firstOpenCode)).toBe(true);
       expect(await descendantAlive(first.ready.baseUrl)).toBe(true);
+
+      // Verify service registration was published for firstOpenCode
+      const regPath = path.join(isolation.stateHome, "opencode", "service.json");
+      expect(fs.existsSync(regPath)).toBe(true);
+      const reg1 = JSON.parse(fs.readFileSync(regPath, "utf8"));
+      expect(reg1.pid).toBe(firstOpenCode);
 
       // Crash path: only the shell's job can save this; no graceful stop runs.
       hardKill(first.shell.shellPid);
       await first.child.exited.catch(() => undefined);
-      expect(await waitForDead(first.shell.sidecarPid)).toBe(true);
+      expect(await waitForDead(firstSidecarPid)).toBe(true);
       expect(await waitForDead(firstOpenCode)).toBe(true);
       expect(await descendantAlive(first.ready.baseUrl)).toBe(false);
-      expect(await waitForHolders(isolation.dbPath, (pids) => pids.length === 0, 15000)).toEqual(
-        [],
-      );
 
       second = await startRealShell(isolation, binary, secondDir);
       expect(second.error).toBeNull();
@@ -344,22 +416,18 @@ describeG2("G2 real-server database ownership", () => {
       expect(second.ready.baseUrl).not.toBe(first.ready.baseUrl);
       expect(await descendantAlive(second.ready.baseUrl)).toBe(true);
       const secondSidecarPid = second.shell.sidecarPid;
-
-      const secondHolders = await waitForHolders(
-        isolation.dbPath,
-        (pids) => pids.some((pid) => pid !== secondSidecarPid && pid !== process.pid),
-        20000,
-      );
-      const secondOpenCode = secondHolders.find(
-        (pid) => pid !== secondSidecarPid && pid !== process.pid,
-      );
+      expect(secondSidecarPid).not.toBe(firstSidecarPid);
+      const secondOpenCode = second.ready.managedPid;
       expect(secondOpenCode).toBeDefined();
-      if (secondOpenCode === undefined) throw new Error("no second OpenCode holder found");
+      if (secondOpenCode === null || secondOpenCode === undefined) {
+        throw new Error("no second OpenCode PID found");
+      }
       expect(secondOpenCode).not.toBe(firstOpenCode);
-      // Exactly one managed server owns the database after the restart.
-      expect(
-        secondHolders.filter((pid) => pid !== secondSidecarPid && pid !== process.pid),
-      ).toEqual([secondOpenCode]);
+      expect(pidAlive(secondOpenCode)).toBe(true);
+
+      // Verify registration was updated for secondOpenCode
+      const reg2 = JSON.parse(fs.readFileSync(regPath, "utf8"));
+      expect(reg2.pid).toBe(secondOpenCode);
     } finally {
       if (second) await cleanupRun(second);
       if (first) await cleanupRun(first);

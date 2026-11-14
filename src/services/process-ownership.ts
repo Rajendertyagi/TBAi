@@ -18,9 +18,10 @@
  *    already binds non-detached children to the parent's lifetime; this job
  *    pins the behaviour explicitly instead of relying on a runtime accident.
  *
- * The same module hosts the two Windows facilities used to keep two TBAi
- * backends off one OpenCode database: a named mutex keyed by the resolved
- * database path, and Restart Manager file-holder detection.
+ * Phase 1 (client-daemon overhaul): Windows Restart Manager, process-table
+ * enumeration, and named-mutex watchdog facilities are decommissioned from the
+ * OpenCode ownership/startup path. This module retains only job/handle/spawn
+ * primitives needed to prevent zombie processes for children TBAi actually spawns.
  *
  * Every function is a no-op or explicitly unsupported off Windows. G2 is a
  * Windows x64 gate; no POSIX claim is made here.
@@ -28,7 +29,6 @@
 import { dlopen, ptr, type Library, type Pointer, type Symbols } from "bun:ffi";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import path from "node:path";
 
 import { logger, normalizeError } from "../lib/logger";
 
@@ -55,8 +55,6 @@ const JOB_OBJECT_LIMIT_FLAGS_OFFSET = 16;
 
 /** `JOB_OBJECT_ASSIGN_PROCESS` from `JobObjects.h`. */
 const JOB_OBJECT_ASSIGN_PROCESS = 0x0001;
-const ERROR_ALREADY_EXISTS = 183;
-const ERROR_MORE_DATA = 234;
 /** Process access rights used for ownership inspection. */
 const PROCESS_QUERY_INFORMATION = 0x0400;
 const PROCESS_TERMINATE = 0x0001;
@@ -70,28 +68,11 @@ const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x00000080;
 const STARTUPINFOEX_SIZE = 112; // STARTUPINFOW(104) + lpAttributeList(8)
 
-const TH32CS_SNAPPROCESS = 0x00000002;
 const EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
 const CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 const PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002; // STARTUPINFOW(104) + lpAttributeList(8)
 const STARTF_USESTDHANDLES = 0x00000100;
 const CREATE_SUSPENDED = 0x00000004;
-/** `sizeof(PROCESSENTRY32W)` on x64. */
-const PROCESSENTRY32W_SIZE = 568;
-/** Offset of `th32ProcessID` / `th32ParentProcessID` inside `PROCESSENTRY32W`. */
-const PE32_PID_OFFSET = 8;
-const PE32_PARENT_PID_OFFSET = 24;
-/** `CCH_RM_SESSION_KEY` from `RestartManager.h` (UTF-16 code units). */
-const RM_SESSION_KEY_LENGTH = 66;
-/**
- * `sizeof(RM_PROCESS_INFO)` on x64, from `RestartManager.h`.
- *
- * The struct begins with the process id (`DWORD`), which is the only field read
- * here. The full layout is 668 bytes; `RmGetList` advances by this stride. The
- * process is x64-only, so the 32-bit layout is not supported and is rejected
- * below rather than misread.
- */
-const RM_PROCESS_INFO_SIZE = 668;
 
 const KERNEL32_SYMBOLS = {
   CreateJobObjectW: { args: ["ptr", "ptr"], returns: "ptr" },
@@ -105,9 +86,6 @@ const KERNEL32_SYMBOLS = {
   GetProcessId: { args: ["ptr"], returns: "u32" },
   QueryFullProcessImageNameW: { args: ["ptr", "u32", "ptr", "ptr"], returns: "i32" },
   GetProcessTimes: { args: ["ptr", "ptr", "ptr", "ptr", "ptr"], returns: "i32" },
-  CreateToolhelp32Snapshot: { args: ["u32", "u32"], returns: "ptr" },
-  Process32FirstW: { args: ["ptr", "ptr"], returns: "i32" },
-  Process32NextW: { args: ["ptr", "ptr"], returns: "i32" },
   CreateProcessW: {
     args: ["ptr", "ptr", "ptr", "ptr", "i32", "u32", "ptr", "ptr", "ptr", "ptr"],
     returns: "i32",
@@ -119,7 +97,6 @@ const KERNEL32_SYMBOLS = {
   GetExitCodeProcess: { args: ["ptr", "ptr"], returns: "i32" },
   GetCurrentProcess: { args: [], returns: "ptr" },
   CloseHandle: { args: ["ptr"], returns: "i32" },
-  CreateMutexW: { args: ["ptr", "i32", "ptr"], returns: "ptr" },
   InitializeProcThreadAttributeList: { args: ["ptr", "u32", "u32", "ptr"], returns: "i32" },
   UpdateProcThreadAttribute: {
     args: ["ptr", "u32", "usize", "ptr", "usize", "ptr", "ptr"],
@@ -132,29 +109,14 @@ const KERNEL32_SYMBOLS = {
   PeekNamedPipe: { args: ["ptr", "ptr", "u32", "ptr", "ptr", "ptr"], returns: "i32" },
 } satisfies Symbols;
 
-const RESTART_MANAGER_SYMBOLS = {
-  RmStartSession: { args: ["ptr", "u32", "ptr"], returns: "u32" },
-  RmRegisterResources: { args: ["u32", "u32", "ptr", "u32", "ptr", "u32", "ptr"], returns: "u32" },
-  RmGetList: { args: ["u32", "ptr", "ptr", "ptr", "ptr"], returns: "u32" },
-  RmEndSession: { args: ["u32"], returns: "u32" },
-} satisfies Symbols;
-
 type Kernel32 = Library<typeof KERNEL32_SYMBOLS>;
-type RestartManager = Library<typeof RESTART_MANAGER_SYMBOLS>;
 
 let kernel32: Kernel32 | null = null;
-let restartManager: RestartManager | null = null;
 
 function kernel(): Kernel32 {
   if (!IS_WINDOWS) throw new Error("Win32 process ownership is only available on Windows");
   kernel32 ??= dlopen("kernel32.dll", KERNEL32_SYMBOLS);
   return kernel32;
-}
-
-function rm(): RestartManager {
-  if (!IS_WINDOWS) throw new Error("Restart Manager is only available on Windows");
-  restartManager ??= dlopen("rstrtmgr.dll", RESTART_MANAGER_SYMBOLS);
-  return restartManager;
 }
 
 /** A native handle kept for the process lifetime. Opaque to callers. */
@@ -330,113 +292,35 @@ export function joinShellJob(name: string): void {
   }
 }
 
-/** A held named mutex. Releasing it destroys the object when it is the last handle. */
+/**
+ * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
+ * ownership/startup. Kept as a compatibility stub for out-of-scope callers.
+ */
 export interface NamedMutexLease {
   readonly handle: NativeHandle;
 }
 
 /**
- * Creates or opens a named mutex and reports whether another holder already
- * existed. Returns `null` for the existing case; the caller must close the
- * returned handle it received by calling {@link releaseNamedMutex}.
+ * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
+ * ownership/startup. Compatibility stub; does not provide cross-process exclusion.
  */
-export function acquireNamedMutex(name: string): NamedMutexLease | null {
-  const k = kernel();
-  const nameBuffer = wide(name);
-  const handle = pointerOrNull(k.symbols.CreateMutexW(null, 0, ptr(nameBuffer)));
-  if (handle === null) {
-    throw new Error(`CreateMutexW failed (Win32 error ${k.symbols.GetLastError()})`);
-  }
-  const existed = k.symbols.GetLastError() === ERROR_ALREADY_EXISTS;
-  if (existed) {
-    close(handle);
-    return null;
-  }
-  return { handle };
-}
-
-/** Releases a mutex handle acquired by {@link acquireNamedMutex}. */
-export function releaseNamedMutex(lease: NamedMutexLease): void {
-  close(lease.handle);
+export function acquireNamedMutex(_name: string): NamedMutexLease | null {
+  return { handle: 0n };
 }
 
 /**
- * PIDs of processes currently holding any of the given files, via Windows
- * Restart Manager.
- *
- * The API copies the file names during registration, so the buffers and pointer
- * array only need to stay alive for the calls below. `RmGetList` can grow
- * between the capacity query and the read; `ERROR_MORE_DATA` is retried with the
- * reported count instead of silently truncating.
- *
- * @throws Error when the session cannot be opened, the files cannot be
- * registered, or the list cannot be read. Callers treat that as "unknown" and
- * refuse startup; it is never "no holder".
+ * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
+ * ownership/startup. Compatibility no-op.
  */
-export function findProcessesUsingFiles(filePaths: readonly string[]): number[] {
-  if (filePaths.length === 0) return [];
-  if (process.arch === "ia32") {
-    throw new Error("Restart Manager RM_PROCESS_INFO layout is defined for 64-bit only");
-  }
-  const api = rm();
-  const sessionBuffer = Buffer.alloc(4);
-  const keyBuffer = Buffer.alloc(RM_SESSION_KEY_LENGTH * 2);
-  const startCode = api.symbols.RmStartSession(ptr(sessionBuffer), 0, ptr(keyBuffer));
-  if (startCode !== 0) {
-    throw new Error(`RmStartSession failed (Win32 error ${startCode})`);
-  }
-  const session = sessionBuffer.readUInt32LE(0);
-  try {
-    const fileBuffers = filePaths.map((file) => wide(path.resolve(file)));
-    const pointerArray = Buffer.alloc(8 * fileBuffers.length);
-    for (const [index, buffer] of fileBuffers.entries()) {
-      pointerArray.writeBigUInt64LE(BigInt(ptr(buffer)), index * 8);
-    }
-    const registerCode = api.symbols.RmRegisterResources(
-      session,
-      fileBuffers.length,
-      ptr(pointerArray),
-      0,
-      null,
-      0,
-      null,
-    );
-    if (registerCode !== 0) {
-      throw new Error(`RmRegisterResources failed (Win32 error ${registerCode})`);
-    }
+export function releaseNamedMutex(_lease: NamedMutexLease): void {}
 
-    const neededBuffer = Buffer.alloc(4);
-    const countBuffer = Buffer.alloc(4);
-    const reasonsBuffer = Buffer.alloc(4);
-    let capacity = Math.max(64, fileBuffers.length);
-    let code = ERROR_MORE_DATA;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const information = Buffer.alloc(capacity * RM_PROCESS_INFO_SIZE);
-      countBuffer.writeUInt32LE(capacity, 0);
-      neededBuffer.writeUInt32LE(0, 0);
-      code = api.symbols.RmGetList(
-        session,
-        ptr(neededBuffer),
-        ptr(countBuffer),
-        ptr(information),
-        ptr(reasonsBuffer),
-      );
-      if (code === 0) {
-        const count = Math.min(countBuffer.readUInt32LE(0), capacity);
-        const pids: number[] = [];
-        for (let index = 0; index < count; index += 1) {
-          pids.push(information.readUInt32LE(index * RM_PROCESS_INFO_SIZE));
-        }
-        return [...new Set(pids)].sort((a, b) => a - b);
-      }
-      if (code !== ERROR_MORE_DATA) break;
-      const needed = neededBuffer.readUInt32LE(0);
-      capacity = Math.max(needed, capacity + 1);
-    }
-    throw new Error(`RmGetList failed (Win32 error ${code})`);
-  } finally {
-    api.symbols.RmEndSession(session);
-  }
+/**
+ * @deprecated Phase 1 decommission: Restart Manager file-holder detection removed
+ * from OpenCode ownership/startup. Returns no holders and never inspects foreign
+ * processes.
+ */
+export function findProcessesUsingFiles(_filePaths: readonly string[]): number[] {
+  return [];
 }
 
 /**
@@ -550,61 +434,20 @@ export function getProcessStartTime(pid: number): bigint | null {
   }
 }
 
-export function getParentPid(pid: number): number | null {
-  if (!IS_WINDOWS) return null;
-  const k = kernel();
-  const snap = k.symbols.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snap === null || snap === 0n) return null;
-  try {
-    const entry = Buffer.alloc(PROCESSENTRY32W_SIZE);
-    entry.writeUInt32LE(PROCESSENTRY32W_SIZE, 0);
-    let ok = k.symbols.Process32FirstW(snap, ptr(entry));
-    while (ok !== 0) {
-      const entryPid = entry.readUInt32LE(PE32_PID_OFFSET);
-      if (entryPid === pid) {
-        return entry.readUInt32LE(PE32_PARENT_PID_OFFSET);
-      }
-      ok = k.symbols.Process32NextW(snap, ptr(entry));
-    }
-    return null;
-  } finally {
-    k.symbols.CloseHandle(snap);
-  }
+/**
+ * @deprecated Phase 1 decommission: process-table enumeration removed from
+ * OpenCode ownership/startup. Compatibility stub; does not scan foreign processes.
+ */
+export function getParentPid(_pid: number): number | null {
+  return null;
 }
 
-export function findDescendantPids(rootPid: number): number[] {
-  if (!IS_WINDOWS) return [];
-  const k = kernel();
-  const snap = k.symbols.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snap === null || snap === 0n) return [];
-  const result: number[] = [];
-  try {
-    const entry = Buffer.alloc(PROCESSENTRY32W_SIZE);
-    entry.writeUInt32LE(PROCESSENTRY32W_SIZE, 0);
-    const parentOf = new Map<number, number>();
-    let ok = k.symbols.Process32FirstW(snap, ptr(entry));
-    while (ok !== 0) {
-      const pid = entry.readUInt32LE(PE32_PID_OFFSET);
-      const ppid = entry.readUInt32LE(PE32_PARENT_PID_OFFSET);
-      parentOf.set(pid, ppid);
-      ok = k.symbols.Process32NextW(snap, ptr(entry));
-    }
-    for (const pid of parentOf.keys()) {
-      let cur: number | undefined = pid;
-      const seen = new Set<number>();
-      while (cur !== undefined && !seen.has(cur)) {
-        if (cur === rootPid) {
-          result.push(pid);
-          break;
-        }
-        seen.add(cur);
-        cur = parentOf.get(cur);
-      }
-    }
-    return result;
-  } finally {
-    k.symbols.CloseHandle(snap);
-  }
+/**
+ * @deprecated Phase 1 decommission: process-table enumeration removed from
+ * OpenCode ownership/startup. Compatibility stub; does not scan foreign processes.
+ */
+export function findDescendantPids(_rootPid: number): number[] {
+  return [];
 }
 
 export function terminateProcessById(pid: number): boolean {
@@ -626,27 +469,16 @@ export class OpenCodeProcessOwnershipError extends Error {
   }
 }
 
+/**
+ * Resolves the managed service PID for a child TBAi spawned.
+ *
+ * Phase 1 decommission removes RM/toolhelp-based foreign-process inspection; the
+ * wrapper PID is returned without scanning file holders or process tables.
+ */
 export async function resolveManagedServicePid(
   wrapperPid: number,
-  dbPath: string | null,
+  _dbPath: string | null,
 ): Promise<number> {
-  if (dbPath === null) return wrapperPid;
-  let holders: number[];
-  try {
-    holders = findProcessesUsingFiles([dbPath]);
-  } catch {
-    return wrapperPid;
-  }
-  const descendants = new Set(findDescendantPids(wrapperPid));
-  descendants.add(wrapperPid);
-  const candidates = holders.filter((pid) => descendants.has(pid));
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length > 1) {
-    // Prefer the one whose image is not the wrapper's (the actual service).
-    for (const pid of candidates) {
-      if (pid !== wrapperPid) return pid;
-    }
-  }
   return wrapperPid;
 }
 

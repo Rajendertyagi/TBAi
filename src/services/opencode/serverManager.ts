@@ -555,6 +555,16 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
+   * Returns the PID of the active managed OpenCode service child, or null
+   * when no managed child is currently running.
+   */
+  getManagedPid(): number | null {
+    if (this.publishedRegistration?.pid) return this.publishedRegistration.pid;
+    if (this.child) return this.servicePids.get(this.child) ?? this.child.pid;
+    return null;
+  }
+
+  /**
    * Returns the base URL of a running, ready server, starting one if needed.
    *
    * The started child is published as the connection state's managed target
