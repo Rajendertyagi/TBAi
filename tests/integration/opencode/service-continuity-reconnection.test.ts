@@ -23,7 +23,10 @@ import {
 import { authorizeOpenCodeProxyRequest } from "@/services/opencode/proxyAuthorization.ts";
 import { encodeSourceRef, importOpenCodeSession } from "@/services/opencode/import.ts";
 import { OpenCodeDatabaseOwnership } from "@/services/opencode/ownership.ts";
-import { startOpenCodeRuntime } from "@/services/opencode/startup.ts";
+import {
+  resetOpenCodeRuntimeStartupForTests,
+  startOpenCodeRuntime,
+} from "@/services/opencode/startup.ts";
 
 describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection", () => {
   const testApp = new Hono();
@@ -41,7 +44,7 @@ describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection
       const cleanPath = url.pathname.replace(/^\/api/, "");
 
       if (cleanPath === "/info" && req.method === "GET") {
-        return Response.json({ version: "2.2.0", pid: 9999 });
+        return Response.json({ version: "2.2.6", pid: 9999 });
       }
       if (cleanPath === "/project" && req.method === "GET") {
         return Response.json([]);
@@ -153,12 +156,14 @@ describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection
 
   beforeEach(() => {
     resetConnectionStateForTests();
+    resetOpenCodeRuntimeStartupForTests();
   });
 
   afterAll(() => {
     mockServer1.stop(true);
     mockServer2.stop(true);
     resetConnectionStateForTests();
+    resetOpenCodeRuntimeStartupForTests();
   });
 
   // Scenario 1: Native OpenCode session imported while port = 28894 -> stored owner is 'local'
@@ -423,28 +428,13 @@ describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection
   it("Safeguard 1: OpenCode database ownership resolves the canonical path without mutex or busy/contended errors", async () => {
     const canonicalDb = "C:\\Users\\test\\.local\\share\\opencode\\opencode.db";
     let resolveCalls = 0;
-    let mutexCalls = 0;
-    let holderCalls = 0;
     const lease = new OpenCodeDatabaseOwnership({
       deps: {
         platform: "win32",
-        pid: 1234,
         resolveDatabasePath: async () => {
           resolveCalls += 1;
           return canonicalDb;
         },
-        acquireMutex: () => {
-          mutexCalls += 1;
-          return null;
-        },
-        releaseMutex: () => {
-          mutexCalls += 1;
-        },
-        findProcessesUsingFiles: () => {
-          holderCalls += 1;
-          return [9999];
-        },
-        isOpenCodeCoTenant: () => false,
       },
     });
 
@@ -452,8 +442,6 @@ describe("Simplified Local/Remote OpenCode Conversation Ownership & Reconnection
     await expect(lease.verifyChild(7777, canonicalDb)).resolves.toBeUndefined();
     lease.release();
     expect(resolveCalls).toBe(1);
-    expect(mutexCalls).toBe(0);
-    expect(holderCalls).toBe(0);
   });
 
   // Safeguard 2: An adopted server is never terminated when TBAi closes

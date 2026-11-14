@@ -35,10 +35,10 @@ const RUNTIME_MODULE_URL = pathToFileURL(
 const AUTH_FIXTURE_PASSWORD = "opencode-runtime-auth-fixture-password";
 const AUTH_REPLACEMENT_PASSWORD = "opencode-runtime-replacement-password";
 const AUTH_REPLACEMENT_ENV_VAR = "TBai_OPENCODE_TEST_REPLACEMENT_PASSWORD";
-const SUPPORTED_LOWER_BOUND_VERSION = "2.2.0";
+const SUPPORTED_LOWER_BOUND_VERSION = "2.2.6";
 /** The audited target: the version both manifests pin and the installed binary reports. */
-const SUPPORTED_CLIENT_VERSION = "2.2.0";
-const BELOW_LOWER_BOUND_VERSION = "2.1.4";
+const SUPPORTED_CLIENT_VERSION = "2.2.6";
+const BELOW_LOWER_BOUND_VERSION = "2.2.5";
 const UNSUPPORTED_VERSION = "2.1.4";
 /** A stable release newer than anything TBAi has measured. Admitted by B7. */
 const NEWER_STABLE_VERSION = "2.4.0";
@@ -260,17 +260,16 @@ describe("OpenCode managed version range", () => {
     expect(parseOpenCodeVersion("not-a-version")).toBeNull();
   });
 
-  it("accepts the audited lower bound and the 2.2.0 client release", () => {
+  it("accepts the audited lower bound and the 2.2.6 client release", () => {
     expect(isSupportedOpenCodeVersion(SUPPORTED_LOWER_BOUND_VERSION)).toBe(true);
     expect(isSupportedOpenCodeVersion(SUPPORTED_CLIENT_VERSION)).toBe(true);
   });
 
   it("admits a newer stable release instead of refusing it for being newer (B7)", () => {
-    // The former `<2.2.1` ceiling refused a release TBAi had not audited. B7
-    // replaces that with capability evidence: a stable build is admitted by
-    // name and then has to serve the essential routes before a start is
-    // handed out.
-    expect(isSupportedOpenCodeVersion("2.2.1")).toBe(true);
+    // B7 replaces a hard ceiling with capability evidence: a stable build is
+    // admitted by name and then has to serve the essential routes before a
+    // start is handed out.
+    expect(isSupportedOpenCodeVersion("2.2.7")).toBe(true);
     expect(isSupportedOpenCodeVersion("2.3.0")).toBe(true);
     expect(isSupportedOpenCodeVersion(NEWER_STABLE_VERSION)).toBe(true);
     expect(isSupportedOpenCodeVersion(BUILD_METADATA_VERSION)).toBe(true);
@@ -289,8 +288,8 @@ describe("OpenCode managed version range", () => {
     expect(classifyOpenCodeVersion("")).toBe("malformed");
   });
 
-  it("rejects the 2.1 line as below the approved 2.2.0 floor", () => {
-    for (const version of ["2.1.0", "2.1.1", "2.1.2", "2.1.4"])
+  it("rejects releases below the approved 2.2.6 floor", () => {
+    for (const version of ["2.2.5", "2.2.0", "2.1.4", "2.1.0", "2.0.15"])
       expect(isSupportedOpenCodeVersion(version)).toBe(false);
   });
 

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The Code-mode primary status, asserted BEHAVIOURALLY.
  *
  * ## What this file proves
@@ -62,7 +62,7 @@ const runtimeState: {
   auxiliary: { inbox: "current" | "unavailable" };
   inboxById: Record<string, { type: string; delivery?: string }>;
 } = {
-  connection: { type: "connected", serverVersion: "2.2.0" },
+  connection: { type: "connected", serverVersion: "2.2.6" },
   load: { type: "ready" },
   retry: null,
   execution: { type: "idle" },
@@ -274,7 +274,7 @@ function announcementOf(primary: Element): string {
 beforeEach(() => {
   jest.useFakeTimers();
   jest.setSystemTime(new Date(BASE_TIME));
-  runtimeState.connection = { type: "connected", serverVersion: "2.2.0" };
+  runtimeState.connection = { type: "connected", serverVersion: "2.2.6" };
   runtimeState.load = { type: "ready" };
   runtimeState.retry = null;
   runtimeState.execution = { type: "idle" };

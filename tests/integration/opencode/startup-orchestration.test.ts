@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ import {
 } from "@/services/opencode/startup.ts";
 
 /**
- * H5/B2 + D3 — the startup orchestration end to end.
+ * H5/B2 + D3 â€” the startup orchestration end to end.
  *
  * The real `startOpenCodeRuntime` runs here: the registration is a disposable
  * file in a temp directory, the candidate is a test-owned `Bun.serve` instance
@@ -36,7 +36,7 @@ import {
 
 const PASSWORD = "startup-orchestration-password";
 const FAKE_PID = 4242;
-const VERSION = "2.2.0";
+const VERSION = "2.2.6";
 const MANAGED_URL = "http://127.0.0.1:4799";
 
 const FAST_CONFIG = {
@@ -145,7 +145,7 @@ function newStarts(): ManagedStarts {
   return { count: 0, baseUrls: [] };
 }
 
-describe("H5/B2 — a compatible candidate is adopted and nothing is spawned", () => {
+describe("H5/B2 â€” a compatible candidate is adopted and nothing is spawned", () => {
   it("adopts the service and leaves the managed path untouched", async () => {
     const fake = startFakeOpenCode();
     try {
@@ -198,7 +198,7 @@ describe("H5/B2 — a compatible candidate is adopted and nothing is spawned", (
   });
 });
 
-describe("H5/B2 — every refused adoption starts the managed service at boot", () => {
+describe("H5/B2 â€” every refused adoption starts the managed service at boot", () => {
   async function expectManagedFallback(input: {
     registration: unknown;
     config?: OpenCodeConfig;
@@ -318,7 +318,7 @@ describe("H5/B2 — every refused adoption starts the managed service at boot", 
   });
 });
 
-describe("H5/B2 — shutdown during an adoption attempt", () => {
+describe("H5/B2 â€” shutdown during an adoption attempt", () => {
   it("prevents a late installation and starts nothing", async () => {
     let release!: () => void;
     const infoGate = new Promise<void>((resolve) => {
@@ -355,7 +355,7 @@ describe("H5/B2 — shutdown during an adoption attempt", () => {
   });
 });
 
-describe("B7 — the version strategy at the startup boundary", () => {
+describe("B7 â€” the version strategy at the startup boundary", () => {
   it("adopts a newer stable build above the managed release ceiling", async () => {
     const fake = startFakeOpenCode({ version: "2.4.0" });
     try {
@@ -398,7 +398,7 @@ describe("B7 — the version strategy at the startup boundary", () => {
     }
   });
 
-  it("refuses an adopted service below 2.2.0 and falls back to the managed service", async () => {
+  it("refuses an adopted service below 2.2.6 and falls back to the managed service", async () => {
     const fake = startFakeOpenCode({ version: "2.1.4" });
     try {
       const starts = newStarts();

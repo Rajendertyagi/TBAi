@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+﻿import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import openCodeApp from "@/routes/opencode.ts";
@@ -36,7 +36,7 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
 
   const mockMessagesBySession = new Map<string, any[]>();
 
-  // Mock server to handle session endpoints conforming to OpenCode 2.2.0 contract
+  // Mock server to handle session endpoints conforming to OpenCode 2.2.6 contract
   const mockServer = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",

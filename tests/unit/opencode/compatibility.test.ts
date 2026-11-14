@@ -39,7 +39,7 @@ import type { OpenCodeTransport } from "@/services/opencode/http.ts";
  */
 
 const ORIGIN = "http://127.0.0.1:4310";
-const VERSION = "2.2.0";
+const VERSION = "2.2.6";
 
 const EVENT_STREAM_HEADERS = { "content-type": "text/event-stream" } as const;
 
@@ -70,8 +70,8 @@ function allPresent(): Record<OpenCodeCapabilityId, OpenCodeCapabilityProbeOutco
   };
 }
 
-describe("B7 — classifyAdoptionVersion enforces 2.2.0+ stable releases only", () => {
-  const atOrAboveFloor = ["2.2.0", "2.2.1", "2.4.0", "99.0.0"];
+describe("B7 — classifyAdoptionVersion enforces 2.2.6+ stable releases only", () => {
+  const atOrAboveFloor = ["2.2.6", "2.2.7", "2.4.0", "99.0.0"];
 
   for (const version of atOrAboveFloor) {
     it(`admits the stable build ${version}`, () => {
@@ -82,21 +82,21 @@ describe("B7 — classifyAdoptionVersion enforces 2.2.0+ stable releases only", 
     });
   }
 
-  it("refuses builds below the minimum version (2.2.0)", () => {
-    for (const version of ["2.1.4", "2.0.15", "2.0.14", "1.9.9", "0.5.0"]) {
+  it("refuses builds below the minimum version (2.2.6)", () => {
+    for (const version of ["2.2.5", "2.2.0", "2.1.4", "2.0.15", "2.0.14", "1.9.9", "0.5.0"]) {
       expect(classifyAdoptionVersion(version)).toEqual({
         status: "below_minimum",
         version,
-        minimumVersion: "2.2.0",
+        minimumVersion: "2.2.6",
       });
     }
   });
 
   it("takes the minimum version from the supplied config", () => {
     const config = { ...OPENCODE_CONFIG, minimumVersion: "2.3.0" };
-    expect(classifyAdoptionVersion("2.2.0", config)).toEqual({
+    expect(classifyAdoptionVersion("2.2.6", config)).toEqual({
       status: "below_minimum",
-      version: "2.2.0",
+      version: "2.2.6",
       minimumVersion: "2.3.0",
     });
     expect(classifyAdoptionVersion("2.3.0", config)).toEqual({
@@ -106,13 +106,13 @@ describe("B7 — classifyAdoptionVersion enforces 2.2.0+ stable releases only", 
   });
 
   it("refuses a prerelease build (D2 stable-only)", () => {
-    for (const version of ["2.2.0-beta.1", "2.2.0-rc.2", "2.2.0-next"]) {
+    for (const version of ["2.2.6-beta.1", "2.2.6-rc.2", "2.2.6-next"]) {
       expect(classifyAdoptionVersion(version).status).toBe("unstable");
     }
   });
 
   it("ignores build metadata, which is not a channel marker", () => {
-    expect(classifyAdoptionVersion("2.2.0+sha.abc123").status).toBe("adoptable");
+    expect(classifyAdoptionVersion("2.2.6+sha.abc123").status).toBe("adoptable");
   });
 
   it("refuses a malformed version", () => {

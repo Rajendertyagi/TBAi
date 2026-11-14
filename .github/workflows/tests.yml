@@ -50,13 +50,10 @@ env:
 
   # OpenCode CLI, for the integration tests that drive the managed server.
   #
-  # CI pins the managed OpenCode CLI to 2.2.0, the minimum supported runtime
-  # floor declared in src/config/opencode.ts (minimumVersion "2.2.0"). The
-  # application manifests currently pin `@opencode/client` 2.2.6 (root and web),
-  # so CI exercises the minimum supported server with the current client SDK.
-  # Local runtime verification for this branch was performed against OpenCode
-  # CLI 2.2.6; do not change this pin or the SDK versions without evidence that
-  # the supported matrix remains valid.
+  # CI pins the managed OpenCode CLI to 2.2.6, the sole supported runtime
+  # version declared in src/config/opencode.ts (minimumVersion "2.2.6"). The
+  # application manifests pin `@opencode/client` 2.2.6 (root and web), so CI
+  # exercises the supported server with the matching client SDK.
   #
   # The npm package ships the prebuilt Windows binary; there are no GitHub
   # release assets for the 2.x tags, and `opencode-ai` on npm is the unrelated
@@ -64,14 +61,10 @@ env:
   # exactly this runner, and npm's dist.integrity is verified below before the
   # binary is trusted.
   #
-  # The integrity is the registry's own `dist.integrity` for this exact
-  # tarball. It was checked locally on 2026-10-28: the downloaded tarball has
-  # that sha512, contains `package/bin/opencode.exe` (the path the composite
-  # action requires), and that binary reports `opencode v2.2.0`. That is a
-  # local check of the artifact, not a CI run - the pin has not yet been
-  # exercised on a runner.
-  OPENCODE_VERSION: "2.2.0"
-  OPENCODE_CLI_SHA512: "sha512-S/eVkzMaUqoiBmeLHgEdr4b3yIQjpfDzLo4CFSSB3skB0UH+lduqqjTnmvAvDeli4fEjcNbZmd/8YwkoKnFkBA=="
+  # The integrity is the registry's own `dist.integrity` for
+  # `@opencode/cli-windows-x64@2.2.6` (verified from npm metadata).
+  OPENCODE_VERSION: "2.2.6"
+  OPENCODE_CLI_SHA512: "sha512-Wcmduf9DaGQgJG3GMliHilaI+YvdckW7O6aLzRwz1r3iIkP82MSoUlSU+ovlOEDj8O+Gy5Ywy5LL6Iv77YuzFw=="
 
 jobs:
   verify:

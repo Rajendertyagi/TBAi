@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, describe, expect, it } from "bun:test";
 import {
   installAdoptedTarget,
   installManagedTarget,
@@ -21,7 +21,7 @@ import type { OpenCodeServiceCapabilities } from "@/services/opencode/compatibil
  * origin:
  *
  *  - an installed ADOPTED target is used with the adopted service's own
- *    password, never the managed one (§1.9.3, D4);
+ *    password, never the managed one (Â§1.9.3, D4);
  *  - an unresolved target starts the managed child, and a target installed
  *    while that start was in flight still wins.
  */
@@ -31,7 +31,7 @@ const ADOPTED_ORIGIN = "http://127.0.0.1:5055";
 const ADOPTED_PASSWORD = "synthetic-adopted-password";
 
 const CAPABILITIES: OpenCodeServiceCapabilities = {
-  version: "2.2.0",
+  version: "2.2.6",
   supported: {
     session: true,
     events: true,

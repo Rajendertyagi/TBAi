@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { promises as fs } from "node:fs";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,9 +32,9 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 import { functionBody, stripComments } from "../../helpers/web/source-scope";
 
 /**
- * AT1–AT11 — adoption attempt orchestration and the attempt lifecycle.
+ * AT1â€“AT11 â€” adoption attempt orchestration and the attempt lifecycle.
  *
- * AT12–AT17 belong to the managed-child coordinator in `serverManager` and land
+ * AT12â€“AT17 belong to the managed-child coordinator in `serverManager` and land
  * with Phase D; AT3/AT5/AT6/AT7 likewise depend on the managed path and
  * revalidation. What is asserted here is the adopted half: one attempt identity
  * per cycle, supersession, the shutdown latch, the probe identity/version
@@ -51,7 +51,7 @@ const ORIGIN_EXISTING = "http://127.0.0.1:4203";
 const PASSWORD = "adoption-fixture-password";
 const EXISTING_PASSWORD = "adoption-existing-password";
 const PID = 5150;
-const VERSION = "2.2.0";
+const VERSION = "2.2.6";
 
 const realFetch = globalThis.fetch;
 let root = "";
@@ -93,7 +93,7 @@ function readyResponse(pid = PID, version = VERSION): Response {
 /**
  * One capability-route answer from an otherwise adoptable service. The event
  * route must really stream, because a JSON 200 there is `unknown`, not
- * `present` (B7) — a stub that answered JSON everywhere would be refused.
+ * `present` (B7) â€” a stub that answered JSON everywhere would be refused.
  */
 function capabilityResponse(url: string): Response {
   if (url.endsWith("/api/event")) {
@@ -142,7 +142,7 @@ function expectRefused(outcome: AdoptionAttemptOutcome, reason: AdoptionRefusalR
   if (outcome.status === "refused") expect(outcome.reason).toBe(reason);
 }
 
-describe("AT1 — overlapping attempts, the older resolves last", () => {
+describe("AT1 â€” overlapping attempts, the older resolves last", () => {
   it("lets only the newer attempt install", async () => {
     const fileA = writeRecord("a.json", ORIGIN_A);
     const fileB = writeRecord("b.json", ORIGIN_B);
@@ -163,7 +163,7 @@ describe("AT1 — overlapping attempts, the older resolves last", () => {
   });
 });
 
-describe("AT2 — the probe resolves after shutdown", () => {
+describe("AT2 â€” the probe resolves after shutdown", () => {
   it("installs nothing and signals no adopted process", async () => {
     const file = writeRecord("a.json", ORIGIN_A);
     const gate = deferred<Response>();
@@ -186,7 +186,7 @@ describe("AT2 — the probe resolves after shutdown", () => {
     }
 
     expect(readConnectionState().target.mode).toBe("unresolved");
-    // The request had already been initiated before shutdown; §1.9.4 lets it
+    // The request had already been initiated before shutdown; Â§1.9.4 lets it
     // complete on the wire. The adopted candidate is never signalled: the
     // provider is the managed-child owner and it was asked for zero stops.
     expect(calls).toHaveLength(1);
@@ -201,7 +201,7 @@ function registerFakeStopProvider(
   return registerManagedChildStopProvider({ stopAllChildrenForShutdown: enumerate });
 }
 
-describe("AT4 — a probe fails for a superseded attempt", () => {
+describe("AT4 â€” a probe fails for a superseded attempt", () => {
   it("leaves the current target unchanged", async () => {
     installAdoptedTarget({ origin: ORIGIN_EXISTING, password: EXISTING_PASSWORD });
     const fileA = writeRecord("a.json", ORIGIN_A);
@@ -225,7 +225,7 @@ describe("AT4 — a probe fails for a superseded attempt", () => {
   });
 });
 
-describe("AT8 — the guard is checked before the state replacement", () => {
+describe("AT8 â€” the guard is checked before the state replacement", () => {
   it("has no await between the guard and the single install call", () => {
     const source = stripComments(
       readFileSync(path.join(REPO_ROOT, "src/services/opencode/adoption.ts"), "utf8"),
@@ -240,7 +240,7 @@ describe("AT8 — the guard is checked before the state replacement", () => {
   });
 });
 
-describe("AT9 — supersede aborts the older attempt", () => {
+describe("AT9 â€” supersede aborts the older attempt", () => {
   it("aborts the older probe and leaves the newer attempt unaffected", async () => {
     const fileA = writeRecord("a.json", ORIGIN_A);
     const fileB = writeRecord("b.json", ORIGIN_B);
@@ -270,7 +270,7 @@ describe("AT9 — supersede aborts the older attempt", () => {
   });
 });
 
-describe("AT10 — discovery and the shutdown latch", () => {
+describe("AT10 â€” discovery and the shutdown latch", () => {
   it("(a) begins a startup attempt without shutdown and with the current epoch", () => {
     const attempt = beginAttempt("startup");
     expect(currentAttemptId()).toBe(attempt.attemptId);
@@ -332,7 +332,7 @@ describe("AT10 — discovery and the shutdown latch", () => {
 
     // This input is NOT reachable through the production API: `beginAttempt()`
     // refuses on the latch before it stamps an epoch, and only the seam can
-    // report a matching epoch with `shutdownStarted: true` (§1.9.5).
+    // report a matching epoch with `shutdownStarted: true` (Â§1.9.5).
     // Header construction happens after the gate in the transport; proven by
     // the source order rather than a builder spy.
     const httpSource = stripComments(
@@ -369,7 +369,7 @@ describe("AT10 — discovery and the shutdown latch", () => {
   });
 });
 
-describe("AT11 — re-entrant supersession", () => {
+describe("AT11 â€” re-entrant supersession", () => {
   it("variant 1: a listener that begins an attempt supersedes the outer call", () => {
     const attemptA = beginAttempt("startup");
     let aAborts = 0;
@@ -425,7 +425,7 @@ describe("AT11 — re-entrant supersession", () => {
   });
 });
 
-describe("BT4/BT7 — adoption-side refusals", () => {
+describe("BT4/BT7 â€” adoption-side refusals", () => {
   it("BT4: a missing registration makes no request", async () => {
     const calls = stubFetch(() => readyResponse());
     const outcome = await attemptOpenCodeAdoption({ path: path.join(root, "absent.json") });
@@ -467,7 +467,7 @@ describe("BT4/BT7 — adoption-side refusals", () => {
   });
 });
 
-describe("B7 — adoption is decided by the live build and its capabilities", () => {
+describe("B7 â€” adoption is decided by the live build and its capabilities", () => {
   it("admits a newer stable build above the managed ceiling", async () => {
     const file = writeRecord("newer.json", ORIGIN_A);
     stubFetch((url) =>
@@ -482,7 +482,7 @@ describe("B7 — adoption is decided by the live build and its capabilities", ()
     expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN_A });
   });
 
-  it("refuses an adopted service below 2.2.0 before capability probing", async () => {
+  it("refuses an adopted service below 2.2.6 before capability probing", async () => {
     const file = writeRecord("below-minimum.json", ORIGIN_A, PID, "2.1.4");
     const calls = stubFetch((url) =>
       url.endsWith(OPENCODE_CONFIG.readinessProbePath)
@@ -501,7 +501,7 @@ describe("B7 — adoption is decided by the live build and its capabilities", ()
     const file = writeRecord("beta.json", ORIGIN_A);
     const calls = stubFetch((url) =>
       url.endsWith(OPENCODE_CONFIG.readinessProbePath)
-        ? readyResponse(PID, "2.2.0-beta.1")
+        ? readyResponse(PID, "2.2.6-beta.1")
         : capabilityResponse(url),
     );
 

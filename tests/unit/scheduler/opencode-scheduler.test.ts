@@ -1,5 +1,5 @@
-/**
- * Unit tests for Unified Scheduler + OpenCode 2.2.0 integration.
+﻿/**
+ * Unit tests for Unified Scheduler + OpenCode 2.2.6 integration.
  *
  * Covers:
  * - OpenCode field validation (checkOpenCodeFields, checkProvider bypass)

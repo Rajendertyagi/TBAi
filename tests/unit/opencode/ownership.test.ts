@@ -54,25 +54,12 @@ describe("resolveOpenCodeDatabasePath", () => {
 describe("OpenCodeDatabaseOwnership (Phase 1 decommissioned watchdog)", () => {
   it("resolves the database path without acquiring mutexes or querying OS file holders", async () => {
     let resolveCalls = 0;
-    let holderCalls = 0;
-    let mutexCalls = 0;
     const lease = new OpenCodeDatabaseOwnership({
       deps: {
         platform: "win32",
         resolveDatabasePath: async () => {
           resolveCalls += 1;
           return DB_PATH;
-        },
-        findProcessesUsingFiles: () => {
-          holderCalls += 1;
-          return [4242];
-        },
-        acquireMutex: () => {
-          mutexCalls += 1;
-          return { handle: 0n };
-        },
-        releaseMutex: () => {
-          mutexCalls += 1;
         },
       },
     });
@@ -82,31 +69,22 @@ describe("OpenCodeDatabaseOwnership (Phase 1 decommissioned watchdog)", () => {
     lease.release();
 
     expect(resolveCalls).toBe(1);
-    expect(holderCalls).toBe(0);
-    expect(mutexCalls).toBe(0);
   });
 
   it("returns null for an in-memory database without locking or holder inspection", async () => {
-    let holderCalls = 0;
-    let mutexCalls = 0;
+    let resolveCalls = 0;
     const lease = new OpenCodeDatabaseOwnership({
       deps: {
         platform: "win32",
-        resolveDatabasePath: async () => ":memory:",
-        findProcessesUsingFiles: () => {
-          holderCalls += 1;
-          return [4242];
-        },
-        acquireMutex: () => {
-          mutexCalls += 1;
-          return { handle: 0n };
+        resolveDatabasePath: async () => {
+          resolveCalls += 1;
+          return ":memory:";
         },
       },
     });
 
     await expect(lease.acquire("opencode", "C:\\work")).resolves.toBeNull();
-    expect(holderCalls).toBe(0);
-    expect(mutexCalls).toBe(0);
+    expect(resolveCalls).toBe(1);
   });
 
   it("skips resolution on non-Windows platforms", async () => {

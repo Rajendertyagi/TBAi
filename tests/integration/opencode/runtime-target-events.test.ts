@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, describe, expect, it } from "bun:test";
 import {
   beginShutdown,
   clearTarget,
@@ -13,7 +13,7 @@ import type { OpenCodeServiceCapabilities } from "@/services/opencode/compatibil
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
 
 const CAPABILITIES: OpenCodeServiceCapabilities = {
-  version: "2.2.0",
+  version: "2.2.6",
   supported: {
     session: true,
     events: true,

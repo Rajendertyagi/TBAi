@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, describe, expect, it } from "bun:test";
 import {
   installAdoptedTarget,
   installManagedTarget,
@@ -9,7 +9,7 @@ import type { OpenCodeServiceCapabilities } from "@/services/opencode/compatibil
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
 
 /**
- * `GET /api/opencode/status` — the stable status the UI renders (§4.2).
+ * `GET /api/opencode/status` â€” the stable status the UI renders (Â§4.2).
  *
  * The route reads the installed target and never resolves one, so a status
  * poll can neither start a managed child nor contact an adopted service. The
@@ -17,7 +17,7 @@ import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
  */
 
 const CAPABILITIES: OpenCodeServiceCapabilities = {
-  version: "2.2.0",
+  version: "2.2.6",
   supported: {
     session: true,
     events: true,

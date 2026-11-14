@@ -79,13 +79,13 @@ export const OPENCODE_CONFIG = {
    */
   configReadTimeoutMs: 10_000,
   /**
-   * Authoritative minimum OpenCode version supported by TBAi.
+   * Authoritative OpenCode version supported by TBAi.
    *
-   * Approved compatibility policy: OpenCode 2.2.0 and newer stable releases only.
-   * Releases below 2.2.0, prereleases, and malformed versions are rejected.
-   * There is no upper version limit for stable releases.
+   * Approved compatibility policy: OpenCode 2.2.6 is the sole supported runtime
+   * version. Releases below 2.2.6, prereleases, and malformed versions are
+   * rejected. There is no upper version limit for stable releases.
    */
-  minimumVersion: "2.2.0",
+  minimumVersion: "2.2.6",
   /** Default HTTP Basic username expected by OpenCode V2. */
   authUsername: "opencode",
   /**
@@ -183,7 +183,7 @@ export const OPENCODE_CONFIG = {
   serverHomeDir: path.join(DATA_DIR, "opencode-home"),
   /** User-facing error when the `opencode` binary cannot be found on PATH. */
   binaryMissingError:
-    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.2.0 or newer stable executable or install `opencode` on PATH, then reload.",
+    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.2.6 executable or install `opencode` 2.2.6 on PATH, then reload.",
 } as const;
 
 export type OpenCodeConfig = {

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * RT-007: the real-binary OpenCode runtime suites that must run on every PR.
  *
  * Run via `bun run test:opencode-runtime` (the `opencode-runtime` CI job).
@@ -34,7 +34,7 @@
  *
  * `EXCLUDED_SUITES` is not a suppression list; each entry names what would have
  * to change to admit it. One exclusion is a missing credential; the other is a
- * measurement of a real binary, updated when the 2.2.0 pin was measured locally.
+ * measurement of a real binary, updated when the 2.2.6 pin was measured locally.
  * Neither comes from an assumption about CI time.
  */
 import { spawnSync } from "node:child_process";

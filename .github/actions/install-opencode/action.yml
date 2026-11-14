@@ -5,7 +5,7 @@ description: >-
 
 # CI-only. Nothing about the application's own dependencies changes: the binary
 # is unpacked into the runner's temp dir and is never vendored into the
-# repository. Both jobs that need a real managed server use this action, so the
+# repository. Jobs that need a real managed server use this action, so the
 # pinned version and its integrity hash cannot drift between them.
 #
 # The npm package ships the prebuilt Windows binary; there are no GitHub release

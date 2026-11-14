@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import {
   beginShutdown,
@@ -68,7 +68,7 @@ function candidate(origin = ORIGIN): RediscoveryCandidate {
     origin,
     password: PASSWORD,
     capabilities: {
-      version: "2.2.0",
+      version: "2.2.6",
       supported: {
         session: true,
         events: true,
@@ -86,7 +86,7 @@ function candidate(origin = ORIGIN): RediscoveryCandidate {
       origin,
       pid: 4242,
       password: PASSWORD,
-      version: "2.2.0",
+      version: "2.2.6",
     },
   };
 }

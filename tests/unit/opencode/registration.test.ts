@@ -82,7 +82,7 @@ const ORIGIN = "http://127.0.0.1:4107";
 const OTHER_ORIGIN = "http://127.0.0.1:4108";
 const PASSWORD = "registration-fixture-password";
 const PID = 4242;
-const VERSION = "2.2.0";
+const VERSION = "2.2.6";
 
 const MAX_BYTES = OPENCODE_CONFIG.registrationFileMaxBytes;
 
@@ -245,7 +245,7 @@ describe("BT8 — the version gate (B7: stable-only, no managed or evidence floo
   const cases: ReadonlyArray<readonly [string, unknown, OpenCodeRegistrationRefusalCode]> = [
     ["absent version", undefined, "registration_unsupported_version"],
     ["non-version text", "latest", "registration_unsupported_version"],
-    ["prerelease build", "2.2.0-beta.1", "registration_unsupported_version"],
+    ["prerelease build", "2.2.6-beta.1", "registration_unsupported_version"],
   ];
 
   for (const [label, version, expected] of cases) {
@@ -660,7 +660,7 @@ describe("writeOpenCodeRegistration", () => {
         "registration_unsupported_version",
       ],
       [
-        { origin: ORIGIN, pid: PID, password: PASSWORD, version: "2.2.0-beta.1" },
+        { origin: ORIGIN, pid: PID, password: PASSWORD, version: "2.2.6-beta.1" },
         "registration_unsupported_version",
       ],
     ];

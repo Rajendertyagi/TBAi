@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Database compatibility for the pinned OpenCode binary, executed
  * against a real server rather than inferred from source.
  *
@@ -21,7 +21,7 @@
  *
  * ## Scope
  *
- * This suite exercises the one binary the harness resolves (the CI pin, 2.2.0).
+ * This suite exercises the one binary the harness resolves (the CI pin, 2.2.6).
  * The advertised 2.0.x range is NOT exercised here and remains unverified;
  * this suite never claims cross-version recovery it did not observe.
  *

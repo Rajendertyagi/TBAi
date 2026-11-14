@@ -1,9 +1,9 @@
-/**
+﻿/**
  * The status chip's manual recovery, asserted BEHAVIOURALLY.
  *
  * ## Why this file exists
  *
- * **M17** — `OpenCodeStatus.retry()` called `reconcileStagedRevert()` with no
+ * **M17** â€” `OpenCodeStatus.retry()` called `reconcileStagedRevert()` with no
  * `.catch`. `reconcileStagedRevert` rejects with a `V2ControllerError` when the
  * recovery fails, and the controller already dispatches that failure into the
  * store - so the state carried the error and the chip rendered it. Without the
@@ -35,7 +35,7 @@ import { describe, expect, it, mock } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-// ── the mocked runtime surface ─────────────────────────────────────────────
+// â”€â”€ the mocked runtime surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** What the mocked `reconcileStagedRevert` does next. */
 let recoveryOutcome: "resolve" | "reject" = "resolve";
@@ -167,11 +167,11 @@ mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
   useOpenCodeRuntimeStatus: () => ({ status: null, error: null }),
 }));
 
-// ── the component, imported AFTER the mock is registered ───────────────────
+// â”€â”€ the component, imported AFTER the mock is registered â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const { OpenCodeStatus } = await import("@web/features/opencode/OpenCodeStatus.tsx");
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface Mounted {
   readonly root: Root;
@@ -339,7 +339,7 @@ describe("the status chip's manual recovery", () => {
     // transport/recovery health only, so a connected transport stays Connected
     // while the turn is stopping - the coupling that rendered "Disconnected"
     // here was removed with S3.
-    runtimeState.connection = { type: "connected", serverVersion: "2.2.0" };
+    runtimeState.connection = { type: "connected", serverVersion: "2.2.6" };
     runtimeState.load = { type: "ready" };
     runtimeState.revertRecovery = { type: "none" };
     runtimeState.execution = { type: "cancelling" };

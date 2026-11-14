@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Assistant message chrome, asserted BEHAVIOURALLY in the real row composition.
  *
  * ## The defect this file pins
@@ -37,7 +37,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 
-// ── unrelated heavy children, so this suite stays about the transcript ────────
+// â”€â”€ unrelated heavy children, so this suite stays about the transcript â”€â”€â”€â”€â”€â”€â”€â”€
 
 mock.module("@web/components/ScrollPill.tsx", () => ({ ScrollPill: () => null }));
 mock.module("@web/features/chat/history/DirectViewportBridge.tsx", () => ({
@@ -60,7 +60,7 @@ mock.module("@web/features/chat/components/WelcomeScopePicker.tsx", () => ({
 mock.module("@web/features/opencode/v2RuntimeExtras.ts", () => ({
   useOptionalV2RuntimeExtras: () => ({
     state: {
-      connection: { type: "connected", serverVersion: "2.2.0" },
+      connection: { type: "connected", serverVersion: "2.2.6" },
       load: { type: "ready" },
       retry: null,
       execution: { type: "idle" },
@@ -73,7 +73,7 @@ mock.module("@web/features/opencode/v2RuntimeExtras.ts", () => ({
   }),
 }));
 
-// ── the real composition, imported AFTER the mocks are registered ────────────
+// â”€â”€ the real composition, imported AFTER the mocks are registered â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const { ChatRow } = await import("@web/components/ChatWindow.tsx");
 const { selectTranscriptRows } = await import("@web/components/VirtualizedTranscript.tsx");
@@ -81,7 +81,7 @@ const { OpenCodeStatus } = await import("@web/features/opencode/OpenCodeStatus.t
 const { createInitialV2ThreadState } = await import("@web/features/opencode/v2Events.ts");
 const { projectV2RepositoryItems } = await import("@web/features/opencode/v2MessageProjection.ts");
 
-// ── fixtures ─────────────────────────────────────────────────────────────────
+// â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DETAIL = "Provider rejected the request: unsupported model parameters.";
 const USER: ThreadMessageLike = {
@@ -174,7 +174,7 @@ function openCodeFailure({ withAssistant = true } = {}): ThreadMessageLike[] {
   return projectV2RepositoryItems(state).map((item) => item.message);
 }
 
-// ── harness ──────────────────────────────────────────────────────────────────
+// â”€â”€ harness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SceneProps {
   readonly messages: ThreadMessageLike[];
@@ -253,7 +253,7 @@ afterEach(() => {
   }
 });
 
-// ── selectors ────────────────────────────────────────────────────────────────
+// â”€â”€ selectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function alerts(container: HTMLElement): Element[] {
   return [...container.querySelectorAll('[role="alert"]')];
@@ -282,7 +282,7 @@ function rowsOfMessage(container: HTMLElement, messageId: string): Element[] {
   );
 }
 
-// ── the failure itself ───────────────────────────────────────────────────────
+// â”€â”€ the failure itself â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("a failed assistant message renders its error", () => {
   it("shows a Direct provider failure's detail in a single alert", async () => {

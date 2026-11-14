@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+﻿import { afterEach, describe, expect, it } from "bun:test";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import type { AdoptionAttemptOutcome } from "@/services/opencode/adoption.ts";
 import {
@@ -21,8 +21,8 @@ import {
  * Adopt-first startup and the revalidation loop (H5/B2, D3).
  *
  * The attempt is injected, so these tests never read a registration file and
- * never probe a service: what they pin is the ORDER (adopt, then — only when
- * adoption did not supply a service — start the managed child eagerly) and the
+ * never probe a service: what they pin is the ORDER (adopt, then â€” only when
+ * adoption did not supply a service â€” start the managed child eagerly) and the
  * loop's lifetime. The managed start is injected too, so no case spawns a
  * process.
  */
@@ -31,7 +31,7 @@ const MANAGED_URL = "http://127.0.0.1:4096";
 const ADOPTED_ORIGIN = "http://127.0.0.1:5055";
 
 const CAPABILITIES: OpenCodeServiceCapabilities = {
-  version: "2.2.0",
+  version: "2.2.6",
   supported: {
     session: true,
     events: true,
@@ -57,7 +57,7 @@ const ADOPTED: AdoptionAttemptOutcome = {
     origin: ADOPTED_ORIGIN,
     pid: 4242,
     password: "synthetic-adopted-password",
-    version: "2.2.0",
+    version: "2.2.6",
   },
   capabilities: CAPABILITIES,
 };

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "bun:test";
+﻿import { describe, it, expect, afterEach } from "bun:test";
 import type { Subprocess } from "bun";
 import {
   buildOpenCodeServeArgs,
@@ -19,19 +19,19 @@ import {
   OPENCODE_CAPABILITY_PROBES,
 } from "@/services/opencode/compatibility.ts";
 import {
-  OpenCodeDatabaseBusyError,
+  OpenCodeDatabasePathError,
   type OpenCodeDatabaseLease,
 } from "@/services/opencode/ownership.ts";
 import { OpenCodeListeningMissingError } from "@/services/opencode/listening.ts";
 import { allocateTestLoopbackPort } from "../../harness/opencodeRuntimeHarness";
 
-const SUPPORTED_VERSION = "2.2.0";
-const CURRENT_SUPPORTED_VERSION = "2.2.0";
+const SUPPORTED_VERSION = "2.2.6";
+const CURRENT_SUPPORTED_VERSION = "2.2.6";
 const UNSUPPORTED_VERSION = "2.1.4";
-/** A stable release newer than the old ceiling; B7 admits it. */
-const NEWER_STABLE_VERSION = "2.2.1";
-/** D2: a prerelease is refused even inside the numeric range. */
-const PRERELEASE_VERSION = "2.2.1-beta.1";
+/** A stable release newer than any measured build; B7 admits it when >= floor. */
+const NEWER_STABLE_VERSION = "2.4.0";
+/** D2: a prerelease is refused even when its core version is in range. */
+const PRERELEASE_VERSION = "2.4.0-beta.1";
 const FIXTURE_PASSWORD = "opencode-readiness-fixture-password";
 const FIXTURE_AUTHORIZATION = `Basic ${Buffer.from(
   `${OPENCODE_CONFIG.authUsername}:${FIXTURE_PASSWORD}`,
@@ -219,7 +219,7 @@ describe("probeOpenCodeInfo", () => {
     }
   });
 
-  it("accepts a 2.2.0 server info response within the approved range", async () => {
+  it("accepts a 2.2.6 server info response within the approved range", async () => {
     const fixture = startInfoFixture(() => Response.json({ version: CURRENT_SUPPORTED_VERSION }));
 
     try {
@@ -485,7 +485,7 @@ describe("waitForHttpReady", () => {
   it("resolves when a probe is slower than the poll interval", async () => {
     // During cold start a probe can take longer than `pollMs` to answer. The
     // loop must pace itself with the poll interval yet never *add* that delay
-    // on top of a slow probe — otherwise readiness would lag behind the server
+    // on top of a slow probe â€” otherwise readiness would lag behind the server
     // by one interval per attempt. Here the first probe is deliberately slower
     // than `pollMs`; readiness must still resolve as soon as it answers.
     const port = allocateTestLoopbackPort();
@@ -799,7 +799,7 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
  * These managers run a REAL readiness loop: `waitForHttpReady` polls
  * `probeOpenCodeInfo` over the genuine `globalThis.fetch` until
  * `startupTimeoutMs` elapses (5s at `readyPollMs: 5` in the never-serves
- * cases — up to a thousand live fetches). Cleanup used to be `stopFake()` as
+ * cases â€” up to a thousand live fetches). Cleanup used to be `stopFake()` as
  * the last line of each test body, so a FAILING assertion skipped it and the
  * loop kept polling for the rest of the process. Because this file sorts before
  * `web/src/features/opencode/sessionBootstrap.test.ts`, that leaked poll landed
@@ -869,17 +869,13 @@ describe("OpenCodeServerManager.ensureBaseUrl", () => {
     }
   });
 
-  it("does not cache a database-lease refusal: the next attempt retries", async () => {
+  it("does not cache a database-path resolution failure: the next attempt retries", async () => {
     let attempts = 0;
     const lease: OpenCodeDatabaseLease = {
       acquire: async () => {
         attempts += 1;
         if (attempts === 1) {
-          throw new OpenCodeDatabaseBusyError({
-            dbPath: "C:\\tmp\\opencode.db",
-            pids: [4242],
-            reason: "a process already holds the database",
-          });
+          throw new OpenCodeDatabasePathError("cannot resolve database path");
         }
         return null;
       },
@@ -888,7 +884,7 @@ describe("OpenCodeServerManager.ensureBaseUrl", () => {
     };
     const mgr = newFakeManager(OPENCODE_CONFIG, lease);
     try {
-      await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeDatabaseBusyError);
+      await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeDatabasePathError);
       const baseUrl = await mgr.ensureBaseUrl();
       expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(attempts).toBe(2);

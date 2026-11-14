@@ -25,12 +25,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  acquireNamedMutex,
   backendJobStatus,
-  findProcessesUsingFiles,
   installBackendProcessJob,
   joinShellJob,
-  releaseNamedMutex,
   ShellJobUnavailableError,
 } from "@/services/process-ownership.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
@@ -163,34 +160,11 @@ describe("G2 Windows process ownership", () => {
   });
 
   it.skipIf(process.platform !== "win32")(
-    "named mutex watchdog is decommissioned (no cross-process exclusion)",
-    () => {
-      const name = `Local\\TBAiG2Mutex-${process.pid}-${Date.now()}`;
-      const first = acquireNamedMutex(name);
-      expect(first).not.toBeNull();
-      // Phase 1 decommission: compatibility stub, no exclusive ownership.
-      expect(acquireNamedMutex(name)).not.toBeNull();
-      if (first === null)
-        throw new Error("expected the decommissioned mutex stub to return a lease");
-      expect(() => releaseNamedMutex(first)).not.toThrow();
-    },
-  );
-
-  it.skipIf(process.platform !== "win32")(
     "refuses to join a shell job that no longer exists",
     () => {
       expect(() => joinShellJob(`Local\\TBAiG2Missing-${process.pid}-${Date.now()}`)).toThrow(
         ShellJobUnavailableError,
       );
-    },
-  );
-
-  it.skipIf(process.platform !== "win32")(
-    "Restart Manager file-holder detection is decommissioned (no foreign-process inspection)",
-    () => {
-      // Phase 1 decommission: compatibility stub returns no holders and must not
-      // enumerate or inspect foreign processes.
-      expect(findProcessesUsingFiles(["C:\\__tbai_nonexistent_decommissioned__.db"])).toEqual([]);
     },
   );
 

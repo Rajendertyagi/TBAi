@@ -1,4 +1,4 @@
-/**
+﻿/**
  * G2 acceptance against a real OpenCode server (the resolved binary) and an
  * isolated database under the approved Client-Daemon Architecture.
  *
@@ -340,7 +340,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
           url: serviceUrl,
           pid: service.pid,
           password: FOREIGN_PASSWORD,
-          version: "2.2.0",
+          version: "2.2.6",
         }),
       );
 

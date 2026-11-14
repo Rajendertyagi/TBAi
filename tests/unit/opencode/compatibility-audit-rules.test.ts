@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+﻿import { describe, expect, it } from "bun:test";
 import {
   LazyCapabilityRegistry,
   SseStreamParser,
@@ -17,7 +17,7 @@ import {
   type SseRawEvent,
 } from "@/services/opencode/compatibility";
 
-describe("B7 Audit — RULE 2: SSE parser compliance", () => {
+describe("B7 Audit â€” RULE 2: SSE parser compliance", () => {
   // 1. Multiple events in one chunk
   it("parses multiple events delivered in a single chunk", () => {
     const parser = new SseStreamParser();
@@ -113,8 +113,8 @@ describe("B7 Audit — RULE 2: SSE parser compliance", () => {
     const decoder = new TextDecoder("utf-8");
     const parser = new SseStreamParser();
 
-    // Multi-byte character: '🚀' is 4 bytes [0xF0, 0x9F, 0x99, 0x80]
-    const fullJson = 'data: {"type":"emoji","symbol":"🚀"}\n\n';
+    // Multi-byte character: 'ðŸš€' is 4 bytes [0xF0, 0x9F, 0x99, 0x80]
+    const fullJson = 'data: {"type":"emoji","symbol":"ðŸš€"}\n\n';
     const fullBytes = new TextEncoder().encode(fullJson);
 
     // Split across the 4-byte emoji (e.g. 2 bytes in chunk 1, 2 bytes in chunk 2)
@@ -133,7 +133,7 @@ describe("B7 Audit — RULE 2: SSE parser compliance", () => {
     const wire = parseOpenCodeWireEvent(ev2[0]!);
     expect(wire?.type).toBe("emoji");
     expect((wire?.data as Record<string, unknown>)?.symbol ?? JSON.parse(ev2[0]!.data).symbol).toBe(
-      "🚀",
+      "ðŸš€",
     );
   });
 
@@ -174,7 +174,7 @@ describe("B7 Audit — RULE 2: SSE parser compliance", () => {
   });
 });
 
-describe("B7 Audit — RULE 3: Reconnection behavior", () => {
+describe("B7 Audit â€” RULE 3: Reconnection behavior", () => {
   it("handles unexpected disconnect and reconnects successfully", async () => {
     let callCount = 0;
     const events: OpenCodeWireEvent[] = [];
@@ -314,11 +314,11 @@ describe("B7 Audit — RULE 3: Reconnection behavior", () => {
   });
 });
 
-describe("B7 Audit — RULE 4: Session and message response validation", () => {
+describe("B7 Audit â€” RULE 4: Session and message response validation", () => {
   it("validates empty and populated session lists", () => {
     // Empty bare array
     expect(validateSessionListResponse([])).toBe(true);
-    // Empty data envelope (OpenCode 2.2.0 style)
+    // Empty data envelope (OpenCode 2.2.6 style)
     expect(validateSessionListResponse({ data: [] })).toBe(true);
     // Populated bare array
     expect(validateSessionListResponse([{ id: "ses_1" }, { id: "ses_2" }])).toBe(true);
@@ -362,7 +362,7 @@ describe("B7 Audit — RULE 4: Session and message response validation", () => {
   });
 });
 
-describe("B7 Audit — RULE 5: Lazy capability detection", () => {
+describe("B7 Audit â€” RULE 5: Lazy capability detection", () => {
   it("performs first-request detection and caches result", async () => {
     const registry = new LazyCapabilityRegistry();
     let probes = 0;
@@ -437,7 +437,7 @@ describe("B7 Audit — RULE 5: Lazy capability detection", () => {
   });
 });
 
-describe("B7 Audit — RULE 6: Tool and permission events", () => {
+describe("B7 Audit â€” RULE 6: Tool and permission events", () => {
   it("classifies tool call event types across lifecycle and input streaming", () => {
     expect(isToolCallEventType("session.tool.called")).toBe(true);
     expect(isToolCallEventType("session.tool.progress")).toBe(true);
