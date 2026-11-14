@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { OPENCODE_CONFIG } from "../../config/opencode";
 import { logger } from "../../lib/logger";
+import { createOpenCodeClient } from "./client";
 import type { OpenCodeTransport } from "./http";
 
 /** Joins a directory and a file name using the host's path separator. */
@@ -184,15 +185,20 @@ export async function readOpenCodeConfigDocument(
   const timeoutMs = options.timeoutMs ?? OPENCODE_CONFIG.configReadTimeoutMs;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  const response = await target.transport(new URL("/api/config", target.baseUrl), { signal });
-  if (!response.ok) {
-    throw new OpenCodeConfigUnreadableError(`OpenCode config read failed (${response.status})`);
+
+  const client = createOpenCodeClient(target.baseUrl, { transport: target.transport });
+  let parsedJson: unknown;
+  try {
+    parsedJson = await client.config.get(undefined, { signal });
+  } catch (error) {
+    throw normalizeConfigReadError(error);
   }
-  const parsedJson: unknown = await response.json().catch(() => null);
+
   const entries = configResponseSchema.safeParse(parsedJson);
   if (!entries.success) {
     throw new OpenCodeConfigUnreadableError("OpenCode returned an unreadable config response");
   }
+
   /**
    * A global config the server could not parse is DROPPED from its own listing.
    *
@@ -272,6 +278,51 @@ export async function readOpenCodeConfigDocument(
       malformed: true,
     };
   }
+}
+
+/**
+ * Maps an SDK config-read failure onto the errors this module has always
+ * thrown, so callers and routes observe the same contract as the manual fetch.
+ *
+ * The official client wraps transport failures and non-success responses in a
+ * `ClientError`; the captured transport's own refusals (redirect, origin,
+ * cancellation) must surface unchanged, and an unreadable upstream response must
+ * remain an {@link OpenCodeConfigUnreadableError} with the same message shape.
+ */
+function normalizeConfigReadError(error: unknown): unknown {
+  if (isClientError(error)) {
+    if (error.reason === "Transport") {
+      return error.cause ?? error;
+    }
+    if (error.reason === "UnexpectedStatus") {
+      const status = unexpectedStatusOf(error.cause);
+      return new OpenCodeConfigUnreadableError(`OpenCode config read failed (${status})`);
+    }
+    if (error.reason === "UnsupportedContentType" || error.reason === "MalformedResponse") {
+      return new OpenCodeConfigUnreadableError("OpenCode returned an unreadable config response");
+    }
+  }
+  return error;
+}
+
+/** Narrows the SDK's thrown value without importing its internal class. */
+function isClientError(
+  error: unknown,
+): error is Error & { readonly reason: string; readonly cause?: unknown } {
+  return (
+    error instanceof Error &&
+    error.name === "ClientError" &&
+    typeof (error as { reason?: unknown }).reason === "string"
+  );
+}
+
+/** Reads the HTTP status the SDK attached to an unexpected-status failure. */
+function unexpectedStatusOf(cause: unknown): number | string {
+  if (cause !== null && typeof cause === "object" && "status" in cause) {
+    const status = (cause as { status?: unknown }).status;
+    if (typeof status === "number" || typeof status === "string") return status;
+  }
+  return "unknown";
 }
 
 /** Reads a file as UTF-8 text, or null when it does not exist. */
