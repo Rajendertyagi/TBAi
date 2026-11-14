@@ -68,6 +68,7 @@ import {
 } from "../services/opencode/errors";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
+import { SseDiagnosticObserver } from "../lib/sse-diagnostic-observer";
 import { openCodeSessionActivitySchema } from "../lib/validation";
 import { disableIdleTimeout } from "./shared";
 import {
@@ -1002,6 +1003,9 @@ app.all("*", async (c) => {
  * first-byte / first-event / per-event (capped) signals and stream
  * close/error. For non-SSE responses it records completion. Never logs body
  * bytes, prompts, or payloads — only event type names and counts.
+ *
+ * Diagnostic SSE parsing is a passive side channel: original chunks are always
+ * forwarded unchanged, and observer failures must never affect the proxy stream.
  */
 function observeBody(
   body: ReadableStream<Uint8Array>,
@@ -1014,7 +1018,7 @@ function observeBody(
   },
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
-  let buffer = "";
+  const sseObserver = meta.isSSE ? new SseDiagnosticObserver() : null;
   let firstByteMs: number | null = null;
   let firstEvent = false;
   let eventCount = 0;
@@ -1047,35 +1051,36 @@ function observeBody(
     }
   };
 
-  const parseEvents = (text: string) => {
-    buffer += text;
-    // Find each `\n\n` frame terminator, consume it, and re-scan: the buffer
-    // shrinks as frames are taken, so the next terminator has to be located
-    // again on each pass. Assigning outside the condition keeps the loop
-    // condition a plain comparison (an assignment-in-condition is a classic
-    // place for an off-by-one to hide).
-    let idx = buffer.indexOf("\n\n");
-    while (idx !== -1) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const type = extractEventType(raw);
-      if (!firstEvent) {
-        firstEvent = true;
-        log("sse.first_event", {
-          eventType: type,
-          elapsedMs: Date.now() - meta.startMs,
-        });
-      }
-      eventCount++;
-      if (!samplingStarted) {
-        if (eventCount <= 20) {
-          log("sse.event", { eventIndex: eventCount, eventType: type });
-        } else {
-          samplingStarted = true;
-          log("sse.event_sampling_started", { eventsObserved: eventCount });
+  const observeSseChunk = (value: Uint8Array) => {
+    if (!sseObserver) return;
+    try {
+      const events = sseObserver.feed(decoder.decode(value, { stream: true }));
+      for (const event of events) {
+        const type = event.type;
+        if (!firstEvent) {
+          firstEvent = true;
+          log("sse.first_event", {
+            eventType: type,
+            elapsedMs: Date.now() - meta.startMs,
+          });
+        }
+        eventCount++;
+        if (!samplingStarted) {
+          if (eventCount <= 20) {
+            log("sse.event", { eventIndex: eventCount, eventType: type });
+          } else {
+            samplingStarted = true;
+            log("sse.event_sampling_started", { eventsObserved: eventCount });
+          }
         }
       }
-      idx = buffer.indexOf("\n\n");
+    } catch {
+      // Diagnostic parsing must never affect forwarded bytes or stream behavior.
+      try {
+        sseObserver.reset();
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -1085,6 +1090,12 @@ function observeBody(
       try {
         const { done, value } = await reader.read();
         if (done) {
+          // Incomplete trailing diagnostic frame is discarded (no dispatch).
+          try {
+            sseObserver?.reset();
+          } catch {
+            /* ignore */
+          }
           finish("stream-complete");
           try {
             controller.close();
@@ -1098,11 +1109,16 @@ function observeBody(
           if (meta.isSSE) log("sse.first_byte", { elapsedMs: firstByteMs });
         }
         if (meta.isSSE && value) {
-          parseEvents(decoder.decode(value, { stream: true }));
+          observeSseChunk(value);
         }
         controller.enqueue(value);
       } catch (err) {
         if (finished) return;
+        try {
+          sseObserver?.reset();
+        } catch {
+          /* ignore */
+        }
         if (meta.isSSE) {
           log("sse.error", {
             errorType: err instanceof Error ? err.name : typeof err,
@@ -1127,37 +1143,15 @@ function observeBody(
       }
     },
     cancel(reason) {
+      try {
+        sseObserver?.reset();
+      } catch {
+        /* ignore */
+      }
       reader.cancel(reason).catch(() => {});
       finish(typeof reason === "string" ? reason : "cancelled");
     },
   });
-}
-
-/** Extract only the SSE event type name (never the payload/data content). */
-function extractEventType(raw: string): string {
-  const lines = raw.split("\n");
-  for (const line of lines) {
-    const t = line.trim();
-    if (t.startsWith("event:")) {
-      const v = t.slice(6).trim();
-      if (v) return v;
-    }
-  }
-  for (const line of lines) {
-    const t = line.trim();
-    if (t.startsWith("data:")) {
-      const v = t.slice(5).trim();
-      if (v) {
-        try {
-          const parsed = JSON.parse(v) as { type?: unknown };
-          if (typeof parsed?.type === "string") return parsed.type;
-        } catch {
-          /* non-JSON data — fall through */
-        }
-      }
-    }
-  }
-  return "message";
 }
 
 export default app;

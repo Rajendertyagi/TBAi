@@ -18,6 +18,7 @@ type CapturedProxyRequest = {
 };
 
 const capturedRequests: CapturedProxyRequest[] = [];
+let eventResponseFactory: ((request: Request) => Response | Promise<Response>) | null = null;
 const fixtureServer = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
@@ -34,6 +35,7 @@ const fixtureServer = Bun.serve({
       return new Response("unauthorized", { status: 401 });
     }
     if (url.pathname === "/api/event") {
+      if (eventResponseFactory) return eventResponseFactory(request);
       return new Response('data: {"type":"server.connected"}\n\n', {
         headers: { "content-type": "text/event-stream" },
       });
@@ -175,5 +177,117 @@ describe("OpenCode proxy authentication", () => {
     // caller's.
     expect(capturedRequests[0]?.directory).not.toBe(encodedFixtureDirectory);
     expect(capturedRequests[0]?.directory).toBe(encodeURIComponent(serverDirectory));
+  });
+
+  it("forwards SSE bytes, status and headers unchanged with diagnostic parsing enabled", async () => {
+    capturedRequests.length = 0;
+    const bodyText =
+      ": keepalive\r\n\r\n" +
+      "event: alpha\r\n" +
+      'data: {"type":"alpha","n":1}\r\n\r\n' +
+      'data: {"type":"multi",\r\n' +
+      'data: "ok":true}\r\n\r\n' +
+      "retry: 1000\n\n" +
+      "data: plain\n\n" +
+      "event: trailing-no-delimiter\n" +
+      "data: incomplete";
+    eventResponseFactory = () =>
+      new Response(bodyText, {
+        status: 206,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          "x-upstream-test": "kept",
+        },
+      });
+    try {
+      const response = await openCodeApp.request("http://localhost/api/opencode/event", {
+        headers: {
+          Accept: "text/event-stream",
+          Authorization: browserAuthorization,
+          "x-tbai-session": fixtureSessionId,
+        },
+      });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+      expect(response.headers.get("cache-control")).toBe("no-cache");
+      expect(response.headers.get("x-upstream-test")).toBe("kept");
+      expect(await response.text()).toBe(bodyText);
+      expect(capturedRequests).toHaveLength(1);
+      expect(capturedRequests[0]?.authorization).toBe(backendAuthorization);
+    } finally {
+      eventResponseFactory = null;
+    }
+  });
+
+  it("preserves chunked SSE bytes and cancellation behavior", async () => {
+    capturedRequests.length = 0;
+    const encoder = new TextEncoder();
+    const chunks = [
+      "event: one\r\n",
+      'data: {"type":"one"}\r\n\r\n',
+      "data: two-part",
+      "\n\n: comment\n\n",
+    ];
+    let cancelled = false;
+    let cancelReason: unknown;
+    eventResponseFactory = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          },
+          pull() {
+            // keep open until cancelled
+            return new Promise(() => {});
+          },
+          cancel(reason) {
+            cancelled = true;
+            cancelReason = reason;
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+
+    try {
+      const response = await openCodeApp.request("http://localhost/api/opencode/event", {
+        headers: {
+          Accept: "text/event-stream",
+          Authorization: browserAuthorization,
+          "x-tbai-session": fixtureSessionId,
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      if (!response.body) throw new Error("missing body");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      // Read until we have all emitted chunks, then cancel.
+      while (received.length < chunks.join("").length) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) received += decoder.decode(value, { stream: true });
+      }
+      expect(received).toBe(chunks.join(""));
+      await reader.cancel("client-cancel");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(cancelled).toBe(true);
+      // Cancellation propagates to upstream; the observed reason may be the
+      // original string or a stream AbortError depending on runtime behavior.
+      const reasonText =
+        typeof cancelReason === "string"
+          ? cancelReason
+          : cancelReason && typeof cancelReason === "object" && "name" in cancelReason
+            ? String((cancelReason as { name?: unknown }).name)
+            : String(cancelReason);
+      expect(reasonText === "client-cancel" || reasonText === "AbortError").toBe(true);
+    } finally {
+      eventResponseFactory = null;
+    }
   });
 });
