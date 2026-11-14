@@ -1,13 +1,16 @@
 # OpenCode Runtime Reliability Audit
 
-> **Superseding note (2026-10-28).** This report is a snapshot dated 2026-10-23
-> and every version reference below describes that snapshot. Since then the CI
-> binary pin and `@opencode/client` moved from 2.1.2 to 2.2.0, and the supported
-> range is now `>=2.0.15 <2.2.1`. Statements that CI "installs/provisions
-> 2.1.2" describe the audited snapshot; the workflow now pins 2.2.0 with the
-> registry's own `dist.integrity`. **That pin has not yet run on a runner.**
-> The measurements quoted below - cold start, and the RT-013 3-of-8 compaction
-> failures - were taken at 2.1.2 and are not restated as 2.2.0 results.
+> **Superseding note (2026-10-28, updated 2026-11-15).** This report is a snapshot
+> dated 2026-10-23 and most version/architecture references below describe that
+> snapshot. Since then the CI binary pin and `@opencode/client` moved to 2.2.0
+> and later to **2.2.6 as the sole supported runtime** (CI pins/verifies
+> `@opencode/cli-windows-x64@2.2.6` with official npm `dist.integrity`). The
+> 2026-11-13 Client-Daemon ADR superseded global DB ownership policing (RM/mutex/
+> foreign-holder refusal) with WAL co-tenancy and adopt-first discovery; claims
+> below reflecting the old ownership model are historical. Measurements quoted
+> below (including RT-013) were taken at 2.1.2 and are not restated as 2.2.6
+> results. Current validation evidence is recorded in
+> `docs/2026-11-10-opencode-recovery-improvement-plan.md`.
 
 ## 1. Audit metadata and source snapshot
 
@@ -72,7 +75,7 @@
 
 - `.github/workflows/tests.yml` (jobs: `verify`, `e2e`, `e2e-big-pickle`, `tauri`)
 - `.github/workflows/tauri-build.yml` (release build)
-- `.github/actions/install-opencode/action.yml` (pinned OpenCode CLI 2.1.2 + SHA-512 at audit time; 2.2.0 since 2026-10-28, not yet run on a runner)
+- `.github/actions/install-opencode/action.yml` (pinned OpenCode CLI 2.1.2 + SHA-512 at audit time; 2.2.6 as of 2026-11-15 standardization)
 - `package.json` (scripts: `test`, `test:e2e`, `test:locations`, `test:shutdown`, `test:startup-rollback`, `test:lifecycle-integration`, `test:dom`, `test:quarantine`, `verify`, `lint`, `typecheck`, `build`)
 - `scripts/run-e2e.ts` (Playwright spec selection)
 - `web/playwright.config.ts` (testDir, live-spec exclusion, projects)
@@ -93,7 +96,7 @@ The OpenCode runtime subsystem carries genuinely strong, source-confirmed mechan
 
 4. **RT-004 / RT-008 (No active health check and no stuck-stream detection — Verification gap, Medium):** Recovery is `onExit`-driven. A process that is alive but unresponsive (frozen, deadlocked, or an event stream that stays open but silent) is **not** detected by any probe: a resolved `readyPromise` is returned without re-contacting the server, and there is no silent-stream detector. The distinction is: **process-exit recovery works** (a crash fires `onExit` and restarts if budget allows); **live-but-unresponsive detection is absent**.
 
-5. **RT-007 (Real-server suites are opt-in; default CI coverage is partial — Verification gap, Medium):** The default `verify` and `e2e` jobs install OpenCode CLI (2.1.2 at audit time; 2.2.0 since 2026-10-28) but **never set `TBAI_OPENCODE_RUNTIME_TESTS`**, so all 8 deep real-server integration suites self-skip. The only OpenCode E2E spec the default `e2e` job runs is `opencode-v2-code-route.spec.ts` (real managed server, no live model call). Crash-recovery, hard-kill, restart-exhaustion, and cross-version behavior are unproven in the standard gate.
+5. **RT-007 (Real-server suites are opt-in; default CI coverage is partial — Verification gap, Medium):** The default `verify` and `e2e` jobs install OpenCode CLI (2.1.2 at audit time; 2.2.6 as of 2026-11-15 standardization) but **never set `TBAI_OPENCODE_RUNTIME_TESTS`**, so all 8 deep real-server integration suites self-skip. The only OpenCode E2E spec the default `e2e` job runs is `opencode-v2-code-route.spec.ts` (real managed server, no live model call). Crash-recovery, hard-kill, restart-exhaustion, and cross-version behavior are unproven in the standard gate.
 
 6. **RT-012 (Frontend ready timeout does not bound end-to-end startup — Source-confirmed, Medium):** `awaitReady()` first calls `ensureLoaded()` (connection + hydration), then applies the remaining `OPENCODE_V2_READY_TIMEOUT_MS` deadline to the readiness gate. The 20 s budget therefore does **not** establish an end-to-end connection-and-hydration deadline: a connection or hydration promise can remain unresolved beyond the advertised figure. This is a distinct risk from the frontend/backend timeout mismatch in RT-009.
 

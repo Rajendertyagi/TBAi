@@ -674,3 +674,39 @@
   - bun run build -> **exit 0** (web build successful and stamped)
 
 - **Remaining limitations / CI status:** Verified locally against exact pinned CI OpenCode binary v2.2.0. Windows CI verification on GitHub Actions for the candidate SHA must pass on push/PR. No push/merge performed. main untouched.
+
+### 14.24 Deep cleanup, sole OpenCode 2.2.6 runtime standardization, and Client-Daemon alignment (2026-11-15, develop)
+
+- **Obsolete ownership enforcement cleanup (ADR-aligned):**
+  - Removed obsolete `OpenCodeDatabaseBusyError`, `OpenCodeDatabaseLeaseContendedError`, and `OpenCodeDatabaseCheckError` classes and unused ownership dependency hooks from `src/services/opencode/ownership.ts`; ownership now retains only database-path resolution and a no-op lease compatibility API (no foreign-process policing, no mutex/RM/holder enumeration).
+  - Removed deprecated Restart Manager/mutex/process-enumeration stubs (`acquireNamedMutex`, `releaseNamedMutex`, `findProcessesUsingFiles`, `getParentPid`, `findDescendantPids`, `NamedMutexLease`) from `src/services/process-ownership.ts` while preserving Windows Job Object, managed-child spawn/launcher, and shell/sidecar lifecycle primitives required by the Client-Daemon architecture.
+  - Updated ownership/startup/lifecycle tests to match decommissioned behavior and approved architecture: `tests/unit/opencode/ownership.test.ts`, `tests/integration/opencode/process-ownership.test.ts`, `tests/integration/opencode/service-continuity-reconnection.test.ts`, and `tests/integration/opencode/serverManager.test.ts` (database-path resolution failure is retried; no `OpenCodeDatabaseBusyError` refusal path).
+  - `tests/integration/opencode/opencode-ownership-runtime.test.ts` and `tests/fixtures/g2-opencode-sidecar.ts` remain aligned with required G2 acceptance: (A) SQLite WAL co-tenancy, (B) adopt-first discovery with owned-only cleanup and adopted service left running, (C) managed process lifecycle via Windows Job Object, reliable managed PID/registration source, shell-kill termination of sidecar+managed child, registration cleanup, restart on same isolated DB, and no orphan.
+
+- **OpenCode 2.2.6 sole supported runtime (repository-wide active alignment):**
+  - CI/workflows/actions: `.github/workflows/tests.yml` and `.github/actions/install-opencode/action.yml` pin `OPENCODE_VERSION=2.2.6` and verify `@opencode/cli-windows-x64@2.2.6` against official npm `dist.integrity` `sha512-Wcmduf9DaGQgJG3GMliHilaI+YvdckW7O6aLzRwz1r3iIkP82MSoUlSU+ovlOEDj8O+Gy5Ywy5LL6Iv77YuzFw==` (verified from `https://registry.npmjs.org/@opencode/cli-windows-x64/2.2.6`). All active CI OpenCode install/verify paths use the shared action or the same pinned version/integrity.
+  - Source/config/runtime: `src/config/opencode.ts` sets `minimumVersion` and user-facing binary guidance to 2.2.6; active OpenCode service/runtime/test/script version expectations and synthetic registration versions updated to 2.2.6 where they represent supported/current behavior.
+  - SDK compatibility: `@opencode/client` remains intentionally pinned to `2.2.6` in root and `web` manifests (no unrelated dependency upgrades).
+  - Current documentation updated to describe 2.2.6 as the sole supported runtime/CI pin where applicable (`docs/ai-integration.md`, `docs/opencode-context.md`, `docs/opencode-v2-contract.md`, `docs/opencode-session-import.md`, `docs/phases.md`, `docs/PROJECT_MANAGER_PROTOCOL.md`, `docs/engineering-quality.md`, `docs/opencode-runtime-audit-final.md` supersession notes). Historical records and prior CI/run evidence referencing 2.2.0 remain factually accurate and are treated as superseded historical evidence, not supported-version requirements.
+
+- **Official package integrity verification:** `@opencode/cli-windows-x64@2.2.6` `dist.integrity` = `sha512-Wcmduf9DaGQgJG3GMliHilaI+YvdckW7O6aLzRwz1r3iIkP82MSoUlSU+ovlOEDj8O+Gy5Ywy5LL6Iv77YuzFw==` (npm registry metadata, 2026-11-15).
+
+- **Validation (local, foreground, native exit codes, 2026-11-15):**
+  - `bun run typecheck` -> **exit 0**
+  - `bun run lint` -> **exit 0** (Biome CI, 1255 files, 0 errors/warnings)
+  - `bun run format:check` -> **exit 0** (after `bun run format` fixed 2 files during cleanup; final check clean)
+  - `bun run test:locations` -> **exit 0**
+  - `bun run build` -> **exit 0**
+  - `TBAI_OPENCODE_RUNTIME_TESTS=1 OPENCODE_BINARY=D:\Coding\OpenCode\opencode.exe bun test tests/integration/opencode/opencode-ownership-runtime.test.ts` -> **exit 0** (3 pass, 0 fail, 48 expect() calls, OpenCode `v2.2.6`)
+  - `TBAI_OPENCODE_RUNTIME_TESTS=1 OPENCODE_BINARY=D:\Coding\OpenCode\opencode.exe bun run test:opencode-runtime` -> **exit 0** (**9/9 required runtime suites passed**, OpenCode `v2.2.6`)
+  - Targeted ownership/registration/startup/server-manager/lifecycle tests (`tests/unit/opencode/{ownership,registration,startup,runtime,compatibility,adoption-attempts,recovery,runtimeTarget}.test.ts`, `tests/integration/opencode/{process-ownership,serverManager,service-continuity-reconnection}.test.ts`) -> **exit 0** (257 pass, 1 skip, 0 fail, 661 expect() calls)
+  - `bun run test:shutdown` -> **exit 0** (1 pass, 0 fail)
+  - `bun run test:startup-rollback` -> **exit 0** (2 pass, 0 fail)
+  - `bun run test:lifecycle-integration` -> **exit 0** (3 pass, 0 fail)
+  - `bun run test` -> **exit 0** (6079 pass, 79 skip, 0 fail, 31194 expect() calls, 461 files)
+  - `bun run test:dom` -> **exit 0** (814 pass, 0 fail, 4612 expect() calls, 82 files) after restoring `OpenCodePrimaryStatus` UI copy/DOM test encoding to the committed ellipsis form while preserving 2.2.6 fixture updates
+  - `bun run test:quarantine` -> **exit 0** (no stale quarantine entries)
+
+- **GitHub publication / Actions:** _pending — to be recorded after push and exact-SHA verification in this session._
+
+- **Remaining limitations:** Local validation is complete on Windows against the exact pinned OpenCode binary `v2.2.6`. GitHub Actions verification for the published SHA is still required (`verify`, `opencode-runtime`, `e2e`, `opencode-g3`, `tauri` as applicable); no CI claim is made before those results are inspected. `main` remains untouched. Historical 2.2.0 references in prior roadmap/decision/audit records are retained as superseded historical evidence, not supported-version requirements.

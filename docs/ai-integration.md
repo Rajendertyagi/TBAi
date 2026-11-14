@@ -39,7 +39,7 @@ Key points:
 
 ## OpenCode V2 Code surface
 
-Code mode uses the official `@opencode/client@2.2.0` behind
+Code mode uses the official `@opencode/client@2.2.6` behind
 `web/src/features/opencode/v2Client.ts`. The client is scoped to the
 backend-minted session and directory, subscribes before hydration, and exposes
 only generation-bound operations. `v2ThreadController.ts` owns the domain state and

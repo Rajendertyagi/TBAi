@@ -101,4 +101,4 @@ All frontend OpenCode API requests pass through the authenticated reverse proxy 
 2. **Server Deletions**:
    - If an imported session is deleted externally on the OpenCode server, TBAi marks the session as missing. To resume work, the user can create a new native TBAi session in the same directory.
 3. **OpenCode Versions**:
-   - Supported on OpenCode version 2.2.0 and newer stable releases.
+   - Supported on OpenCode version 2.2.6 (sole supported runtime). Stable releases at or above 2.2.6 are admitted by policy with live capability checks.
