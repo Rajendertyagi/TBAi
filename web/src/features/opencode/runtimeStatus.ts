@@ -27,6 +27,7 @@
  */
 
 import { create } from "zustand";
+import { useAvailabilityStore } from "../availability/availabilityStore";
 
 /** The routes the adoption probe checks. Mirrors the backend's capability ids. */
 export type OpenCodeCapabilityId = "session" | "events" | "config" | "agent" | "model" | "command";
@@ -204,20 +205,85 @@ export function sameOpenCodeRuntimeTarget(
 interface RuntimeTargetState {
   /** Latest successfully observed runtime status (shared invalidation signal). */
   status: OpenCodeRuntimeStatus | null;
+  /** Recovery epoch associated with the last accepted runtime status publication. */
+  acceptedRecoveryEpoch: number;
 }
 
 export const useRuntimeTargetStore = create<RuntimeTargetState>()(() => ({
   status: null,
+  acceptedRecoveryEpoch: -1,
 }));
 
+function isNewerRuntimePublication(
+  current: OpenCodeRuntimeStatus | null,
+  currentEpoch: number,
+  next: OpenCodeRuntimeStatus,
+  nextEpoch: number,
+): boolean {
+  if (!current) return true;
+  if (nextEpoch !== currentEpoch) return nextEpoch > currentEpoch;
+  if (next.targetRevision !== current.targetRevision) {
+    return next.targetRevision > current.targetRevision;
+  }
+  // Same epoch/revision: allow same identity updates (e.g. richer status details)
+  // but never roll identity/mode backward within the same revision.
+  if (next.targetId !== current.targetId || next.mode !== current.mode) {
+    return false;
+  }
+  return true;
+}
+
 /** Publishes the latest observed runtime status for cross-store invalidation. */
-export function publishRuntimeStatus(status: OpenCodeRuntimeStatus): void {
-  useRuntimeTargetStore.setState({ status });
+export function publishRuntimeStatus(
+  status: OpenCodeRuntimeStatus,
+  recoveryEpoch = useAvailabilityStore.getState().recoveryEpoch,
+): void {
+  useRuntimeTargetStore.setState((state) => {
+    if (
+      !isNewerRuntimePublication(state.status, state.acceptedRecoveryEpoch, status, recoveryEpoch)
+    ) {
+      return state;
+    }
+    return { status, acceptedRecoveryEpoch: recoveryEpoch };
+  });
+}
+
+/** Publishes a runtime target identity update (e.g. from lifecycle events). */
+export function publishRuntimeTargetIdentity(
+  identity: OpenCodeRuntimeTargetIdentity & { mode: OpenCodeRuntimeStatus["mode"] },
+  recoveryEpoch = useAvailabilityStore.getState().recoveryEpoch,
+): void {
+  const current = useRuntimeTargetStore.getState().status;
+  let next: OpenCodeRuntimeStatus;
+  if (identity.mode === "adopted") {
+    next = {
+      mode: "adopted",
+      capabilities:
+        current?.mode === "adopted" && sameOpenCodeRuntimeTarget(current, identity)
+          ? current.capabilities
+          : null,
+      targetRevision: identity.targetRevision,
+      targetId: identity.targetId,
+    };
+  } else if (identity.mode === "managed") {
+    next = {
+      mode: "managed",
+      targetRevision: identity.targetRevision,
+      targetId: identity.targetId,
+    };
+  } else {
+    next = {
+      mode: "unresolved",
+      targetRevision: identity.targetRevision,
+      targetId: identity.targetId,
+    };
+  }
+  publishRuntimeStatus(next, recoveryEpoch);
 }
 
 /** Test-only reset for the shared runtime target signal. */
 export function resetRuntimeTargetStoreForTests(): void {
-  useRuntimeTargetStore.setState({ status: null });
+  useRuntimeTargetStore.setState({ status: null, acceptedRecoveryEpoch: -1 });
 }
 
 /**

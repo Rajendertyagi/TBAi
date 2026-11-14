@@ -69,6 +69,11 @@ import {
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 import { openCodeSessionActivitySchema } from "../lib/validation";
+import { disableIdleTimeout } from "./shared";
+import {
+  readRuntimeTargetChange,
+  subscribeRuntimeTargetChanges,
+} from "../services/opencode/connectionState";
 
 const sessionRequestSchema = z.object({
   conversationId: z.string().min(1),
@@ -551,6 +556,71 @@ app.get("/commands", async (c) => {
  * path and the probe bodies stay in the backend (§4.2).
  */
 app.get("/status", (c) => c.json(describeOpenCodeRuntime()));
+
+/**
+ * Runtime target lifecycle notifications for active frontend consumers.
+ *
+ * Emits the current target identity on connect and again whenever the installed
+ * OpenCode target/revision changes (install, clear, replace, managed/adopted
+ * transitions, adopted loss/restore, shutdown/unresolved). This is a TBAi
+ * runtime signal, not the upstream OpenCode event stream proxied below.
+ */
+app.get("/runtime/events", (c) => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      disableIdleTimeout(c);
+      let closed = false;
+      const send = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const onChange = (change: {
+        targetRevision: number;
+        targetId: number | null;
+        mode: string;
+      }) => {
+        send("opencode.runtime_target", change);
+      };
+      const unsubscribe = subscribeRuntimeTargetChanges(onChange);
+      // Send current state immediately so a subscriber never misses a transition
+      // that happened just before it connected.
+      send("opencode.runtime_target", readRuntimeTargetChange());
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          closed = true;
+        }
+      }, 15000);
+      const abort = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(heartbeat);
+        unsubscribe();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
+      c.req.raw.signal.addEventListener("abort", abort);
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+});
 
 /**
  * Live capability discovery for the unified new-chat picker. Returns the agents

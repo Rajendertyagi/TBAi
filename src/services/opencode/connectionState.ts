@@ -332,6 +332,51 @@ export function readConnectionState(): OpenCodeConnectionState {
   return connectionState;
 }
 
+/** Minimal runtime target identity carried by lifecycle notifications. */
+export interface OpenCodeRuntimeTargetChange {
+  readonly targetRevision: number;
+  readonly targetId: number | null;
+  readonly mode: "unresolved" | "managed" | "adopted";
+}
+
+type RuntimeTargetChangeListener = (change: OpenCodeRuntimeTargetChange) => void;
+
+const runtimeTargetChangeListeners = new Set<RuntimeTargetChangeListener>();
+
+/** Current runtime target identity snapshot for notifications and late subscribers. */
+export function readRuntimeTargetChange(): OpenCodeRuntimeTargetChange {
+  const state = readConnectionState();
+  const target = state.target;
+  return Object.freeze({
+    targetRevision: state.revision,
+    targetId: target.mode === "unresolved" ? null : target.targetId,
+    mode: target.mode,
+  });
+}
+
+/**
+ * Subscribes to runtime target identity changes published after connection-state
+ * writes that affect the installed target/revision. Returns an unsubscribe function.
+ */
+export function subscribeRuntimeTargetChanges(listener: RuntimeTargetChangeListener): () => void {
+  runtimeTargetChangeListeners.add(listener);
+  return () => {
+    runtimeTargetChangeListeners.delete(listener);
+  };
+}
+
+function publishRuntimeTargetChange(): void {
+  if (runtimeTargetChangeListeners.size === 0) return;
+  const change = readRuntimeTargetChange();
+  for (const listener of Array.from(runtimeTargetChangeListeners)) {
+    try {
+      listener(change);
+    } catch {
+      // A subscriber failure must not break state publication or other subscribers.
+    }
+  }
+}
+
 /** The current attempt id, or null when none has been created. */
 export function currentAttemptId(): number | null {
   return currentAttempt?.attemptId ?? null;
@@ -477,6 +522,7 @@ function refuseAfterShutdown(): void {
 
 function writeState(next: OpenCodeConnectionState): void {
   connectionState = next;
+  publishRuntimeTargetChange();
 }
 
 /** Reads the shutdown pair from ONE state snapshot. The only production reader. */
@@ -782,4 +828,5 @@ export function resetConnectionStateForTests(): void {
   shutdownCompletion = null;
   shutdownStopProvider = null;
   shutdownStateReaderOverride = null;
+  runtimeTargetChangeListeners.clear();
 }

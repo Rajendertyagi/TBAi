@@ -52,6 +52,8 @@ export interface OpenCodeRuntimeTarget {
   readonly mode: "managed" | "adopted";
   /** Unique target identity when installed. */
   readonly targetId?: number;
+  /** Connection-state revision of the resolved target snapshot. */
+  readonly targetRevision: number;
   /** Canonical, slash-free origin. */
   readonly baseUrl: string;
   /**
@@ -99,6 +101,7 @@ function captureInstalled(target: OpenCodeTarget & { mode: "managed" | "adopted"
   return Object.freeze<OpenCodeRuntimeTarget>({
     mode: target.mode,
     targetId: target.targetId,
+    targetRevision: context.revision,
     baseUrl: context.baseUrl,
     transport: context.transport,
     capabilities: target.mode === "adopted" ? target.capabilities : null,
@@ -134,11 +137,13 @@ export async function resolveOpenCodeRuntimeTarget(
 
   // The managed start publishes a target before it resolves. Re-read rather
   // than assume, so an adopted target installed concurrently still wins.
-  const published = readConnectionState().target;
+  const publishedState = readConnectionState();
+  const published = publishedState.target;
   if (published.mode !== "unresolved") return captureInstalled(published);
 
   return Object.freeze<OpenCodeRuntimeTarget>({
     mode: "managed",
+    targetRevision: publishedState.revision,
     baseUrl,
     transport: createManagedFallbackTransport(baseUrl),
     capabilities: null,

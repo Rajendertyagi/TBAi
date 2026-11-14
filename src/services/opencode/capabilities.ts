@@ -333,12 +333,26 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     };
   });
 
-  const state = readConnectionState();
   const targetIdentity: OpenCodeCapabilitiesTarget = {
-    targetRevision: state.revision,
+    targetRevision: target.targetRevision,
     targetId: target.targetId ?? null,
     mode: target.mode,
   };
+
+  // If the resolved target was superseded during the read, the transport is
+  // invalidated and requests fail; a successful read must still be tagged with
+  // the exact captured target identity it was obtained from.
+  const current = readConnectionState().target;
+  if (
+    current.mode === "unresolved" ||
+    current.targetId !== target.targetId ||
+    readConnectionState().revision !== target.targetRevision
+  ) {
+    // The active target changed after this catalogue was read. Returning it
+    // tagged as the new target would mix identities; callers will refresh for
+    // the current target, so report this read as superseded.
+    throw toOpenCodeError(new Error("OpenCode runtime target changed during capabilities read"));
+  }
 
   logger.info("opencode", "opencode.capabilities", {
     agents: agents.length,

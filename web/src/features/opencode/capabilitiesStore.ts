@@ -6,6 +6,7 @@ import {
   useRuntimeTargetStore,
   type OpenCodeRuntimeTargetIdentity,
 } from "./runtimeStatus";
+import { acquireRuntimeTargetEvents, releaseRuntimeTargetEvents } from "./runtimeTargetEvents";
 
 export interface OpenCodeAgentOption {
   id: string;
@@ -479,6 +480,9 @@ useRuntimeTargetStore.subscribe((state, prev) => {
  */
 export function acquireCapabilities(): void {
   activeSubscribers += 1;
+  if (activeSubscribers === 1) {
+    acquireRuntimeTargetEvents();
+  }
   const epoch = currentRecoveryEpoch();
   const known = currentKnownTarget();
   if (known) lastKnownTarget = known;
@@ -503,7 +507,12 @@ export function acquireCapabilities(): void {
 
 /** Releases an enabled capabilities consumer. Never clears shared data. */
 export function releaseCapabilities(): void {
-  activeSubscribers = Math.max(0, activeSubscribers - 1);
+  if (activeSubscribers > 0) {
+    activeSubscribers -= 1;
+    if (activeSubscribers === 0) {
+      releaseRuntimeTargetEvents();
+    }
+  }
 }
 
 /** Test-only: reset shared capabilities state and subscriber/request tracking. */
@@ -520,5 +529,6 @@ export function resetCapabilitiesStoreForTests(): void {
   needsRefreshForTarget = false;
   lastKnownTarget = null;
   targetRefreshScheduled = false;
+  releaseRuntimeTargetEvents();
   useCapabilitiesStore.setState(initialState);
 }

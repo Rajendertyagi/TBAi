@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../../lib/platform";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import {
   publishRuntimeStatus,
   readOpenCodeRuntimeStatus,
+  useRuntimeTargetStore,
   type OpenCodeRuntimeStatus,
 } from "./runtimeStatus";
+import { acquireRuntimeTargetEvents, releaseRuntimeTargetEvents } from "./runtimeTargetEvents";
 
 /**
  * Reads which OpenCode service the backend is bound to.
@@ -42,12 +44,33 @@ export function useOpenCodeRuntimeStatus(
   // The backend returning is the one event that can change the mode without the
   // browser having caused it (a fallback after a confirmed loss).
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
+  const observedTarget = useRuntimeTargetStore((s) => s.status);
+  const [targetRefreshNonce, setTargetRefreshNonce] = useState(0);
+  const lastFetchedTargetRef = useRef<string | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` is a store counter that is never read in the body - it is the refetch trigger. Availability recovery changes no prop this effect observes, but a mode read before the backend went away has to be read again once it returns.
+  useEffect(() => {
+    if (!enabled) return;
+    acquireRuntimeTargetEvents();
+    return () => {
+      releaseRuntimeTargetEvents();
+    };
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !observedTarget) return;
+    const key = `${observedTarget.targetRevision}:${observedTarget.targetId ?? "null"}:${observedTarget.mode}`;
+    if (lastFetchedTargetRef.current === key) return;
+    // A runtime target lifecycle notification arrived (or was published) with a
+    // target identity this hook has not fetched yet; refetch authoritative status.
+    setTargetRefreshNonce((n) => n + 1);
+  }, [enabled, observedTarget]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` and `targetRefreshNonce` are refetch triggers. Availability recovery and runtime target lifecycle events change no prop this effect observes, but a stale status must be re-read when they occur.
   useEffect(() => {
     if (!enabled) {
       setStatus(null);
       setError(null);
+      lastFetchedTargetRef.current = null;
       return;
     }
     const controller = new AbortController();
@@ -56,6 +79,7 @@ export function useOpenCodeRuntimeStatus(
       .then(readOpenCodeRuntimeStatus)
       .then((next) => {
         if (cancelled) return;
+        lastFetchedTargetRef.current = `${next.targetRevision}:${next.targetId ?? "null"}:${next.mode}`;
         setStatus(next);
         setError(null);
         publishRuntimeStatus(next);
@@ -71,7 +95,7 @@ export function useOpenCodeRuntimeStatus(
       cancelled = true;
       controller.abort();
     };
-  }, [enabled, recoveryEpoch, refreshKey]);
+  }, [enabled, recoveryEpoch, refreshKey, targetRefreshNonce]);
 
   return { status, error };
 }

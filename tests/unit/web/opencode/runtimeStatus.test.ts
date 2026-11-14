@@ -17,13 +17,18 @@
  * agree about what a mode means.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { useAvailabilityStore } from "@web/features/availability/availabilityStore.ts";
 import {
   OPENCODE_UNAVAILABLE_NOTICE,
   openCodeCapabilitySupported,
   parseOpenCodeRuntimeStatus,
+  publishRuntimeStatus,
+  publishRuntimeTargetIdentity,
   readOpenCodeRuntimeStatus,
+  resetRuntimeTargetStoreForTests,
   runtimeStatusView,
+  useRuntimeTargetStore,
   type OpenCodeRuntimeCapabilities,
   type OpenCodeRuntimeStatus,
 } from "@web/features/opencode/runtimeStatus.ts";
@@ -216,6 +221,33 @@ describe("runtimeStatusView", () => {
   it("keeps the unavailable sentence with the status that means it", () => {
     // The chip and the config page must not each invent their own wording.
     expect(OPENCODE_UNAVAILABLE_NOTICE).toBe("OpenCode is not available");
+  });
+});
+
+describe("runtime status publication ordering", () => {
+  afterEach(() => {
+    resetRuntimeTargetStoreForTests();
+    useAvailabilityStore.setState({ recoveryEpoch: 0 });
+  });
+
+  it("does not let an older HTTP status overwrite a newer target notification in the same recovery epoch", () => {
+    publishRuntimeTargetIdentity({ mode: "managed", targetRevision: 2, targetId: 2 }, 0);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 }, 0);
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      targetRevision: 2,
+      targetId: 2,
+    });
+  });
+
+  it("accepts a lower target revision after backend process recovery resets revision when recovery epoch advances", () => {
+    publishRuntimeStatus({ mode: "managed", targetRevision: 5, targetId: 5 }, 1);
+    publishRuntimeTargetIdentity({ mode: "managed", targetRevision: 1, targetId: 10 }, 2);
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      targetRevision: 1,
+      targetId: 10,
+    });
   });
 });
 
