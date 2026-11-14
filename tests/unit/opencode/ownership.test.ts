@@ -51,39 +51,48 @@ describe("resolveOpenCodeDatabasePath", () => {
   });
 });
 
-describe("OpenCodeDatabaseOwnership (Phase 1 decommissioned watchdog)", () => {
-  it("resolves the database path without acquiring mutexes or querying OS file holders", async () => {
+describe("OpenCodeDatabaseOwnership", () => {
+  it("acquires the lease, verifies the managed child, and releases the mutex when no foreign holder exists", async () => {
+    const { dir, file } = tempDatabaseFile();
     let resolveCalls = 0;
     let holderCalls = 0;
-    let mutexCalls = 0;
+    let mutexAcquireCalls = 0;
+    let mutexReleaseCalls = 0;
     const lease = new OpenCodeDatabaseOwnership({
       deps: {
         platform: "win32",
+        pid: 111,
         resolveDatabasePath: async () => {
           resolveCalls += 1;
-          return DB_PATH;
+          return file;
         },
         findProcessesUsingFiles: () => {
           holderCalls += 1;
-          return [4242];
+          // acquire(): no foreign holders; verifyChild(): managed child holds the DB.
+          return holderCalls === 1 ? [] : [777];
         },
         acquireMutex: () => {
-          mutexCalls += 1;
-          return { handle: 0n };
+          mutexAcquireCalls += 1;
+          return { handle: 1n as unknown as never };
         },
         releaseMutex: () => {
-          mutexCalls += 1;
+          mutexReleaseCalls += 1;
         },
       },
     });
 
-    await expect(lease.acquire("opencode", "C:\\work")).resolves.toBe(DB_PATH);
-    await expect(lease.verifyChild(777, DB_PATH)).resolves.toBeUndefined();
-    lease.release();
+    try {
+      await expect(lease.acquire("opencode", "C:\\work")).resolves.toBe(file);
+      await expect(lease.verifyChild(777, file)).resolves.toBeUndefined();
+      lease.release();
 
-    expect(resolveCalls).toBe(1);
-    expect(holderCalls).toBe(0);
-    expect(mutexCalls).toBe(0);
+      expect(resolveCalls).toBe(1);
+      expect(holderCalls).toBeGreaterThanOrEqual(2);
+      expect(mutexAcquireCalls).toBe(1);
+      expect(mutexReleaseCalls).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("returns null for an in-memory database without locking or holder inspection", async () => {
@@ -99,7 +108,10 @@ describe("OpenCodeDatabaseOwnership (Phase 1 decommissioned watchdog)", () => {
         },
         acquireMutex: () => {
           mutexCalls += 1;
-          return { handle: 0n };
+          return { handle: 0n as unknown as never };
+        },
+        releaseMutex: () => {
+          mutexCalls += 1;
         },
       },
     });

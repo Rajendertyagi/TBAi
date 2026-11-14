@@ -619,3 +619,33 @@
 - **Roadmap status:** `LIB-IMPL-01` through `LIB-IMPL-04` remain **DONE**. No unrelated conditional reliability tasks marked DONE/reopened.
 
 - **Remaining limitations / CI-only:** no live OpenCode server/runtime/browser verification performed. CI-only jobs not executed locally (`opencode-runtime`, scoped `e2e`, `opencode-g3`, `tauri`, dispatch-only jobs). Bun pinned to 1.4.4 in workflows/docs as part of follow-up; no material version discrepancy observed in this validation run. No push/merge performed. `main` untouched.
+
+### 14.22 G2 real-server database ownership CI failure diagnosis and fix (2026-11-14, `develop`)
+
+- **Workspace / Git safety:** canonical workspace `D:\Temp\ai-chat-app`, branch `develop`, published HEAD `73c948dfc9dfd73cbf0e0d191a20ba549e1ae468` (matches `origin/develop` at diagnosis start), working tree clean before edits. `main` untouched; no clone/worktree, no push/merge/amend/rebase/reset/force-push, no destructive git operations, no broad staging. Unrelated user files preserved.
+
+- **Failing CI evidence (run 43601916918, SHA `73c948d`, job `opencode-runtime`, Windows Server 2025, OpenCode 2.2.0, Bun 1.4.4):** `tests/integration/opencode/opencode-ownership-runtime.test.ts` (`G2 real-server database ownership`) failed 2/2:
+  - `refuses when a foreign OpenCode already holds the database, and leaves it running`: expected foreign PID `9976` in DB-holder results, received `[]` (`tests/integration/opencode/opencode-ownership-runtime.test.ts:278`).
+  - `kills the managed OpenCode with the shell and restarts on the same database`: no OpenCode DB-holder PID found (`expect(firstOpenCode).toBeDefined()` received `undefined`, `:324`).
+
+- **Root cause (direct evidence):** commit `a357591` (`feat(opencode): client-daemon architecture, atomic registration, and packaged CORS allowlist`) decommissioned Windows Restart Manager, named database mutexes, and foreign process/file-holder inspection from the OpenCode ownership/startup path, but did not update/remove the required G2 real-binary ownership acceptance tests or the `opencode-runtime` CI gate.
+  - `src/services/process-ownership.ts` stubbed `findProcessesUsingFiles` to always return `[]` and removed RM/mutex/process-enumeration support, so `holdersOf()` in the runtime test/sidecar could never observe the foreign or managed OpenCode DB holder.
+  - `src/services/opencode/ownership.ts` replaced `OpenCodeDatabaseOwnership` with a no-op lease that resolved the DB path but never acquired a mutex, never queried holders, never refused on foreign ownership, and never verified the managed child; `OpenCodeDatabaseBusyError` was no longer thrown by the lease. The sidecar therefore did not refuse when a foreign OpenCode already held the isolated database.
+  - The runtime test and sidecar (`tests/fixtures/g2-opencode-sidecar.ts`) still depended on real holder discovery and `OpenCodeDatabaseBusyError` refusal semantics, so both failures were deterministic consequences of the decommissioned implementation, not a flaky timing issue.
+
+- **Fix (minimal, durable, ownership-preserving):**
+  - Restored Windows Restart Manager file-holder detection, named per-database mutex serialization, and process-enumeration helpers in `src/services/process-ownership.ts` (`findProcessesUsingFiles`, `acquireNamedMutex`/`releaseNamedMutex`, `getParentPid`/`findDescendantPids`, `resolveManagedServicePid` holder-aware resolution) while preserving existing job/spawn/launcher primitives used by the current server manager.
+  - Restored fail-closed database ownership enforcement in `src/services/opencode/ownership.ts`: resolve DB path, take per-path mutex, refuse when another TBAi backend holds the lease or a foreign process already holds/shares the DB, verify after readiness that DB files exist and only the managed child (and self) hold them, and release the lease on completion/failure paths. `OpenCodeDatabaseBusyError`/`OpenCodeDatabaseCheckError` semantics restored for the managed startup path.
+  - Kept API compatibility for existing callers/tests (`OpenCodeDatabaseOwnershipDeps` accepts deprecated `isOpenCodeCoTenant` hook; lease interface unchanged for `serverManager`).
+  - Updated `tests/unit/opencode/ownership.test.ts` (previously asserting decommissioned no-op behavior) to assert restored ownership behavior (mutex acquisition/release, holder checks, managed-child verification, in-memory/non-Windows/path-error cases preserved). No runtime acceptance tests weakened, skipped, quarantined, or mocked.
+
+- **Validation (local, native exit codes):**
+  - `bun run typecheck` -> **exit 0**
+  - `bun run lint` -> **exit 0**
+  - `bun run format:check` -> **exit 0**
+  - `bun test tests/unit/opencode/ownership.test.ts tests/integration/opencode/process-ownership.test.ts` -> **exit 0** (14 pass, 0 fail, 32 expect() calls)
+  - `bun test tests/integration/opencode/serverManager.test.ts` -> **exit 0** (40 pass, 0 fail, 72 expect() calls)
+
+- **Not run locally / CI-only:** `tests/integration/opencode/opencode-ownership-runtime.test.ts` (requires `TBAI_OPENCODE_RUNTIME_TESTS=1` and real OpenCode binary/runtime environment), full `opencode-runtime` suite, and GitHub Windows CI verification for the candidate SHA were not executed in this session. The fix targets the diagnosed root cause but **Windows CI `opencode-runtime` must pass on the candidate SHA before claiming success**.
+
+- **Remaining limitations:** no live OpenCode server/runtime/browser verification performed locally. No push/merge performed. `main` untouched. Candidate fix is uncommitted at time of roadmap update in this step and must be committed as a focused change for review/CI.
