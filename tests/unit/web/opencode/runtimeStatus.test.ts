@@ -33,6 +33,8 @@ import {
   type OpenCodeRuntimeStatus,
 } from "@web/features/opencode/runtimeStatus.ts";
 
+const BID = "backend-instance";
+
 const CAPABILITIES: OpenCodeRuntimeCapabilities = {
   version: "2.3.1",
   supported: {
@@ -48,6 +50,7 @@ const CAPABILITIES: OpenCodeRuntimeCapabilities = {
 const ADOPTED: OpenCodeRuntimeStatus = {
   mode: "adopted",
   capabilities: CAPABILITIES,
+  backendInstanceId: BID,
   targetRevision: 3,
   targetId: 7,
 };
@@ -55,19 +58,31 @@ const ADOPTED: OpenCodeRuntimeStatus = {
 describe("parseOpenCodeRuntimeStatus", () => {
   it("accepts the two capability-free modes", () => {
     expect(
-      parseOpenCodeRuntimeStatus({ mode: "unresolved", targetRevision: 0, targetId: null }),
+      parseOpenCodeRuntimeStatus({
+        mode: "unresolved",
+        backendInstanceId: BID,
+        targetRevision: 0,
+        targetId: null,
+      }),
     ).toEqual({
       mode: "unresolved",
+      backendInstanceId: BID,
       targetRevision: 0,
       targetId: null,
     });
-    expect(parseOpenCodeRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 5 })).toEqual(
-      {
+    expect(
+      parseOpenCodeRuntimeStatus({
         mode: "managed",
+        backendInstanceId: BID,
         targetRevision: 2,
         targetId: 5,
-      },
-    );
+      }),
+    ).toEqual({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 2,
+      targetId: 5,
+    });
   });
 
   it("carries the adopted capability snapshot", () => {
@@ -75,12 +90,14 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: CAPABILITIES,
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
     ).toEqual({
       mode: "adopted",
       capabilities: CAPABILITIES,
+      backendInstanceId: BID,
       targetRevision: 3,
       targetId: 7,
     });
@@ -91,12 +108,14 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: null,
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
     ).toEqual({
       mode: "adopted",
       capabilities: null,
+      backendInstanceId: BID,
       targetRevision: 3,
       targetId: 7,
     });
@@ -112,12 +131,14 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: partial,
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
     ).toEqual({
       mode: "adopted",
       capabilities: null,
+      backendInstanceId: BID,
       targetRevision: 3,
       targetId: 7,
     });
@@ -129,12 +150,14 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: wrongType,
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
     ).toEqual({
       mode: "adopted",
       capabilities: null,
+      backendInstanceId: BID,
       targetRevision: 3,
       targetId: 7,
     });
@@ -145,18 +168,43 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: { supported: { session: true } },
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
-    ).toEqual({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 7 });
+    ).toEqual({
+      mode: "adopted",
+      capabilities: null,
+      backendInstanceId: BID,
+      targetRevision: 3,
+      targetId: 7,
+    });
     expect(
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: { version: "", supported: {} },
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 7,
       }),
-    ).toEqual({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 7 });
+    ).toEqual({
+      mode: "adopted",
+      capabilities: null,
+      backendInstanceId: BID,
+      targetRevision: 3,
+      targetId: 7,
+    });
+  });
+
+  it("defaults missing backend instance identity for legacy/unreadable identity fields", () => {
+    expect(parseOpenCodeRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 5 })).toEqual(
+      {
+        mode: "managed",
+        backendInstanceId: "",
+        targetRevision: 2,
+        targetId: 5,
+      },
+    );
   });
 
   it("rejects an unknown mode instead of guessing", () => {
@@ -179,9 +227,15 @@ describe("parseOpenCodeRuntimeStatus", () => {
 
 describe("readOpenCodeRuntimeStatus", () => {
   it("reads a successful response", async () => {
-    const response = Response.json({ mode: "managed", targetRevision: 2, targetId: 5 });
+    const response = Response.json({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 2,
+      targetId: 5,
+    });
     expect(await readOpenCodeRuntimeStatus(response)).toEqual({
       mode: "managed",
+      backendInstanceId: BID,
       targetRevision: 2,
       targetId: 5,
     });
@@ -202,7 +256,14 @@ describe("readOpenCodeRuntimeStatus", () => {
 
 describe("runtimeStatusView", () => {
   it("names each mode without implying who started what", () => {
-    expect(runtimeStatusView({ mode: "managed", targetRevision: 2, targetId: 5 })).toEqual({
+    expect(
+      runtimeStatusView({
+        mode: "managed",
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 5,
+      }),
+    ).toEqual({
       label: "Managed service",
       detail: null,
       unresolved: false,
@@ -214,7 +275,12 @@ describe("runtimeStatusView", () => {
   });
 
   it("marks unresolved as NOT started, and as unresolved", () => {
-    const view = runtimeStatusView({ mode: "unresolved", targetRevision: 0, targetId: null });
+    const view = runtimeStatusView({
+      mode: "unresolved",
+      backendInstanceId: BID,
+      targetRevision: 0,
+      targetId: null,
+    });
     expect(view).toEqual({ label: "Not started", detail: null, unresolved: true });
   });
 
@@ -231,22 +297,160 @@ describe("runtime status publication ordering", () => {
   });
 
   it("does not let an older HTTP status overwrite a newer target notification in the same recovery epoch", () => {
-    publishRuntimeTargetIdentity({ mode: "managed", targetRevision: 2, targetId: 2 }, 0);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 }, 0);
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: BID, targetRevision: 2, targetId: 2 },
+      0,
+    );
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+      0,
+    );
     expect(useRuntimeTargetStore.getState().status).toEqual({
       mode: "managed",
+      backendInstanceId: BID,
       targetRevision: 2,
       targetId: 2,
     });
   });
 
   it("accepts a lower target revision after backend process recovery resets revision when recovery epoch advances", () => {
-    publishRuntimeStatus({ mode: "managed", targetRevision: 5, targetId: 5 }, 1);
-    publishRuntimeTargetIdentity({ mode: "managed", targetRevision: 1, targetId: 10 }, 2);
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 5, targetId: 5 },
+      1,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 1, targetId: 10 },
+      2,
+    );
     expect(useRuntimeTargetStore.getState().status).toEqual({
       mode: "managed",
+      backendInstanceId: "instance-b",
       targetRevision: 1,
       targetId: 10,
+    });
+  });
+
+  it("accepts a lower target revision from a new backend instance even without recovery epoch advance", () => {
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 5, targetId: 5 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 1, targetId: 10 },
+      0,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 1,
+      targetId: 10,
+    });
+  });
+
+  it("rejects an old in-flight status response from a previous backend instance after a newer instance is accepted", () => {
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 5, targetId: 5 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 1, targetId: 10 },
+      0,
+    );
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 6, targetId: 6 },
+      0,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 1,
+      targetId: 10,
+    });
+  });
+
+  it("keeps target revisions ordered within one backend instance", () => {
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: BID, targetRevision: 2, targetId: 2 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: BID, targetRevision: 3, targetId: 3 },
+      0,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 3,
+      targetId: 3,
+    });
+  });
+
+  it("does not let an old target event from a previous backend instance roll back an accepted new instance", () => {
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 5, targetId: 5 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 1, targetId: 10 },
+      0,
+    );
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 99, targetId: 5 },
+      0,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 1,
+      targetId: 10,
+    });
+  });
+
+  it("preserves recoveryEpoch behavior across backend restart scenarios", () => {
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-a", targetRevision: 5, targetId: 5 },
+      1,
+    );
+    // New backend instance accepted at same recovery epoch (restart without epoch advance).
+    publishRuntimeTargetIdentity(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 1, targetId: 10 },
+      1,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 1,
+      targetId: 10,
+    });
+    expect(useRuntimeTargetStore.getState().acceptedRecoveryEpoch).toBe(1);
+
+    // Recovery epoch advance still accepted for same/new instance publications.
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "instance-b", targetRevision: 2, targetId: 11 },
+      2,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 2,
+      targetId: 11,
+    });
+    expect(useRuntimeTargetStore.getState().acceptedRecoveryEpoch).toBe(2);
+
+    // Older recovery epoch from unknown/legacy identity must not roll back.
+    publishRuntimeStatus(
+      { mode: "managed", backendInstanceId: "", targetRevision: 99, targetId: 99 },
+      1,
+    );
+    expect(useRuntimeTargetStore.getState().status).toEqual({
+      mode: "managed",
+      backendInstanceId: "instance-b",
+      targetRevision: 2,
+      targetId: 11,
     });
   });
 });
@@ -254,11 +458,14 @@ describe("runtime status publication ordering", () => {
 describe("openCodeCapabilitySupported", () => {
   it("does not hide anything for a managed service (nothing was assessed)", () => {
     expect(
-      openCodeCapabilitySupported({ mode: "managed", targetRevision: 1, targetId: 1 }, "config"),
+      openCodeCapabilitySupported(
+        { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+        "config",
+      ),
     ).toBe(true);
     expect(
       openCodeCapabilitySupported(
-        { mode: "unresolved", targetRevision: 0, targetId: null },
+        { mode: "unresolved", backendInstanceId: BID, targetRevision: 0, targetId: null },
         "config",
       ),
     ).toBe(true);
@@ -267,7 +474,13 @@ describe("openCodeCapabilitySupported", () => {
   it("does not hide anything when the adopted snapshot is unknown", () => {
     expect(
       openCodeCapabilitySupported(
-        { mode: "adopted", capabilities: null, targetRevision: 1, targetId: 1 },
+        {
+          mode: "adopted",
+          capabilities: null,
+          backendInstanceId: BID,
+          targetRevision: 1,
+          targetId: 1,
+        },
         "config",
       ),
     ).toBe(true);

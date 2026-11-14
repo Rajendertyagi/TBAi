@@ -5,6 +5,7 @@ import {
   captureOpenCodeRequestContext,
   createManagedFallbackTransport,
   OpenCodeNotReadyError,
+  readBackendInstanceId,
   readConnectionState,
   readShutdownState,
   type OpenCodeTransport,
@@ -69,12 +70,14 @@ export interface OpenCodeRuntimeTarget {
 /**
  * The target identity the browser may use to detect runtime-target transitions.
  *
- * `targetRevision` is the connection-state revision: it increments on every
- * install/clear/replace, so it changes when the active OpenCode target changes
- * even if backend availability/recovery epoch does not. `targetId` identifies an
- * installed target instance when one exists.
+ * `backendInstanceId` identifies the backend process instance that produced the
+ * identity, so a legitimate post-restart revision reset can be distinguished from
+ * a stale/out-of-order publication. `targetRevision` is the connection-state
+ * revision within that backend instance. `targetId` identifies an installed target
+ * instance when one exists.
  */
 export interface OpenCodeRuntimeTargetIdentity {
+  readonly backendInstanceId: string;
   readonly targetRevision: number;
   readonly targetId: number | null;
 }
@@ -155,27 +158,29 @@ export async function resolveOpenCodeRuntimeTarget(
  * Describes the runtime for the browser, without starting or probing anything.
  *
  * The status a page may render is deliberately small: a mode, target identity
- * (revision/id) for invalidation, and for an adopted service the capability
- * snapshot that decides which optional surfaces to hide. The origin, the
- * password, the registration path and the probe result body never leave the
+ * (backend instance/revision/id) for invalidation, and for an adopted service the
+ * capability snapshot that decides which optional surfaces to hide. The origin,
+ * the password, the registration path and the probe result body never leave the
  * backend.
  */
 export function describeOpenCodeRuntime(): OpenCodeRuntimeStatus {
   const state = readConnectionState();
+  const backendInstanceId = readBackendInstanceId();
   const targetRevision = state.revision;
   if (readShutdownState().shutdownStarted) {
-    return { mode: "unresolved", targetRevision, targetId: null };
+    return { mode: "unresolved", backendInstanceId, targetRevision, targetId: null };
   }
   const target = state.target;
   if (target.mode === "unresolved") {
-    return { mode: "unresolved", targetRevision, targetId: null };
+    return { mode: "unresolved", backendInstanceId, targetRevision, targetId: null };
   }
   if (target.mode === "managed") {
-    return { mode: "managed", targetRevision, targetId: target.targetId };
+    return { mode: "managed", backendInstanceId, targetRevision, targetId: target.targetId };
   }
   return {
     mode: "adopted",
     capabilities: target.capabilities,
+    backendInstanceId,
     targetRevision,
     targetId: target.targetId,
   };

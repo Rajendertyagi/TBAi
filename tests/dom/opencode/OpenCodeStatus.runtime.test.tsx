@@ -28,9 +28,11 @@ import type { OpenCodeRuntimeStatus } from "@web/features/opencode/runtimeStatus
 
 // ── the mocked inputs ──────────────────────────────────────────────────────
 
+const BID = "backend-instance";
 /** The mode the mocked status read reports; `null` = the read has not answered. */
 let runtimeStatus: OpenCodeRuntimeStatus | null = {
   mode: "unresolved",
+  backendInstanceId: BID,
   targetRevision: 0,
   targetId: null,
 };
@@ -158,7 +160,7 @@ function alerts(content: HTMLElement): string[] {
 
 /** Puts the chip back to its starting state for the next case. */
 function reset(): void {
-  runtimeStatus = { mode: "unresolved", targetRevision: 0, targetId: null };
+  runtimeStatus = { mode: "unresolved", backendInstanceId: BID, targetRevision: 0, targetId: null };
   connection = { type: "failed", attempt: 3 };
   load = { type: "error", error: { message: "connect ECONNREFUSED 127.0.0.1:4096" } };
 }
@@ -168,9 +170,24 @@ function reset(): void {
 describe("the chip's runtime row and unresolved notice", () => {
   it("names the backend's selection for each mode", async () => {
     const cases: readonly (readonly [OpenCodeRuntimeStatus, string])[] = [
-      [{ mode: "managed", targetRevision: 1, targetId: 1 }, "Managed service"],
-      [{ mode: "adopted", capabilities: null, targetRevision: 1, targetId: 1 }, "Adopted service"],
-      [{ mode: "unresolved", targetRevision: 0, targetId: null }, "Not started"],
+      [
+        { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+        "Managed service",
+      ],
+      [
+        {
+          mode: "adopted",
+          capabilities: null,
+          backendInstanceId: BID,
+          targetRevision: 1,
+          targetId: 1,
+        },
+        "Adopted service",
+      ],
+      [
+        { mode: "unresolved", backendInstanceId: BID, targetRevision: 0, targetId: null },
+        "Not started",
+      ],
     ];
     for (const [status, expected] of cases) {
       reset();
@@ -206,7 +223,13 @@ describe("the chip's runtime row and unresolved notice", () => {
 
   it("does not claim unavailability for an adopted service", async () => {
     reset();
-    runtimeStatus = { mode: "adopted", capabilities: null, targetRevision: 1, targetId: 1 };
+    runtimeStatus = {
+      mode: "adopted",
+      capabilities: null,
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    };
     const mounted = mount();
     const content = await openPopover(mounted.container);
     expect(alerts(content).join(" ")).not.toContain("OpenCode is not available");

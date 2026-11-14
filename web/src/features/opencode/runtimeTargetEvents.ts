@@ -4,8 +4,14 @@ import { publishRuntimeTargetIdentity } from "./runtimeStatus";
 
 let source: EventSource | null = null;
 let refCount = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
+
+const RETRY_BASE_MS = 250;
+const RETRY_MAX_MS = 5000;
 
 function parseTargetIdentity(data: string): {
+  backendInstanceId: string;
   targetRevision: number;
   targetId: number | null;
   mode: "unresolved" | "managed" | "adopted";
@@ -14,6 +20,8 @@ function parseTargetIdentity(data: string): {
     const parsed = JSON.parse(data) as Record<string, unknown>;
     const mode = parsed.mode;
     if (mode !== "unresolved" && mode !== "managed" && mode !== "adopted") return null;
+    const backendInstanceId =
+      typeof parsed.backendInstanceId === "string" ? parsed.backendInstanceId : "";
     const targetRevision =
       typeof parsed.targetRevision === "number" && Number.isFinite(parsed.targetRevision)
         ? Math.max(0, Math.floor(parsed.targetRevision))
@@ -22,42 +30,91 @@ function parseTargetIdentity(data: string): {
       typeof parsed.targetId === "number" && Number.isFinite(parsed.targetId)
         ? Math.floor(parsed.targetId)
         : null;
-    return { mode, targetRevision, targetId };
+    return { backendInstanceId, mode, targetRevision, targetId };
   } catch {
     return null;
   }
 }
 
+function clearRetryTimer(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function resetRetryState(): void {
+  retryAttempt = 0;
+  clearRetryTimer();
+}
+
+function scheduleReconnect(): void {
+  if (refCount <= 0) return;
+  if (retryTimer !== null) return;
+  const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** retryAttempt);
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (refCount <= 0) return;
+    connect();
+  }, delay);
+}
+
+function closeSource(es: EventSource | null): void {
+  if (!es) return;
+  try {
+    es.close();
+  } catch {
+    /* ignore */
+  }
+}
+
 function connect(): void {
-  if (source) return;
+  if (refCount <= 0) return;
+  if (source && source.readyState !== EventSource.CLOSED) return;
+  if (source && source.readyState === EventSource.CLOSED) {
+    source = null;
+  }
+  clearRetryTimer();
   try {
     const url = resolveApiUrl("/api/opencode/runtime/events");
     const es = new EventSource(url);
     source = es;
+    es.onopen = () => {
+      if (source !== es) return;
+      resetRetryState();
+    };
     es.addEventListener("opencode.runtime_target", (event) => {
+      if (source !== es) return;
       const identity = parseTargetIdentity((event as MessageEvent).data);
       if (!identity) return;
       publishRuntimeTargetIdentity(identity);
     });
     es.onerror = () => {
-      // Browser EventSource will retry automatically; keep subscription while
-      // consumers remain interested. If closed externally, drop reference.
-      if (source === es && es.readyState === EventSource.CLOSED) {
+      if (source !== es) return;
+      // Browser-native retry is preferred while CONNECTING. Only take over when
+      // the connection is CLOSED or cannot be established while consumers remain.
+      if (es.readyState === EventSource.CONNECTING) return;
+      if (es.readyState === EventSource.CLOSED) {
+        closeSource(es);
         source = null;
-        if (refCount > 0) connect();
+        scheduleReconnect();
       }
     };
   } catch (err) {
+    source = null;
     logger.debug("opencode", "opencode.runtime_events_connect_failed", {
       errorType: err instanceof Error ? err.name : typeof err,
     });
+    scheduleReconnect();
   }
 }
 
 function disconnect(): void {
-  if (!source) return;
-  source.close();
+  resetRetryState();
+  const es = source;
   source = null;
+  closeSource(es);
 }
 
 /** Acquires the shared OpenCode runtime target event subscription. */

@@ -58,7 +58,7 @@ export function useOpenCodeRuntimeStatus(
 
   useEffect(() => {
     if (!enabled || !observedTarget) return;
-    const key = `${observedTarget.targetRevision}:${observedTarget.targetId ?? "null"}:${observedTarget.mode}`;
+    const key = `${observedTarget.backendInstanceId}:${observedTarget.targetRevision}:${observedTarget.targetId ?? "null"}:${observedTarget.mode}`;
     if (lastFetchedTargetRef.current === key) return;
     // A runtime target lifecycle notification arrived (or was published) with a
     // target identity this hook has not fetched yet; refetch authoritative status.
@@ -79,7 +79,7 @@ export function useOpenCodeRuntimeStatus(
       .then(readOpenCodeRuntimeStatus)
       .then((next) => {
         if (cancelled) return;
-        lastFetchedTargetRef.current = `${next.targetRevision}:${next.targetId ?? "null"}:${next.mode}`;
+        lastFetchedTargetRef.current = `${next.backendInstanceId}:${next.targetRevision}:${next.targetId ?? "null"}:${next.mode}`;
         setStatus(next);
         setError(null);
         publishRuntimeStatus(next);

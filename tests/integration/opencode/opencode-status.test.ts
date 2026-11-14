@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   installAdoptedTarget,
   installManagedTarget,
+  readBackendInstanceId,
   resetConnectionStateForTests,
 } from "@/services/opencode/connectionState.ts";
 import type { OpenCodeServiceCapabilities } from "@/services/opencode/compatibility.ts";
@@ -43,6 +44,7 @@ describe("GET /api/opencode/status", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       mode: "unresolved",
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 0,
       targetId: null,
     });
@@ -56,6 +58,7 @@ describe("GET /api/opencode/status", () => {
     const response = await readStatus();
     expect(await response.json()).toEqual({
       mode: "managed",
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId,
     });
@@ -71,6 +74,7 @@ describe("GET /api/opencode/status", () => {
     expect(await response.json()).toEqual({
       mode: "adopted",
       capabilities: CAPABILITIES,
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId,
     });

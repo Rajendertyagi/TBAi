@@ -50,8 +50,11 @@ mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
 
 const { OpenCodeConfigPage } = await import("@web/features/opencode/OpenCodeConfigPage.tsx");
 
+const BID = "backend-instance";
+
 const ADOPTED_WITHOUT_CONFIG: OpenCodeRuntimeStatus = {
   mode: "adopted",
+  backendInstanceId: BID,
   targetRevision: 1,
   targetId: 1,
   capabilities: {
@@ -69,6 +72,7 @@ const ADOPTED_WITHOUT_CONFIG: OpenCodeRuntimeStatus = {
 
 const ADOPTED_WITH_CONFIG: OpenCodeRuntimeStatus = {
   mode: "adopted",
+  backendInstanceId: BID,
   targetRevision: 1,
   targetId: 1,
   capabilities: {
@@ -135,7 +139,7 @@ describe("the configuration page on a degraded adopted service", () => {
   });
 
   it("loads normally for a managed service (nothing was assessed)", async () => {
-    runtimeStatus = { mode: "managed", targetRevision: 1, targetId: 1 };
+    runtimeStatus = { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 };
     const mounted = await mount();
     expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
     expect(mounted.container.textContent).toContain("Native OpenCode JSON");

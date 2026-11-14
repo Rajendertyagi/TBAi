@@ -567,49 +567,78 @@ app.get("/status", (c) => c.json(describeOpenCodeRuntime()));
  */
 app.get("/runtime/events", (c) => {
   const encoder = new TextEncoder();
+  let cleanup: (() => void) | null = null;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       disableIdleTimeout(c);
       let closed = false;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
+
+      const doCleanup = () => {
+        if (closed) return;
+        closed = true;
+        if (heartbeat !== null) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+        if (unsubscribe) {
+          try {
+            unsubscribe();
+          } catch {
+            /* ignore */
+          }
+          unsubscribe = null;
+        }
+        c.req.raw.signal.removeEventListener("abort", onAbort);
+        try {
+          controller.close();
+        } catch {
+          /* already closed/errored */
+        }
+      };
+      cleanup = doCleanup;
+
       const send = (event: string, data: unknown) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
-          closed = true;
+          doCleanup();
         }
       };
+
       const onChange = (change: {
+        backendInstanceId: string;
         targetRevision: number;
         targetId: number | null;
         mode: string;
       }) => {
         send("opencode.runtime_target", change);
       };
-      const unsubscribe = subscribeRuntimeTargetChanges(onChange);
-      // Send current state immediately so a subscriber never misses a transition
-      // that happened just before it connected.
+
+      const onAbort = () => {
+        doCleanup();
+      };
+
+      c.req.raw.signal.addEventListener("abort", onAbort);
+      unsubscribe = subscribeRuntimeTargetChanges(onChange);
+      // Subscribe before sending the initial snapshot so a transition cannot be
+      // missed between snapshot read and subscription. Duplicate delivery is
+      // harmless because frontend publication is idempotent/order-guarded.
       send("opencode.runtime_target", readRuntimeTargetChange());
-      const heartbeat = setInterval(() => {
+      if (closed) return;
+      heartbeat = setInterval(() => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(": ping\n\n"));
         } catch {
-          closed = true;
+          doCleanup();
         }
       }, 15000);
-      const abort = () => {
-        if (closed) return;
-        closed = true;
-        clearInterval(heartbeat);
-        unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
-      c.req.raw.signal.addEventListener("abort", abort);
+    },
+    cancel() {
+      cleanup?.();
     },
   });
   return new Response(stream, {

@@ -40,6 +40,7 @@ export interface OpenCodeRuntimeCapabilities {
 
 /** Target identity for invalidation when the active OpenCode runtime changes. */
 export interface OpenCodeRuntimeTargetIdentity {
+  readonly backendInstanceId: string;
   readonly targetRevision: number;
   readonly targetId: number | null;
 }
@@ -109,11 +110,13 @@ function toCapabilities(input: unknown): OpenCodeRuntimeCapabilities | null {
 
 function toTargetIdentity(input: unknown): OpenCodeRuntimeTargetIdentity {
   if (input === null || typeof input !== "object") {
-    return { targetRevision: 0, targetId: null };
+    return { backendInstanceId: "", targetRevision: 0, targetId: null };
   }
+  const backendInstanceId = Reflect.get(input, "backendInstanceId");
   const targetRevision = Reflect.get(input, "targetRevision");
   const targetId = Reflect.get(input, "targetId");
   return {
+    backendInstanceId: typeof backendInstanceId === "string" ? backendInstanceId : "",
     targetRevision:
       typeof targetRevision === "number" && Number.isFinite(targetRevision)
         ? Math.max(0, Math.floor(targetRevision))
@@ -199,7 +202,11 @@ export function sameOpenCodeRuntimeTarget(
   b: OpenCodeRuntimeTargetIdentity | null | undefined,
 ): boolean {
   if (!a || !b) return false;
-  return a.targetRevision === b.targetRevision && a.targetId === b.targetId;
+  return (
+    a.backendInstanceId === b.backendInstanceId &&
+    a.targetRevision === b.targetRevision &&
+    a.targetId === b.targetId
+  );
 }
 
 interface RuntimeTargetState {
@@ -207,26 +214,55 @@ interface RuntimeTargetState {
   status: OpenCodeRuntimeStatus | null;
   /** Recovery epoch associated with the last accepted runtime status publication. */
   acceptedRecoveryEpoch: number;
+  /** Backend process instance of the last accepted runtime status publication. */
+  acceptedBackendInstanceId: string | null;
+  /** Previous backend instance superseded by the accepted instance (stale in-flight guard). */
+  supersededBackendInstanceId: string | null;
 }
 
 export const useRuntimeTargetStore = create<RuntimeTargetState>()(() => ({
   status: null,
   acceptedRecoveryEpoch: -1,
+  acceptedBackendInstanceId: null,
+  supersededBackendInstanceId: null,
 }));
 
 function isNewerRuntimePublication(
   current: OpenCodeRuntimeStatus | null,
   currentEpoch: number,
+  currentInstanceId: string | null,
+  supersededInstanceId: string | null,
   next: OpenCodeRuntimeStatus,
   nextEpoch: number,
 ): boolean {
   if (!current) return true;
-  if (nextEpoch !== currentEpoch) return nextEpoch > currentEpoch;
-  if (next.targetRevision !== current.targetRevision) {
+
+  const nextInstanceId = next.backendInstanceId;
+  if (currentInstanceId && nextInstanceId) {
+    if (nextInstanceId === supersededInstanceId) {
+      // Old in-flight publication from a previous backend instance after a newer
+      // instance has already been accepted.
+      return false;
+    }
+    if (nextInstanceId !== currentInstanceId) {
+      // New backend process instance: accept legitimate post-restart identity
+      // resets from authoritative status/event publications.
+      return true;
+    }
+    // Same backend instance: target revisions remain monotonically ordered.
+    if (next.targetRevision !== current.targetRevision) {
+      return next.targetRevision > current.targetRevision;
+    }
+  } else if (nextEpoch !== currentEpoch) {
+    // Legacy/unknown instance identity: preserve recovery-epoch ordering.
+    return nextEpoch > currentEpoch;
+  } else if (next.targetRevision !== current.targetRevision) {
     return next.targetRevision > current.targetRevision;
   }
-  // Same epoch/revision: allow same identity updates (e.g. richer status details)
-  // but never roll identity/mode backward within the same revision.
+
+  // Same instance/revision (or unknown identity with same epoch/revision): allow
+  // same identity updates (e.g. richer status details) but never roll
+  // identity/mode backward within the same revision.
   if (next.targetId !== current.targetId || next.mode !== current.mode) {
     return false;
   }
@@ -240,11 +276,30 @@ export function publishRuntimeStatus(
 ): void {
   useRuntimeTargetStore.setState((state) => {
     if (
-      !isNewerRuntimePublication(state.status, state.acceptedRecoveryEpoch, status, recoveryEpoch)
+      !isNewerRuntimePublication(
+        state.status,
+        state.acceptedRecoveryEpoch,
+        state.acceptedBackendInstanceId,
+        state.supersededBackendInstanceId,
+        status,
+        recoveryEpoch,
+      )
     ) {
       return state;
     }
-    return { status, acceptedRecoveryEpoch: recoveryEpoch };
+    const nextInstanceId = status.backendInstanceId || state.acceptedBackendInstanceId;
+    const supersededBackendInstanceId =
+      state.acceptedBackendInstanceId &&
+      nextInstanceId &&
+      nextInstanceId !== state.acceptedBackendInstanceId
+        ? state.acceptedBackendInstanceId
+        : state.supersededBackendInstanceId;
+    return {
+      status,
+      acceptedRecoveryEpoch: recoveryEpoch,
+      acceptedBackendInstanceId: nextInstanceId,
+      supersededBackendInstanceId,
+    };
   });
 }
 
@@ -262,18 +317,21 @@ export function publishRuntimeTargetIdentity(
         current?.mode === "adopted" && sameOpenCodeRuntimeTarget(current, identity)
           ? current.capabilities
           : null,
+      backendInstanceId: identity.backendInstanceId,
       targetRevision: identity.targetRevision,
       targetId: identity.targetId,
     };
   } else if (identity.mode === "managed") {
     next = {
       mode: "managed",
+      backendInstanceId: identity.backendInstanceId,
       targetRevision: identity.targetRevision,
       targetId: identity.targetId,
     };
   } else {
     next = {
       mode: "unresolved",
+      backendInstanceId: identity.backendInstanceId,
       targetRevision: identity.targetRevision,
       targetId: identity.targetId,
     };
@@ -283,7 +341,12 @@ export function publishRuntimeTargetIdentity(
 
 /** Test-only reset for the shared runtime target signal. */
 export function resetRuntimeTargetStoreForTests(): void {
-  useRuntimeTargetStore.setState({ status: null, acceptedRecoveryEpoch: -1 });
+  useRuntimeTargetStore.setState({
+    status: null,
+    acceptedRecoveryEpoch: -1,
+    acceptedBackendInstanceId: null,
+    supersededBackendInstanceId: null,
+  });
 }
 
 /**

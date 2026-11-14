@@ -116,12 +116,14 @@ export interface NormalizedOpenCodeCapabilities {
 
 function normalizeTarget(target: unknown): OpenCodeCapabilitiesTarget | null {
   if (!target || typeof target !== "object") return null;
+  const backendInstanceId = Reflect.get(target, "backendInstanceId");
   const targetRevision = Reflect.get(target, "targetRevision");
   const targetId = Reflect.get(target, "targetId");
   const mode = Reflect.get(target, "mode");
   if (typeof targetRevision !== "number" || !Number.isFinite(targetRevision)) return null;
   if (mode !== "managed" && mode !== "adopted" && mode !== "unresolved") return null;
   return {
+    backendInstanceId: typeof backendInstanceId === "string" ? backendInstanceId : "",
     targetRevision: Math.max(0, Math.floor(targetRevision)),
     targetId:
       typeof targetId === "number" && Number.isFinite(targetId) ? Math.floor(targetId) : null,
@@ -214,6 +216,7 @@ function currentKnownTarget(): OpenCodeCapabilitiesTarget | null {
   const status = useRuntimeTargetStore.getState().status;
   if (!status) return lastKnownTarget;
   return {
+    backendInstanceId: status.backendInstanceId,
     targetRevision: status.targetRevision,
     targetId: status.targetId,
     mode: status.mode,
@@ -460,6 +463,7 @@ useRuntimeTargetStore.subscribe((state, prev) => {
   if (!nextStatus) return;
   if (
     prevStatus &&
+    prevStatus.backendInstanceId === nextStatus.backendInstanceId &&
     prevStatus.targetRevision === nextStatus.targetRevision &&
     prevStatus.targetId === nextStatus.targetId &&
     prevStatus.mode === nextStatus.mode
@@ -467,6 +471,7 @@ useRuntimeTargetStore.subscribe((state, prev) => {
     return;
   }
   handleTargetIdentityChange({
+    backendInstanceId: nextStatus.backendInstanceId,
     targetRevision: nextStatus.targetRevision,
     targetId: nextStatus.targetId,
     mode: nextStatus.mode,

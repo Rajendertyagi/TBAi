@@ -49,6 +49,8 @@ const { publishRuntimeStatus, resetRuntimeTargetStoreForTests } = await import(
   "@web/features/opencode/runtimeStatus.ts"
 );
 
+const BID = "backend-instance";
+
 interface HookState {
   agents: readonly { id: string }[];
   models: readonly {
@@ -489,14 +491,19 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     fetchQueue.push(first, second);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [],
         models: [{ id: "old", name: "Old", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
@@ -504,7 +511,12 @@ describe("useOpenCodeCapabilities shared store", () => {
     expect(latest.models.map((m) => m.id)).toEqual(["old"]);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 2 });
+      publishRuntimeStatus({
+        mode: "managed",
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
     });
     await flush();
     expect(fetchCalls).toBe(2);
@@ -515,7 +527,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "new", name: "New", providerID: "p", variants: [] }],
-        target: { targetRevision: 2, targetId: 2, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 2, targetId: 2, mode: "managed" },
       }),
     );
     await flush();
@@ -529,21 +541,32 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     fetchQueue.push(first, second);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [],
         models: [{ id: "managed", name: "Managed", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
     expect(latest.models.map((m) => m.id)).toEqual(["managed"]);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+      publishRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
     });
     await flush();
     expect(fetchCalls).toBe(2);
@@ -553,7 +576,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "adopted", name: "Adopted", providerID: "p", variants: [] }],
-        target: { targetRevision: 2, targetId: 2, mode: "adopted" },
+        target: { backendInstanceId: BID, targetRevision: 2, targetId: 2, mode: "adopted" },
       }),
     );
     await flush();
@@ -566,21 +589,32 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const restored = deferred<Response>();
     fetchQueue.push(first, restored);
-    publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 1, targetId: 10 });
+    publishRuntimeStatus({
+      mode: "adopted",
+      capabilities: null,
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 10,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [],
         models: [{ id: "adopted-old", name: "Old", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 10, mode: "adopted" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 10, mode: "adopted" },
       }),
     );
     await flush();
     expect(latest.models.map((m) => m.id)).toEqual(["adopted-old"]);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "unresolved", targetRevision: 2, targetId: null });
+      publishRuntimeStatus({
+        mode: "unresolved",
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: null,
+      });
     });
     await flush();
     expect(latest.models).toEqual([]);
@@ -592,6 +626,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       publishRuntimeStatus({
         mode: "adopted",
         capabilities: null,
+        backendInstanceId: BID,
         targetRevision: 3,
         targetId: 11,
       });
@@ -605,7 +640,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "adopted-restored", name: "Restored", providerID: "p", variants: [] }],
-        target: { targetRevision: 3, targetId: 11, mode: "adopted" },
+        target: { backendInstanceId: BID, targetRevision: 3, targetId: 11, mode: "adopted" },
       }),
     );
     await flush();
@@ -619,13 +654,24 @@ describe("useOpenCodeCapabilities shared store", () => {
     const oldReq = deferred<Response>();
     const newReq = deferred<Response>();
     fetchQueue.push(oldReq, newReq);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     expect(fetchCalls).toBe(1);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+      publishRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
     });
     await flush();
     expect(fetchCalls).toBe(2);
@@ -635,7 +681,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "new-target", name: "New", providerID: "p", variants: [] }],
-        target: { targetRevision: 2, targetId: 2, mode: "adopted" },
+        target: { backendInstanceId: BID, targetRevision: 2, targetId: 2, mode: "adopted" },
       }),
     );
     await flush();
@@ -645,7 +691,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "old-target", name: "Old", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
@@ -658,14 +704,19 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     fetchQueue.push(first, second);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [{ id: "a", name: "A" }],
         models: [{ id: "same", name: "Same", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
@@ -689,21 +740,32 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     fetchQueue.push(first, second);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [],
         models: [{ id: "old", name: "Old", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
     expect(latest.models.map((m) => m.id)).toEqual(["old"]);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+      publishRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
     });
     await flush();
     expect(fetchCalls).toBe(2);
@@ -722,22 +784,38 @@ describe("useOpenCodeCapabilities shared store", () => {
     const first = deferred<Response>();
     const latestReq = deferred<Response>();
     fetchQueue.push(first, latestReq);
-    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
     const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
     await view.mount();
     first.resolve(
       capabilitiesResponse({
         agents: [],
         models: [{ id: "v1", name: "V1", providerID: "p", variants: [] }],
-        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
       }),
     );
     await flush();
     expect(fetchCalls).toBe(1);
 
     await act(async () => {
-      publishRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 2 });
-      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 3 });
+      publishRuntimeStatus({
+        mode: "managed",
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
+      publishRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 3,
+        targetId: 3,
+      });
     });
     await flush();
     // Synchronous target changes coalesce to one authoritative refresh for the
@@ -749,7 +827,7 @@ describe("useOpenCodeCapabilities shared store", () => {
       capabilitiesResponse({
         agents: [],
         models: [{ id: "v3", name: "V3", providerID: "p", variants: [] }],
-        target: { targetRevision: 3, targetId: 3, mode: "adopted" },
+        target: { backendInstanceId: BID, targetRevision: 3, targetId: 3, mode: "adopted" },
       }),
     );
     await flush();

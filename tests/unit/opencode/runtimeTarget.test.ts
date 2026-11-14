@@ -3,6 +3,7 @@ import {
   installAdoptedTarget,
   installManagedTarget,
   OpenCodeNotReadyError,
+  readBackendInstanceId,
   resetConnectionStateForTests,
   setShutdownStateReaderForTests,
 } from "@/services/opencode/connectionState.ts";
@@ -158,6 +159,7 @@ describe("describeOpenCodeRuntime", () => {
   it("reports unresolved with no target", () => {
     expect(describeOpenCodeRuntime()).toEqual({
       mode: "unresolved",
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 0,
       targetId: null,
     });
@@ -170,6 +172,7 @@ describe("describeOpenCodeRuntime", () => {
     });
     expect(describeOpenCodeRuntime()).toEqual({
       mode: "managed",
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId,
     });
@@ -184,6 +187,7 @@ describe("describeOpenCodeRuntime", () => {
     expect(describeOpenCodeRuntime()).toEqual({
       mode: "adopted",
       capabilities: CAPABILITIES,
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId,
     });
@@ -201,6 +205,7 @@ describe("describeOpenCodeRuntime", () => {
     setShutdownStateReaderForTests(() => ({ shutdownEpoch: 1, shutdownStarted: true }));
     expect(describeOpenCodeRuntime()).toEqual({
       mode: "unresolved",
+      backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId: null,
     });

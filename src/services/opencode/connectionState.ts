@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   OpenCodeAuthScopeError,
   createGatedTransport,
@@ -219,6 +220,19 @@ let shutdownStopProvider: ManagedChildStopProvider | null = null;
 let shutdownStateReaderOverride: ShutdownStateReader | null = null;
 
 /**
+ * Opaque identity of this backend process instance. Generated once per process
+ * lifetime so frontend consumers can distinguish a legitimate post-restart
+ * target-revision reset from a stale/out-of-order publication. Never exposes an
+ * OS process id, secret, path, or credential.
+ */
+let backendInstanceId = randomUUID();
+
+/** Returns the current backend process instance identity. */
+export function readBackendInstanceId(): string {
+  return backendInstanceId;
+}
+
+/**
  * Normalizes an origin to `scheme://host:port`, lower-cased, with no trailing
  * slash, no path and no default port (§8.1).
  *
@@ -334,6 +348,7 @@ export function readConnectionState(): OpenCodeConnectionState {
 
 /** Minimal runtime target identity carried by lifecycle notifications. */
 export interface OpenCodeRuntimeTargetChange {
+  readonly backendInstanceId: string;
   readonly targetRevision: number;
   readonly targetId: number | null;
   readonly mode: "unresolved" | "managed" | "adopted";
@@ -348,6 +363,7 @@ export function readRuntimeTargetChange(): OpenCodeRuntimeTargetChange {
   const state = readConnectionState();
   const target = state.target;
   return Object.freeze({
+    backendInstanceId,
     targetRevision: state.revision,
     targetId: target.mode === "unresolved" ? null : target.targetId,
     mode: target.mode,
@@ -829,4 +845,11 @@ export function resetConnectionStateForTests(): void {
   shutdownStopProvider = null;
   shutdownStateReaderOverride = null;
   runtimeTargetChangeListeners.clear();
+  backendInstanceId = randomUUID();
+}
+
+/** Test-only: simulates a backend process restart by rotating the instance identity. */
+export function rotateBackendInstanceIdForTests(): string {
+  backendInstanceId = randomUUID();
+  return backendInstanceId;
 }

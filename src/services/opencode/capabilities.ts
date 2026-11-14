@@ -2,7 +2,7 @@ import { createOpenCodeClient, type OpenCodeClient } from "./client";
 import { toOpenCodeError } from "./errors";
 import { resolveOpenCodeRuntimeTarget } from "./runtimeTarget";
 import { openCodeServerManager } from "./serverManager";
-import { readConnectionState } from "./connectionState";
+import { readBackendInstanceId, readConnectionState } from "./connectionState";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import type { ModelInfo } from "@opencode/client";
@@ -54,6 +54,7 @@ export interface OpenCodeDefaultModel {
 
 /** Identity of the active OpenCode runtime target a capabilities snapshot came from. */
 export interface OpenCodeCapabilitiesTarget {
+  readonly backendInstanceId: string;
   readonly targetRevision: number;
   readonly targetId: number | null;
   readonly mode: "managed" | "adopted";
@@ -333,7 +334,9 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     };
   });
 
+  const backendInstanceId = readBackendInstanceId();
   const targetIdentity: OpenCodeCapabilitiesTarget = {
+    backendInstanceId,
     targetRevision: target.targetRevision,
     targetId: target.targetId ?? null,
     mode: target.mode,
@@ -357,6 +360,7 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
   logger.info("opencode", "opencode.capabilities", {
     agents: agents.length,
     models: models.length,
+    backendInstanceId: targetIdentity.backendInstanceId,
     targetRevision: targetIdentity.targetRevision,
     targetId: targetIdentity.targetId,
     targetMode: targetIdentity.mode,

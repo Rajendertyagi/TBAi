@@ -23,9 +23,10 @@ import { resetRuntimeTargetEventsForTests } from "@web/features/opencode/runtime
 import { useOpenCodeRuntimeStatus } from "@web/features/opencode/useOpenCodeRuntimeStatus.ts";
 
 /** The response the stubbed backend gives, or a failure sentinel. */
+const BID = "backend-instance";
 let nextResponse: { kind: "json"; body: unknown } | { kind: "fail"; message: string } = {
   kind: "json",
-  body: { mode: "managed", targetRevision: 1, targetId: 1 },
+  body: { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
 };
 let requests: string[] = [];
 
@@ -136,7 +137,10 @@ afterEach(() => {
   globalThis.fetch = nativeFetch;
   (globalThis as unknown as { EventSource: typeof EventSource }).EventSource = nativeEventSource;
   requests = [];
-  nextResponse = { kind: "json", body: { mode: "managed", targetRevision: 1, targetId: 1 } };
+  nextResponse = {
+    kind: "json",
+    body: { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+  };
   resetRuntimeTargetEventsForTests();
   resetRuntimeTargetStoreForTests();
 });
@@ -159,6 +163,7 @@ describe("useOpenCodeRuntimeStatus", () => {
       kind: "json",
       body: {
         mode: "adopted",
+        backendInstanceId: BID,
         targetRevision: 2,
         targetId: 2,
         capabilities: {
@@ -201,7 +206,13 @@ describe("useOpenCodeRuntimeStatus", () => {
     stubEventSource();
     nextResponse = {
       kind: "json",
-      body: { mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 },
+      body: {
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      },
     };
     const mounted = await mount({ refreshKey: "connected" });
     expect(statusOf(mounted.container)).toBe("adopted");
@@ -224,17 +235,27 @@ describe("useOpenCodeRuntimeStatus", () => {
   it("refetches authoritative status when a runtime target lifecycle event arrives without remount or recovery epoch change", async () => {
     stubFetch();
     stubEventSource();
-    nextResponse = { kind: "json", body: { mode: "managed", targetRevision: 1, targetId: 1 } };
+    nextResponse = {
+      kind: "json",
+      body: { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+    };
     const mounted = await mount({ refreshKey: "connected" });
     expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(1);
     expect(statusOf(mounted.container)).toBe("managed");
 
     nextResponse = {
       kind: "json",
-      body: { mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 },
+      body: {
+        mode: "adopted",
+        capabilities: null,
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      },
     };
     await act(async () => {
       FakeEventSource.instances[0]?.emit("opencode.runtime_target", {
+        backendInstanceId: BID,
         mode: "adopted",
         targetRevision: 2,
         targetId: 2,
@@ -272,6 +293,7 @@ describe("useOpenCodeRuntimeStatus", () => {
 
     await act(async () => {
       FakeEventSource.instances[0]?.emit("opencode.runtime_target", {
+        backendInstanceId: BID,
         mode: "adopted",
         targetRevision: 2,
         targetId: 2,
@@ -282,14 +304,27 @@ describe("useOpenCodeRuntimeStatus", () => {
 
     await act(async () => {
       resolveNew(
-        Response.json({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 }),
+        Response.json({
+          mode: "adopted",
+          capabilities: null,
+          backendInstanceId: BID,
+          targetRevision: 2,
+          targetId: 2,
+        }),
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(statusOf(mounted.container)).toBe("adopted");
 
     await act(async () => {
-      resolveOld(Response.json({ mode: "managed", targetRevision: 1, targetId: 1 }));
+      resolveOld(
+        Response.json({
+          mode: "managed",
+          backendInstanceId: BID,
+          targetRevision: 1,
+          targetId: 1,
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(statusOf(mounted.container)).toBe("adopted");
