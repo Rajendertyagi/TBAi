@@ -21,58 +21,6 @@ export class OpenCodeDatabasePathError extends Error {
   }
 }
 
-/**
- * @deprecated Phase 1 decommission: database busy/holder refusal removed from the
- * OpenCode startup path. Kept for compatibility; never thrown by this module.
- */
-export class OpenCodeDatabaseBusyError extends Error {
-  constructor(
-    readonly details: {
-      readonly dbPath: string;
-      readonly pids: readonly number[];
-      readonly reason: string;
-    },
-  ) {
-    const holders = details.pids.length > 0 ? `; processes: ${details.pids.join(", ")}` : "";
-    super(
-      `OpenCode database is already in use (${details.reason}): ${details.dbPath}${holders}. ` +
-        "TBAi will not start a second server against it. Close the other process, or point " +
-        "TBAI at a separate OPENCODE_DB/XDG_DATA_HOME.",
-    );
-    this.name = "OpenCodeDatabaseBusyError";
-  }
-}
-
-/**
- * @deprecated Phase 1 decommission: lease contention/mutex removed from the
- * OpenCode startup path. Kept for compatibility; never thrown by this module.
- */
-export class OpenCodeDatabaseLeaseContendedError extends Error {
-  constructor(
-    readonly details: {
-      readonly dbPath: string;
-      readonly mutexName: string;
-    },
-  ) {
-    super(
-      `Another TBAi backend holds the OpenCode database lease for ${details.dbPath}. ` +
-        "TBAi will wait for the existing shared service instead of starting a second server.",
-    );
-    this.name = "OpenCodeDatabaseLeaseContendedError";
-  }
-}
-
-/**
- * @deprecated Phase 1 decommission: ownership verification/check refusal removed
- * from the OpenCode startup path. Kept for compatibility; never thrown by this module.
- */
-export class OpenCodeDatabaseCheckError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "OpenCodeDatabaseCheckError";
-  }
-}
-
 /** The database files a live OpenCode server may hold (pure helper). */
 export function existingDatabaseFiles(dbPath: string): string[] {
   return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].filter((file) => fs.existsSync(file));
@@ -180,12 +128,7 @@ export interface OpenCodeDatabaseLease {
 
 export interface OpenCodeDatabaseOwnershipDeps {
   readonly platform: NodeJS.Platform;
-  readonly pid: number;
   resolveDatabasePath(binary: string, cwd: string, timeoutMs: number): Promise<string>;
-  findProcessesUsingFiles(files: readonly string[]): number[];
-  isOpenCodeCoTenant?(pid: number, dbPath: string): boolean;
-  acquireMutex(name: string): unknown;
-  releaseMutex(lease: unknown): void;
 }
 
 export interface OpenCodeDatabaseOwnershipOptions {

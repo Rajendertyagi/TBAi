@@ -275,7 +275,7 @@ export async function listImportableOpenCodeSessions(
  *
  * Verifies freshness of the target using sourceRef, fetches authoritative session metadata,
  * ensures eligibility, and safely binds the session without copying message history.
- * In OpenCode 2.2.0, child sessions are independent rows in session_v2 with their own message history
+ * In OpenCode 2.2.6, child sessions are independent rows in session_v2 with their own message history
  * and can safely be imported into TBAi.
  */
 export async function importOpenCodeSession(

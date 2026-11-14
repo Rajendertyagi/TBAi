@@ -293,37 +293,6 @@ export function joinShellJob(name: string): void {
 }
 
 /**
- * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
- * ownership/startup. Kept as a compatibility stub for out-of-scope callers.
- */
-export interface NamedMutexLease {
-  readonly handle: NativeHandle;
-}
-
-/**
- * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
- * ownership/startup. Compatibility stub; does not provide cross-process exclusion.
- */
-export function acquireNamedMutex(_name: string): NamedMutexLease | null {
-  return { handle: 0n };
-}
-
-/**
- * @deprecated Phase 1 decommission: named-mutex watchdog removed from OpenCode
- * ownership/startup. Compatibility no-op.
- */
-export function releaseNamedMutex(_lease: NamedMutexLease): void {}
-
-/**
- * @deprecated Phase 1 decommission: Restart Manager file-holder detection removed
- * from OpenCode ownership/startup. Returns no holders and never inspects foreign
- * processes.
- */
-export function findProcessesUsingFiles(_filePaths: readonly string[]): number[] {
-  return [];
-}
-
-/**
  * A per-managed-service Windows job with `KILL_ON_JOB_CLOSE`.
  *
  * Unlike the backend's global job, this one is owned by the manager for a
@@ -432,22 +401,6 @@ export function getProcessStartTime(pid: number): bigint | null {
   } finally {
     k.symbols.CloseHandle(h);
   }
-}
-
-/**
- * @deprecated Phase 1 decommission: process-table enumeration removed from
- * OpenCode ownership/startup. Compatibility stub; does not scan foreign processes.
- */
-export function getParentPid(_pid: number): number | null {
-  return null;
-}
-
-/**
- * @deprecated Phase 1 decommission: process-table enumeration removed from
- * OpenCode ownership/startup. Compatibility stub; does not scan foreign processes.
- */
-export function findDescendantPids(_rootPid: number): number[] {
-  return [];
 }
 
 export function terminateProcessById(pid: number): boolean {

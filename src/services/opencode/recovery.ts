@@ -380,7 +380,7 @@ async function defaultRediscover(
           origin: explicit.origin,
           pid: 0,
           password: explicit.password,
-          version: "2.2.0",
+          version: "2.2.6",
         });
       }
     } else {
@@ -407,7 +407,7 @@ async function defaultRediscover(
         origin: lost.origin,
         pid: lost.runtimePid ?? 0,
         password: lost.password,
-        version: "2.2.0",
+        version: "2.2.6",
       }),
     );
   }

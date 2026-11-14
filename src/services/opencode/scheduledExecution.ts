@@ -93,7 +93,7 @@ export async function reconcilePromptSubmission(
     }
 
     // Cursor-aware message retrieval: walk pages until the prompt is found or
-    // there are no more pages. OpenCode 2.2.0 forbids combining cursor with
+    // there are no more pages. OpenCode 2.2.6 forbids combining cursor with
     // order, so order is only sent on the first (cursor-less) request.
     let cursor: string | undefined;
     const seen = new Set<string>();
@@ -198,7 +198,7 @@ export async function resolveSessionForJob(
 }
 
 /**
- * Executes a single scheduled turn against OpenCode 2.2.0.
+ * Executes a single scheduled turn against OpenCode 2.2.6.
  */
 export async function executeOpenCodeScheduledTurn(
   params: ScheduledTurnParams,

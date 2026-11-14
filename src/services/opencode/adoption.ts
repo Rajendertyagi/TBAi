@@ -122,7 +122,7 @@ export async function attemptOpenCodeAdoption(
         origin: explicit.origin,
         pid: 0,
         password: explicit.password,
-        version: "2.2.0",
+        version: "2.2.6",
       });
     } else {
       registration = await readOpenCodeRegistration({
