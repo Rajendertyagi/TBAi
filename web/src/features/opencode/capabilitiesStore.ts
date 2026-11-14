@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { apiFetch } from "../../lib/platform";
+import {
+  sameOpenCodeRuntimeTarget,
+  useRuntimeTargetStore,
+  type OpenCodeRuntimeTargetIdentity,
+} from "./runtimeStatus";
 
 export interface OpenCodeAgentOption {
   id: string;
@@ -35,11 +40,17 @@ export interface OpenCodeDefaultModel {
   readonly name: string;
 }
 
+export interface OpenCodeCapabilitiesTarget extends OpenCodeRuntimeTargetIdentity {
+  readonly mode: "managed" | "adopted" | "unresolved";
+}
+
 export interface OpenCodeCapabilities {
   agents: OpenCodeAgentOption[];
   models: OpenCodeModelOption[];
   /** Absent when the server advertises no default. */
   defaultModel?: OpenCodeDefaultModel;
+  /** The runtime target this catalogue was read from, when provided. */
+  target?: OpenCodeCapabilitiesTarget;
 }
 
 /**
@@ -99,6 +110,22 @@ export interface NormalizedOpenCodeCapabilities {
   agents: OpenCodeAgentOption[];
   models: OpenCodeModelOption[];
   defaultModel?: OpenCodeDefaultModel;
+  target: OpenCodeCapabilitiesTarget | null;
+}
+
+function normalizeTarget(target: unknown): OpenCodeCapabilitiesTarget | null {
+  if (!target || typeof target !== "object") return null;
+  const targetRevision = Reflect.get(target, "targetRevision");
+  const targetId = Reflect.get(target, "targetId");
+  const mode = Reflect.get(target, "mode");
+  if (typeof targetRevision !== "number" || !Number.isFinite(targetRevision)) return null;
+  if (mode !== "managed" && mode !== "adopted" && mode !== "unresolved") return null;
+  return {
+    targetRevision: Math.max(0, Math.floor(targetRevision)),
+    targetId:
+      typeof targetId === "number" && Number.isFinite(targetId) ? Math.floor(targetId) : null,
+    mode,
+  };
 }
 
 /**
@@ -144,7 +171,7 @@ export function normalizeOpenCodeCapabilities(
           }
         : undefined,
   }));
-  return { agents, models, defaultModel };
+  return { agents, models, defaultModel, target: normalizeTarget(data.target) };
 }
 
 interface CapabilitiesStoreState {
@@ -168,19 +195,67 @@ export const useCapabilitiesStore = create<CapabilitiesStoreState>(() => initial
 let activeSubscribers = 0;
 let inFlight: Promise<void> | null = null;
 let inFlightEpoch = -1;
+let inFlightTarget: OpenCodeCapabilitiesTarget | null = null;
 let requestGeneration = 0;
 let hasSuccessfulLoad = false;
 let loadedRecoveryEpoch = -1;
+let loadedTarget: OpenCodeCapabilitiesTarget | null = null;
 let needsRefreshForEpoch = -1;
+let needsRefreshForTarget = false;
+let lastKnownTarget: OpenCodeCapabilitiesTarget | null = null;
+let targetRefreshScheduled = false;
 
 function currentRecoveryEpoch(): number {
   return useAvailabilityStore.getState().recoveryEpoch;
 }
 
+function currentKnownTarget(): OpenCodeCapabilitiesTarget | null {
+  const status = useRuntimeTargetStore.getState().status;
+  if (!status) return lastKnownTarget;
+  return {
+    targetRevision: status.targetRevision,
+    targetId: status.targetId,
+    mode: status.mode,
+  };
+}
+
+function sameTarget(
+  a: OpenCodeCapabilitiesTarget | null | undefined,
+  b: OpenCodeCapabilitiesTarget | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return sameOpenCodeRuntimeTarget(a, b) && a.mode === b.mode;
+}
+
+function isLoadedDataCurrent(): boolean {
+  if (!hasSuccessfulLoad) return false;
+  if (loadedRecoveryEpoch !== currentRecoveryEpoch()) return false;
+  const known = currentKnownTarget();
+  if (known && loadedTarget && !sameTarget(loadedTarget, known)) return false;
+  if (known && !loadedTarget) return false;
+  return true;
+}
+
+function clearCurrentDataForTargetChange(): void {
+  hasSuccessfulLoad = false;
+  loadedTarget = null;
+  loadedRecoveryEpoch = -1;
+  useCapabilitiesStore.setState({
+    agents: [],
+    models: [],
+    defaultModel: undefined,
+    error: null,
+  });
+}
+
 function startFetch(force: boolean): void {
   const epoch = currentRecoveryEpoch();
-  if (!force && hasSuccessfulLoad && loadedRecoveryEpoch === epoch) {
-    // Valid shared result for the current recovery epoch.
+  const knownTarget = currentKnownTarget();
+  const targetChanged =
+    needsRefreshForTarget ||
+    (knownTarget && loadedTarget && !sameTarget(knownTarget, loadedTarget));
+
+  if (!force && !needsRefreshForTarget && isLoadedDataCurrent()) {
     if (useCapabilitiesStore.getState().isLoading && !inFlight) {
       useCapabilitiesStore.setState({ isLoading: false });
     }
@@ -189,9 +264,11 @@ function startFetch(force: boolean): void {
 
   if (inFlight) {
     // Join an existing in-flight request when it already targets the current
-    // required epoch. Supersede only when a newer authoritative refresh is
-    // required (e.g. recovery epoch advanced past the in-flight request).
-    if (!force || inFlightEpoch === epoch) {
+    // required epoch and target context. Supersede when a newer authoritative
+    // refresh is required (recovery epoch advanced or target changed).
+    const inFlightMatchesTarget =
+      !knownTarget || !inFlightTarget || sameTarget(inFlightTarget, knownTarget) || !targetChanged;
+    if (!force || (inFlightEpoch === epoch && inFlightMatchesTarget && !needsRefreshForTarget)) {
       if (useCapabilitiesStore.getState().isLoading === false) {
         useCapabilitiesStore.setState({ isLoading: true, error: null });
       }
@@ -204,7 +281,9 @@ function startFetch(force: boolean): void {
   requestGeneration += 1;
   const generation = requestGeneration;
   const requestEpoch = epoch;
+  const requestKnownTarget = knownTarget;
   inFlightEpoch = requestEpoch;
+  inFlightTarget = requestKnownTarget;
   useCapabilitiesStore.setState({ isLoading: true, error: null });
 
   const request = (async () => {
@@ -213,29 +292,83 @@ function startFetch(force: boolean): void {
       const data = await readOpenCodeCapabilities(response);
       if (generation !== requestGeneration) return;
       const normalized = normalizeOpenCodeCapabilities(data);
+      const responseTarget = normalized.target;
+      const latestKnown = currentKnownTarget();
+
+      // If the runtime target identity is known and changed since this request
+      // context, or the response belongs to a different target than currently
+      // known, do not treat this response as current.
+      if (latestKnown && responseTarget && !sameTarget(responseTarget, latestKnown)) {
+        return;
+      }
+      if (
+        latestKnown &&
+        !responseTarget &&
+        requestKnownTarget &&
+        !sameTarget(requestKnownTarget, latestKnown)
+      ) {
+        return;
+      }
+      if (requestKnownTarget && latestKnown && !sameTarget(requestKnownTarget, latestKnown)) {
+        return;
+      }
+
       hasSuccessfulLoad = true;
       loadedRecoveryEpoch = requestEpoch;
+      loadedTarget = responseTarget ?? requestKnownTarget ?? latestKnown ?? loadedTarget;
       if (needsRefreshForEpoch === requestEpoch) {
         needsRefreshForEpoch = -1;
       }
+      if (!latestKnown || !loadedTarget || sameTarget(loadedTarget, latestKnown)) {
+        needsRefreshForTarget = false;
+      }
       useCapabilitiesStore.setState({
-        ...normalized,
+        agents: normalized.agents,
+        models: normalized.models,
+        defaultModel: normalized.defaultModel,
         isLoading: false,
         error: null,
       });
     } catch (e: unknown) {
       if (generation !== requestGeneration) return;
-      // A failed refresh retains the last successful capability data and exposes
-      // a consistent error/loading state. No retry storm: callers must trigger a
-      // new refresh explicitly (recovery epoch / re-enable after empty state).
-      useCapabilitiesStore.setState({
-        isLoading: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
+      const latestKnown = currentKnownTarget();
+      const targetChangedSinceRequest =
+        !!requestKnownTarget && !!latestKnown && !sameTarget(requestKnownTarget, latestKnown);
+      const loadedMatchesLatest =
+        !!loadedTarget && !!latestKnown && sameTarget(loadedTarget, latestKnown);
+      const canRetainPrevious =
+        hasSuccessfulLoad &&
+        !targetChangedSinceRequest &&
+        !needsRefreshForTarget &&
+        (loadedMatchesLatest ||
+          (!latestKnown && !!loadedTarget) ||
+          (!loadedTarget && !latestKnown));
+
+      if (!canRetainPrevious) {
+        // New-target/unknown-target failure must not present previous target data
+        // as current.
+        hasSuccessfulLoad = false;
+        loadedTarget = null;
+        loadedRecoveryEpoch = -1;
+        useCapabilitiesStore.setState({
+          agents: [],
+          models: [],
+          defaultModel: undefined,
+          isLoading: false,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      } else {
+        // Same-target refresh failure retains last successful data.
+        useCapabilitiesStore.setState({
+          isLoading: false,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     } finally {
       if (generation === requestGeneration) {
         inFlight = null;
         inFlightEpoch = -1;
+        inFlightTarget = null;
       }
     }
   })();
@@ -246,6 +379,66 @@ function startFetch(force: boolean): void {
 function ensureForActiveSubscribers(force: boolean): void {
   if (activeSubscribers <= 0) return;
   startFetch(force);
+}
+
+function scheduleTargetRefresh(): void {
+  if (targetRefreshScheduled) return;
+  targetRefreshScheduled = true;
+  queueMicrotask(() => {
+    targetRefreshScheduled = false;
+    if (activeSubscribers <= 0) return;
+    const known = currentKnownTarget();
+    if (known?.mode === "unresolved") {
+      useCapabilitiesStore.setState({
+        isLoading: false,
+        error: "OpenCode runtime target is unavailable",
+      });
+      needsRefreshForTarget = false;
+      return;
+    }
+    if (needsRefreshForTarget) {
+      ensureForActiveSubscribers(true);
+    }
+  });
+}
+
+function handleTargetIdentityChange(next: OpenCodeCapabilitiesTarget | null): void {
+  if (sameTarget(lastKnownTarget, next)) return;
+  lastKnownTarget = next;
+  if (loadedTarget && next && sameTarget(loadedTarget, next)) {
+    needsRefreshForTarget = false;
+    return;
+  }
+  if (loadedTarget && !next) {
+    // Target became unknown/unobserved; keep loaded data only until a concrete
+    // different target is known. A concrete unresolved target is handled below.
+    return;
+  }
+
+  // Target identity changed (or became concretely known as different/unresolved).
+  needsRefreshForTarget = true;
+  // Supersede in-flight work for the previous target.
+  requestGeneration += 1;
+  inFlight = null;
+  inFlightEpoch = -1;
+  inFlightTarget = null;
+  clearCurrentDataForTargetChange();
+
+  if (activeSubscribers > 0) {
+    if (next?.mode === "unresolved") {
+      // No valid replacement target is available; represent unavailable/stale
+      // state without presenting previous target data.
+      useCapabilitiesStore.setState({
+        isLoading: false,
+        error: "OpenCode runtime target is unavailable",
+      });
+      needsRefreshForTarget = false;
+      targetRefreshScheduled = false;
+    } else {
+      useCapabilitiesStore.setState({ isLoading: true, error: null });
+      scheduleTargetRefresh();
+    }
+  }
 }
 
 // Coordinated recovery: one authoritative refresh for all active consumers when
@@ -259,21 +452,49 @@ useAvailabilityStore.subscribe((state, prev) => {
   }
 });
 
+// Runtime target identity changes can occur without a recovery epoch bump.
+useRuntimeTargetStore.subscribe((state, prev) => {
+  const nextStatus = state.status;
+  const prevStatus = prev.status;
+  if (!nextStatus) return;
+  if (
+    prevStatus &&
+    prevStatus.targetRevision === nextStatus.targetRevision &&
+    prevStatus.targetId === nextStatus.targetId &&
+    prevStatus.mode === nextStatus.mode
+  ) {
+    return;
+  }
+  handleTargetIdentityChange({
+    targetRevision: nextStatus.targetRevision,
+    targetId: nextStatus.targetId,
+    mode: nextStatus.mode,
+  });
+});
+
 /**
  * Registers an enabled capabilities consumer. Triggers a shared fetch when no
- * valid shared result exists for the current recovery epoch. Idempotent per
- * acquired handle: callers must pair each successful acquire with one release.
+ * valid shared result exists for the current recovery epoch and target. Idempotent
+ * per acquired handle: callers must pair each successful acquire with one release.
  */
 export function acquireCapabilities(): void {
   activeSubscribers += 1;
   const epoch = currentRecoveryEpoch();
+  const known = currentKnownTarget();
+  if (known) lastKnownTarget = known;
   const mustRefresh =
-    needsRefreshForEpoch === epoch || !hasSuccessfulLoad || loadedRecoveryEpoch !== epoch;
+    needsRefreshForEpoch === epoch ||
+    needsRefreshForTarget ||
+    !hasSuccessfulLoad ||
+    loadedRecoveryEpoch !== epoch ||
+    (known && loadedTarget ? !sameTarget(known, loadedTarget) : false) ||
+    !!(known && !loadedTarget);
   if (mustRefresh) {
+    if (known && loadedTarget && !sameTarget(known, loadedTarget)) {
+      clearCurrentDataForTargetChange();
+    }
     ensureForActiveSubscribers(true);
   } else {
-    // Reuse valid shared state; ensure loading is not stuck from an unrelated
-    // transition.
     if (useCapabilitiesStore.getState().isLoading && !inFlight) {
       useCapabilitiesStore.setState({ isLoading: false });
     }
@@ -290,9 +511,14 @@ export function resetCapabilitiesStoreForTests(): void {
   activeSubscribers = 0;
   inFlight = null;
   inFlightEpoch = -1;
+  inFlightTarget = null;
   requestGeneration += 1;
   hasSuccessfulLoad = false;
   loadedRecoveryEpoch = -1;
+  loadedTarget = null;
   needsRefreshForEpoch = -1;
+  needsRefreshForTarget = false;
+  lastKnownTarget = null;
+  targetRefreshScheduled = false;
   useCapabilitiesStore.setState(initialState);
 }

@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../../lib/platform";
 import { useAvailabilityStore } from "../availability/availabilityStore";
-import { readOpenCodeRuntimeStatus, type OpenCodeRuntimeStatus } from "./runtimeStatus";
+import {
+  publishRuntimeStatus,
+  readOpenCodeRuntimeStatus,
+  type OpenCodeRuntimeStatus,
+} from "./runtimeStatus";
 
 /**
  * Reads which OpenCode service the backend is bound to.
@@ -54,6 +58,7 @@ export function useOpenCodeRuntimeStatus(
         if (cancelled) return;
         setStatus(next);
         setError(null);
+        publishRuntimeStatus(next);
       })
       .catch((cause: unknown) => {
         if (cancelled) return;

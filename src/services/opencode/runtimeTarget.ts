@@ -64,11 +64,29 @@ export interface OpenCodeRuntimeTarget {
   readonly profileId?: string;
 }
 
+/**
+ * The target identity the browser may use to detect runtime-target transitions.
+ *
+ * `targetRevision` is the connection-state revision: it increments on every
+ * install/clear/replace, so it changes when the active OpenCode target changes
+ * even if backend availability/recovery epoch does not. `targetId` identifies an
+ * installed target instance when one exists.
+ */
+export interface OpenCodeRuntimeTargetIdentity {
+  readonly targetRevision: number;
+  readonly targetId: number | null;
+}
+
 /** What the UI may learn about the runtime: a mode, never a credential. */
 export type OpenCodeRuntimeStatus =
-  | Readonly<{ mode: "unresolved" }>
-  | Readonly<{ mode: "managed" }>
-  | Readonly<{ mode: "adopted"; capabilities: OpenCodeServiceCapabilities | null }>;
+  | Readonly<{ mode: "unresolved" } & OpenCodeRuntimeTargetIdentity>
+  | Readonly<{ mode: "managed" } & OpenCodeRuntimeTargetIdentity>
+  | Readonly<
+      {
+        mode: "adopted";
+        capabilities: OpenCodeServiceCapabilities | null;
+      } & OpenCodeRuntimeTargetIdentity
+    >;
 
 export interface OpenCodeRuntimeTargetOptions {
   /** Test seam; production starts the managed child through the manager. */
@@ -131,15 +149,29 @@ export async function resolveOpenCodeRuntimeTarget(
 /**
  * Describes the runtime for the browser, without starting or probing anything.
  *
- * The status a page may render is deliberately this small: a mode, and for an
- * adopted service the capability snapshot that decides which optional surfaces
- * to hide. The origin, the password, the registration path and the probe
- * result body never leave the backend.
+ * The status a page may render is deliberately small: a mode, target identity
+ * (revision/id) for invalidation, and for an adopted service the capability
+ * snapshot that decides which optional surfaces to hide. The origin, the
+ * password, the registration path and the probe result body never leave the
+ * backend.
  */
 export function describeOpenCodeRuntime(): OpenCodeRuntimeStatus {
-  if (readShutdownState().shutdownStarted) return { mode: "unresolved" };
-  const target = readConnectionState().target;
-  if (target.mode === "unresolved") return { mode: "unresolved" };
-  if (target.mode === "managed") return { mode: "managed" };
-  return { mode: "adopted", capabilities: target.capabilities };
+  const state = readConnectionState();
+  const targetRevision = state.revision;
+  if (readShutdownState().shutdownStarted) {
+    return { mode: "unresolved", targetRevision, targetId: null };
+  }
+  const target = state.target;
+  if (target.mode === "unresolved") {
+    return { mode: "unresolved", targetRevision, targetId: null };
+  }
+  if (target.mode === "managed") {
+    return { mode: "managed", targetRevision, targetId: target.targetId };
+  }
+  return {
+    mode: "adopted",
+    capabilities: target.capabilities,
+    targetRevision,
+    targetId: target.targetId,
+  };
 }

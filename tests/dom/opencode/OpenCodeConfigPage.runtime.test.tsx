@@ -52,6 +52,8 @@ const { OpenCodeConfigPage } = await import("@web/features/opencode/OpenCodeConf
 
 const ADOPTED_WITHOUT_CONFIG: OpenCodeRuntimeStatus = {
   mode: "adopted",
+  targetRevision: 1,
+  targetId: 1,
   capabilities: {
     version: "2.3.1",
     supported: {
@@ -67,6 +69,8 @@ const ADOPTED_WITHOUT_CONFIG: OpenCodeRuntimeStatus = {
 
 const ADOPTED_WITH_CONFIG: OpenCodeRuntimeStatus = {
   mode: "adopted",
+  targetRevision: 1,
+  targetId: 1,
   capabilities: {
     version: "2.3.1",
     supported: {
@@ -131,7 +135,7 @@ describe("the configuration page on a degraded adopted service", () => {
   });
 
   it("loads normally for a managed service (nothing was assessed)", async () => {
-    runtimeStatus = { mode: "managed" };
+    runtimeStatus = { mode: "managed", targetRevision: 1, targetId: 1 };
     const mounted = await mount();
     expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
     expect(mounted.container.textContent).toContain("Native OpenCode JSON");

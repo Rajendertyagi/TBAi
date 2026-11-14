@@ -33,9 +33,16 @@ describe("readOpenCodeCapabilities", () => {
   });
 
   it("treats an authoritatively empty catalogue as success", async () => {
-    const capabilities = await readOpenCodeCapabilities(json(200, { agents: [], models: [] }));
+    const capabilities = await readOpenCodeCapabilities(
+      json(200, {
+        agents: [],
+        models: [],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
     expect(capabilities.agents).toEqual([]);
     expect(capabilities.models).toEqual([]);
+    expect(capabilities.target).toEqual({ targetRevision: 1, targetId: 1, mode: "managed" });
   });
 });
 
@@ -59,6 +66,7 @@ describe("normalizeOpenCodeCapabilities", () => {
         } as any,
       ],
       defaultModel: { providerID: "p", modelID: "m1" } as any,
+      target: { targetRevision: 2, targetId: 3, mode: "managed" } as any,
     });
 
     expect(normalized.models[0]?.variants).toEqual([]);
@@ -66,5 +74,6 @@ describe("normalizeOpenCodeCapabilities", () => {
     expect(normalized.models[1]?.variants).toEqual(["x"]);
     expect(normalized.models[1]?.limit).toBeUndefined();
     expect(normalized.defaultModel).toEqual({ providerID: "p", modelID: "m1", name: "m1" });
+    expect(normalized.target).toEqual({ targetRevision: 2, targetId: 3, mode: "managed" });
   });
 });

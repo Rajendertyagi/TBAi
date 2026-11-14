@@ -40,25 +40,60 @@ const CAPABILITIES: OpenCodeRuntimeCapabilities = {
   },
 };
 
-const ADOPTED: OpenCodeRuntimeStatus = { mode: "adopted", capabilities: CAPABILITIES };
+const ADOPTED: OpenCodeRuntimeStatus = {
+  mode: "adopted",
+  capabilities: CAPABILITIES,
+  targetRevision: 3,
+  targetId: 7,
+};
 
 describe("parseOpenCodeRuntimeStatus", () => {
   it("accepts the two capability-free modes", () => {
-    expect(parseOpenCodeRuntimeStatus({ mode: "unresolved" })).toEqual({ mode: "unresolved" });
-    expect(parseOpenCodeRuntimeStatus({ mode: "managed" })).toEqual({ mode: "managed" });
+    expect(
+      parseOpenCodeRuntimeStatus({ mode: "unresolved", targetRevision: 0, targetId: null }),
+    ).toEqual({
+      mode: "unresolved",
+      targetRevision: 0,
+      targetId: null,
+    });
+    expect(parseOpenCodeRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 5 })).toEqual(
+      {
+        mode: "managed",
+        targetRevision: 2,
+        targetId: 5,
+      },
+    );
   });
 
   it("carries the adopted capability snapshot", () => {
-    expect(parseOpenCodeRuntimeStatus({ mode: "adopted", capabilities: CAPABILITIES })).toEqual({
+    expect(
+      parseOpenCodeRuntimeStatus({
+        mode: "adopted",
+        capabilities: CAPABILITIES,
+        targetRevision: 3,
+        targetId: 7,
+      }),
+    ).toEqual({
       mode: "adopted",
       capabilities: CAPABILITIES,
+      targetRevision: 3,
+      targetId: 7,
     });
   });
 
   it("treats a NULL snapshot as unknown, not as everything absent", () => {
-    expect(parseOpenCodeRuntimeStatus({ mode: "adopted", capabilities: null })).toEqual({
+    expect(
+      parseOpenCodeRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        targetRevision: 3,
+        targetId: 7,
+      }),
+    ).toEqual({
       mode: "adopted",
       capabilities: null,
+      targetRevision: 3,
+      targetId: 7,
     });
   });
 
@@ -68,17 +103,35 @@ describe("parseOpenCodeRuntimeStatus", () => {
       version: "2.3.1",
       supported: { session: true, events: true, config: true, agent: true, model: true },
     };
-    expect(parseOpenCodeRuntimeStatus({ mode: "adopted", capabilities: partial })).toEqual({
+    expect(
+      parseOpenCodeRuntimeStatus({
+        mode: "adopted",
+        capabilities: partial,
+        targetRevision: 3,
+        targetId: 7,
+      }),
+    ).toEqual({
       mode: "adopted",
       capabilities: null,
+      targetRevision: 3,
+      targetId: 7,
     });
   });
 
   it("rejects a snapshot whose flags are not booleans", () => {
     const wrongType = { ...CAPABILITIES, supported: { ...CAPABILITIES.supported, config: "no" } };
-    expect(parseOpenCodeRuntimeStatus({ mode: "adopted", capabilities: wrongType })).toEqual({
+    expect(
+      parseOpenCodeRuntimeStatus({
+        mode: "adopted",
+        capabilities: wrongType,
+        targetRevision: 3,
+        targetId: 7,
+      }),
+    ).toEqual({
       mode: "adopted",
       capabilities: null,
+      targetRevision: 3,
+      targetId: 7,
     });
   });
 
@@ -87,11 +140,18 @@ describe("parseOpenCodeRuntimeStatus", () => {
       parseOpenCodeRuntimeStatus({
         mode: "adopted",
         capabilities: { supported: { session: true } },
+        targetRevision: 3,
+        targetId: 7,
       }),
-    ).toEqual({ mode: "adopted", capabilities: null });
+    ).toEqual({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 7 });
     expect(
-      parseOpenCodeRuntimeStatus({ mode: "adopted", capabilities: { version: "", supported: {} } }),
-    ).toEqual({ mode: "adopted", capabilities: null });
+      parseOpenCodeRuntimeStatus({
+        mode: "adopted",
+        capabilities: { version: "", supported: {} },
+        targetRevision: 3,
+        targetId: 7,
+      }),
+    ).toEqual({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 7 });
   });
 
   it("rejects an unknown mode instead of guessing", () => {
@@ -114,8 +174,12 @@ describe("parseOpenCodeRuntimeStatus", () => {
 
 describe("readOpenCodeRuntimeStatus", () => {
   it("reads a successful response", async () => {
-    const response = Response.json({ mode: "managed" });
-    expect(await readOpenCodeRuntimeStatus(response)).toEqual({ mode: "managed" });
+    const response = Response.json({ mode: "managed", targetRevision: 2, targetId: 5 });
+    expect(await readOpenCodeRuntimeStatus(response)).toEqual({
+      mode: "managed",
+      targetRevision: 2,
+      targetId: 5,
+    });
   });
 
   it("carries the server's message on a refusal", async () => {
@@ -133,7 +197,7 @@ describe("readOpenCodeRuntimeStatus", () => {
 
 describe("runtimeStatusView", () => {
   it("names each mode without implying who started what", () => {
-    expect(runtimeStatusView({ mode: "managed" })).toEqual({
+    expect(runtimeStatusView({ mode: "managed", targetRevision: 2, targetId: 5 })).toEqual({
       label: "Managed service",
       detail: null,
       unresolved: false,
@@ -145,7 +209,7 @@ describe("runtimeStatusView", () => {
   });
 
   it("marks unresolved as NOT started, and as unresolved", () => {
-    const view = runtimeStatusView({ mode: "unresolved" });
+    const view = runtimeStatusView({ mode: "unresolved", targetRevision: 0, targetId: null });
     expect(view).toEqual({ label: "Not started", detail: null, unresolved: true });
   });
 
@@ -157,14 +221,24 @@ describe("runtimeStatusView", () => {
 
 describe("openCodeCapabilitySupported", () => {
   it("does not hide anything for a managed service (nothing was assessed)", () => {
-    expect(openCodeCapabilitySupported({ mode: "managed" }, "config")).toBe(true);
-    expect(openCodeCapabilitySupported({ mode: "unresolved" }, "config")).toBe(true);
+    expect(
+      openCodeCapabilitySupported({ mode: "managed", targetRevision: 1, targetId: 1 }, "config"),
+    ).toBe(true);
+    expect(
+      openCodeCapabilitySupported(
+        { mode: "unresolved", targetRevision: 0, targetId: null },
+        "config",
+      ),
+    ).toBe(true);
   });
 
   it("does not hide anything when the adopted snapshot is unknown", () => {
-    expect(openCodeCapabilitySupported({ mode: "adopted", capabilities: null }, "config")).toBe(
-      true,
-    );
+    expect(
+      openCodeCapabilitySupported(
+        { mode: "adopted", capabilities: null, targetRevision: 1, targetId: 1 },
+        "config",
+      ),
+    ).toBe(true);
   });
 
   it("degrades only the capability the snapshot positively reports missing", () => {

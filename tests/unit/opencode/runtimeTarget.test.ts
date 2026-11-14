@@ -156,21 +156,37 @@ describe("resolveOpenCodeRuntimeTarget", () => {
 
 describe("describeOpenCodeRuntime", () => {
   it("reports unresolved with no target", () => {
-    expect(describeOpenCodeRuntime()).toEqual({ mode: "unresolved" });
+    expect(describeOpenCodeRuntime()).toEqual({
+      mode: "unresolved",
+      targetRevision: 0,
+      targetId: null,
+    });
   });
 
   it("reports managed without a capability snapshot", () => {
-    installManagedTarget({ baseUrl: MANAGED_URL, password: getOpenCodeAuthPassword() });
-    expect(describeOpenCodeRuntime()).toEqual({ mode: "managed" });
+    const targetId = installManagedTarget({
+      baseUrl: MANAGED_URL,
+      password: getOpenCodeAuthPassword(),
+    });
+    expect(describeOpenCodeRuntime()).toEqual({
+      mode: "managed",
+      targetRevision: 1,
+      targetId,
+    });
   });
 
   it("reports the adopted capability snapshot", () => {
-    installAdoptedTarget({
+    const targetId = installAdoptedTarget({
       origin: ADOPTED_ORIGIN,
       password: ADOPTED_PASSWORD,
       capabilities: CAPABILITIES,
     });
-    expect(describeOpenCodeRuntime()).toEqual({ mode: "adopted", capabilities: CAPABILITIES });
+    expect(describeOpenCodeRuntime()).toEqual({
+      mode: "adopted",
+      capabilities: CAPABILITIES,
+      targetRevision: 1,
+      targetId,
+    });
   });
 
   it("never reports the origin, the password or the registration path", () => {
@@ -183,6 +199,10 @@ describe("describeOpenCodeRuntime", () => {
   it("reports unresolved after shutdown", () => {
     installManagedTarget({ baseUrl: MANAGED_URL, password: getOpenCodeAuthPassword() });
     setShutdownStateReaderForTests(() => ({ shutdownEpoch: 1, shutdownStarted: true }));
-    expect(describeOpenCodeRuntime()).toEqual({ mode: "unresolved" });
+    expect(describeOpenCodeRuntime()).toEqual({
+      mode: "unresolved",
+      targetRevision: 1,
+      targetId: null,
+    });
   });
 });

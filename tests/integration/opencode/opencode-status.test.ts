@@ -41,22 +41,38 @@ describe("GET /api/opencode/status", () => {
   it("reports unresolved when nothing is installed", async () => {
     const response = await readStatus();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ mode: "unresolved" });
+    expect(await response.json()).toEqual({
+      mode: "unresolved",
+      targetRevision: 0,
+      targetId: null,
+    });
   });
 
   it("reports a managed service without internals", async () => {
-    installManagedTarget({ baseUrl: "http://127.0.0.1:4096", password: getOpenCodeAuthPassword() });
+    const targetId = installManagedTarget({
+      baseUrl: "http://127.0.0.1:4096",
+      password: getOpenCodeAuthPassword(),
+    });
     const response = await readStatus();
-    expect(await response.json()).toEqual({ mode: "managed" });
+    expect(await response.json()).toEqual({
+      mode: "managed",
+      targetRevision: 1,
+      targetId,
+    });
   });
 
   it("reports an adopted service and its capability snapshot", async () => {
-    installAdoptedTarget({
+    const targetId = installAdoptedTarget({
       origin: "http://127.0.0.1:5055",
       password: "synthetic-adopted-password",
       capabilities: CAPABILITIES,
     });
     const response = await readStatus();
-    expect(await response.json()).toEqual({ mode: "adopted", capabilities: CAPABILITIES });
+    expect(await response.json()).toEqual({
+      mode: "adopted",
+      capabilities: CAPABILITIES,
+      targetRevision: 1,
+      targetId,
+    });
   });
 });

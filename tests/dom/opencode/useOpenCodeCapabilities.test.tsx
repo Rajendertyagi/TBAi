@@ -45,6 +45,9 @@ const { useOpenCodeCapabilities, resetCapabilitiesStoreForTests } = await import
   "@web/features/opencode/useOpenCodeCapabilities.ts"
 );
 const { useAvailabilityStore } = await import("@web/features/availability/availabilityStore.ts");
+const { publishRuntimeStatus, resetRuntimeTargetStoreForTests } = await import(
+  "@web/features/opencode/runtimeStatus.ts"
+);
 
 interface HookState {
   agents: readonly { id: string }[];
@@ -133,11 +136,13 @@ beforeEach(() => {
   fetchCalls = 0;
   fetchQueue = [];
   resetCapabilitiesStoreForTests();
+  resetRuntimeTargetStoreForTests();
   useAvailabilityStore.setState({ recoveryEpoch: 0 });
 });
 
 afterEach(() => {
   resetCapabilitiesStoreForTests();
+  resetRuntimeTargetStoreForTests();
   useAvailabilityStore.setState({ recoveryEpoch: 0 });
 });
 
@@ -475,6 +480,280 @@ describe("useOpenCodeCapabilities shared store", () => {
     );
     await flush();
     expect(latest.models.map((m) => m.id)).toEqual(["m"]);
+    expect(latest.error).toBeNull();
+    await view.unmount();
+  });
+
+  it("refreshes active consumers when target revision changes without recovery epoch change", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchQueue.push(first, second);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "old", name: "Old", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(fetchCalls).toBe(1);
+    expect(latest.models.map((m) => m.id)).toEqual(["old"]);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 2 });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+    expect(latest.isLoading).toBe(true);
+
+    second.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "new", name: "New", providerID: "p", variants: [] }],
+        target: { targetRevision: 2, targetId: 2, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["new"]);
+    expect(latest.error).toBeNull();
+    await view.unmount();
+  });
+
+  it("handles managed-to-adopted target transition as a target identity change", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchQueue.push(first, second);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "managed", name: "Managed", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["managed"]);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+
+    second.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "adopted", name: "Adopted", providerID: "p", variants: [] }],
+        target: { targetRevision: 2, targetId: 2, mode: "adopted" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["adopted"]);
+    await view.unmount();
+  });
+
+  it("handles adopted target clear and restore without presenting previous target data as current", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const restored = deferred<Response>();
+    fetchQueue.push(first, restored);
+    publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 1, targetId: 10 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "adopted-old", name: "Old", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 10, mode: "adopted" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["adopted-old"]);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "unresolved", targetRevision: 2, targetId: null });
+    });
+    await flush();
+    expect(latest.models).toEqual([]);
+    expect(latest.defaultModel).toBeUndefined();
+    expect(latest.error).toBeTruthy();
+    expect(fetchCalls).toBe(1);
+
+    await act(async () => {
+      publishRuntimeStatus({
+        mode: "adopted",
+        capabilities: null,
+        targetRevision: 3,
+        targetId: 11,
+      });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+    expect(latest.isLoading).toBe(true);
+
+    restored.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "adopted-restored", name: "Restored", providerID: "p", variants: [] }],
+        target: { targetRevision: 3, targetId: 11, mode: "adopted" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["adopted-restored"]);
+    expect(latest.error).toBeNull();
+    await view.unmount();
+  });
+
+  it("does not let an old target response overwrite a newer target after replacement during in-flight request", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const oldReq = deferred<Response>();
+    const newReq = deferred<Response>();
+    fetchQueue.push(oldReq, newReq);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    expect(fetchCalls).toBe(1);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+
+    newReq.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "new-target", name: "New", providerID: "p", variants: [] }],
+        target: { targetRevision: 2, targetId: 2, mode: "adopted" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["new-target"]);
+
+    oldReq.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "old-target", name: "Old", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["new-target"]);
+    await view.unmount();
+  });
+
+  it("retains previous data on failed same-target refresh", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchQueue.push(first, second);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [{ id: "a", name: "A" }],
+        models: [{ id: "same", name: "Same", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["same"]);
+
+    await act(async () => {
+      useAvailabilityStore.setState((state) => ({ recoveryEpoch: state.recoveryEpoch + 1 }));
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    second.resolve(failingResponse("refresh failed"));
+    await flush();
+    expect(latest.error).toBe("refresh failed");
+    expect(latest.models.map((m) => m.id)).toEqual(["same"]);
+    expect(latest.agents.map((a) => a.id)).toEqual(["a"]);
+    await view.unmount();
+  });
+
+  it("does not present previous target data when a new-target refresh fails", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchQueue.push(first, second);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "old", name: "Old", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["old"]);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+
+    second.resolve(failingResponse("new target unavailable"));
+    await flush();
+    expect(latest.error).toBe("new target unavailable");
+    expect(latest.models).toEqual([]);
+    expect(latest.defaultModel).toBeUndefined();
+    await view.unmount();
+  });
+
+  it("coalesces multiple simultaneous target changes to one authoritative refresh for the latest target", async () => {
+    let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
+    const first = deferred<Response>();
+    const latestReq = deferred<Response>();
+    fetchQueue.push(first, latestReq);
+    publishRuntimeStatus({ mode: "managed", targetRevision: 1, targetId: 1 });
+    const view = render(createElement(Consumer, { onState: (s) => (latest = s) }));
+    await view.mount();
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "v1", name: "V1", providerID: "p", variants: [] }],
+        target: { targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    expect(fetchCalls).toBe(1);
+
+    await act(async () => {
+      publishRuntimeStatus({ mode: "managed", targetRevision: 2, targetId: 2 });
+      publishRuntimeStatus({ mode: "adopted", capabilities: null, targetRevision: 3, targetId: 3 });
+    });
+    await flush();
+    // Synchronous target changes coalesce to one authoritative refresh for the
+    // latest known target.
+    expect(fetchCalls).toBe(2);
+    expect(latest.models).toEqual([]);
+
+    latestReq.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "v3", name: "V3", providerID: "p", variants: [] }],
+        target: { targetRevision: 3, targetId: 3, mode: "adopted" },
+      }),
+    );
+    await flush();
+    expect(latest.models.map((m) => m.id)).toEqual(["v3"]);
     expect(latest.error).toBeNull();
     await view.unmount();
   });

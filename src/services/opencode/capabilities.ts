@@ -2,6 +2,7 @@ import { createOpenCodeClient, type OpenCodeClient } from "./client";
 import { toOpenCodeError } from "./errors";
 import { resolveOpenCodeRuntimeTarget } from "./runtimeTarget";
 import { openCodeServerManager } from "./serverManager";
+import { readConnectionState } from "./connectionState";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import type { ModelInfo } from "@opencode/client";
@@ -51,6 +52,13 @@ export interface OpenCodeDefaultModel {
   readonly name: string;
 }
 
+/** Identity of the active OpenCode runtime target a capabilities snapshot came from. */
+export interface OpenCodeCapabilitiesTarget {
+  readonly targetRevision: number;
+  readonly targetId: number | null;
+  readonly mode: "managed" | "adopted";
+}
+
 export interface OpenCodeCapabilities {
   agents: OpenCodeAgentInfo[];
   models: OpenCodeModelInfo[];
@@ -60,6 +68,8 @@ export interface OpenCodeCapabilities {
    * what happened before this field existed.
    */
   defaultModel?: OpenCodeDefaultModel;
+  /** The runtime target this catalogue was read from. */
+  target: OpenCodeCapabilitiesTarget;
 }
 
 /**
@@ -323,12 +333,22 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     };
   });
 
+  const state = readConnectionState();
+  const targetIdentity: OpenCodeCapabilitiesTarget = {
+    targetRevision: state.revision,
+    targetId: target.targetId ?? null,
+    mode: target.mode,
+  };
+
   logger.info("opencode", "opencode.capabilities", {
     agents: agents.length,
     models: models.length,
+    targetRevision: targetIdentity.targetRevision,
+    targetId: targetIdentity.targetId,
+    targetMode: targetIdentity.mode,
   });
 
-  return { agents, models, defaultModel };
+  return { agents, models, defaultModel, target: targetIdentity };
 }
 
 /**

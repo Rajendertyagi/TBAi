@@ -26,6 +26,8 @@
  * runtime that has actually failed presents the unavailable notice.
  */
 
+import { create } from "zustand";
+
 /** The routes the adoption probe checks. Mirrors the backend's capability ids. */
 export type OpenCodeCapabilityId = "session" | "events" | "config" | "agent" | "model" | "command";
 
@@ -35,11 +37,22 @@ export interface OpenCodeRuntimeCapabilities {
   readonly supported: Readonly<Record<OpenCodeCapabilityId, boolean>>;
 }
 
+/** Target identity for invalidation when the active OpenCode runtime changes. */
+export interface OpenCodeRuntimeTargetIdentity {
+  readonly targetRevision: number;
+  readonly targetId: number | null;
+}
+
 /** The stable status `GET /api/opencode/status` answers with. */
 export type OpenCodeRuntimeStatus =
-  | Readonly<{ mode: "unresolved" }>
-  | Readonly<{ mode: "managed" }>
-  | Readonly<{ mode: "adopted"; capabilities: OpenCodeRuntimeCapabilities | null }>;
+  | Readonly<{ mode: "unresolved" } & OpenCodeRuntimeTargetIdentity>
+  | Readonly<{ mode: "managed" } & OpenCodeRuntimeTargetIdentity>
+  | Readonly<
+      {
+        mode: "adopted";
+        capabilities: OpenCodeRuntimeCapabilities | null;
+      } & OpenCodeRuntimeTargetIdentity
+    >;
 
 /** The single sentence the error surface shows when no service can be reached. */
 export const OPENCODE_UNAVAILABLE_NOTICE = "OpenCode is not available";
@@ -93,6 +106,22 @@ function toCapabilities(input: unknown): OpenCodeRuntimeCapabilities | null {
   return Object.freeze({ version, supported: Object.freeze(narrowed) });
 }
 
+function toTargetIdentity(input: unknown): OpenCodeRuntimeTargetIdentity {
+  if (input === null || typeof input !== "object") {
+    return { targetRevision: 0, targetId: null };
+  }
+  const targetRevision = Reflect.get(input, "targetRevision");
+  const targetId = Reflect.get(input, "targetId");
+  return {
+    targetRevision:
+      typeof targetRevision === "number" && Number.isFinite(targetRevision)
+        ? Math.max(0, Math.floor(targetRevision))
+        : 0,
+    targetId:
+      typeof targetId === "number" && Number.isFinite(targetId) ? Math.floor(targetId) : null,
+  };
+}
+
 /**
  * Parses a status payload.
  *
@@ -107,9 +136,15 @@ export function parseOpenCodeRuntimeStatus(input: unknown): OpenCodeRuntimeStatu
     throw new Error("OpenCode returned an unreadable runtime status");
   }
   const mode = Reflect.get(input, "mode");
-  if (mode === "unresolved" || mode === "managed") return { mode };
+  const identity = toTargetIdentity(input);
+  if (mode === "unresolved") return { mode, ...identity };
+  if (mode === "managed") return { mode, ...identity };
   if (mode === "adopted") {
-    return { mode, capabilities: toCapabilities(Reflect.get(input, "capabilities")) };
+    return {
+      mode,
+      capabilities: toCapabilities(Reflect.get(input, "capabilities")),
+      ...identity,
+    };
   }
   throw new Error("OpenCode returned an unknown runtime status");
 }
@@ -155,6 +190,34 @@ export function runtimeStatusView(status: OpenCodeRuntimeStatus): OpenCodeRuntim
     detail: "Using the OpenCode service already running on this machine.",
     unresolved: false,
   };
+}
+
+/** True when two runtime statuses refer to the same target identity. */
+export function sameOpenCodeRuntimeTarget(
+  a: OpenCodeRuntimeTargetIdentity | null | undefined,
+  b: OpenCodeRuntimeTargetIdentity | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return a.targetRevision === b.targetRevision && a.targetId === b.targetId;
+}
+
+interface RuntimeTargetState {
+  /** Latest successfully observed runtime status (shared invalidation signal). */
+  status: OpenCodeRuntimeStatus | null;
+}
+
+export const useRuntimeTargetStore = create<RuntimeTargetState>()(() => ({
+  status: null,
+}));
+
+/** Publishes the latest observed runtime status for cross-store invalidation. */
+export function publishRuntimeStatus(status: OpenCodeRuntimeStatus): void {
+  useRuntimeTargetStore.setState({ status });
+}
+
+/** Test-only reset for the shared runtime target signal. */
+export function resetRuntimeTargetStoreForTests(): void {
+  useRuntimeTargetStore.setState({ status: null });
 }
 
 /**

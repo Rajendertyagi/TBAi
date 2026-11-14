@@ -18,12 +18,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { resetRuntimeTargetStoreForTests } from "@web/features/opencode/runtimeStatus.ts";
 import { useOpenCodeRuntimeStatus } from "@web/features/opencode/useOpenCodeRuntimeStatus.ts";
 
 /** The response the stubbed backend gives, or a failure sentinel. */
 let nextResponse: { kind: "json"; body: unknown } | { kind: "fail"; message: string } = {
   kind: "json",
-  body: { mode: "managed" },
+  body: { mode: "managed", targetRevision: 1, targetId: 1 },
 };
 let requests: string[] = [];
 
@@ -91,7 +92,8 @@ function errorOf(container: HTMLElement): string | null {
 afterEach(() => {
   globalThis.fetch = nativeFetch;
   requests = [];
-  nextResponse = { kind: "json", body: { mode: "managed" } };
+  nextResponse = { kind: "json", body: { mode: "managed", targetRevision: 1, targetId: 1 } };
+  resetRuntimeTargetStoreForTests();
 });
 
 describe("useOpenCodeRuntimeStatus", () => {
@@ -110,6 +112,8 @@ describe("useOpenCodeRuntimeStatus", () => {
       kind: "json",
       body: {
         mode: "adopted",
+        targetRevision: 2,
+        targetId: 2,
         capabilities: {
           version: "2.3.1",
           supported: {
@@ -146,7 +150,10 @@ describe("useOpenCodeRuntimeStatus", () => {
 
   it("keeps the last mode when a read fails, and exposes the failure", async () => {
     stubFetch();
-    nextResponse = { kind: "json", body: { mode: "adopted", capabilities: null } };
+    nextResponse = {
+      kind: "json",
+      body: { mode: "adopted", capabilities: null, targetRevision: 2, targetId: 2 },
+    };
     const mounted = await mount({ refreshKey: "connected" });
     expect(statusOf(mounted.container)).toBe("adopted");
     nextResponse = { kind: "fail", message: "backend went away" };
