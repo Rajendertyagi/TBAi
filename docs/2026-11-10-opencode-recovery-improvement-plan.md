@@ -581,3 +581,41 @@
   - `bun run format:check` -> **exit 1** (pre-existing/unrelated only: `tests/integration/opencode/process-ownership.test.ts` would be reformatted; task files formatted)
 
 - **Remaining limitations:** diagnostic observer is best-effort and bounded (oversized frames dropped from diagnostics only). No live OpenCode server/runtime/browser verification performed in this session. No push/merge performed.
+
+### 14.21 Cumulative validation blocker resolution (2026-11-14, `develop`)
+
+- **Workspace / Git safety:** canonical workspace `D:\Temp\ai-chat-app`, branch `develop`, starting HEAD `31ffe6a63b68c6599bcb21577d99da475209a567`, working tree clean before edits. `main` untouched (`7407d49ccdd4bd4c3c70d72eeef472593c81e8b6`); all LIB implementation commits (`24b633a`, `bb3ad35`, `caf3853`, `0d5618a`, `78032ae`, `56a87f0`, `31ffe6a`) remained ancestors of HEAD. No clone/worktree, no reset/clean/force-push/broad restore/stash deletion/amend/push/merge. No `git add .` / `git add -A`.
+
+- **Commit (focused intent, accidentally bundled):** `366369f` (`fix(opencode): accept stable unresolved fallback in capabilities identity guard`) — intended to be capabilities-only but also included the pre-existing lint/format cleanup in `tests/integration/opencode/process-ownership.test.ts` due to staging/commit sequencing error. No amend performed; recorded here for accuracy.
+
+- **Capabilities target-identity regression (resolved):**
+  - **Root cause:** `getOpenCodeCapabilities` post-read guard rejected any read when `readConnectionState().target.mode === "unresolved"` (and also required installed target id/revision match), so a valid managed-fallback/legacy resolved read was rejected when the connection state remained the same unresolved snapshot observed for that fallback (`resolveOpenCodeRuntimeTarget` fallback returns `mode:"managed"`, `targetRevision` = current unresolved revision, no `targetId`, without installing/publishing a target). This broke 7 `getOpenCodeCapabilities` success-path cases in `tests/unit/opencode/capabilities.test.ts` and 12 additional cases in the same file (19 ordinary failures surfaced by `test:quarantine` in quarantine trees).
+  - **Correction:** `src/services/opencode/capabilities.ts` now accepts only a stable unresolved fallback read (`target.targetId == null`, current state unresolved, same revision) or the same installed target/revision; it still rejects revision changes, installed target id/mode mismatches, target installation/replacement/clearing during read, and other mixed-identity/supersession cases. Guard not weakened.
+  - **Tests/evidence:** `bun test tests/unit/opencode/capabilities.test.ts` -> **exit 0** (18 pass, 0 fail). `bun test tests/unit/opencode/capabilities-identity.test.ts` -> **exit 0** (mid-read target replacement still rejected). `bun run test:quarantine` -> **exit 0** (no stale quarantine entries).
+
+- **Full test-suite hang (resolved in observed validation; exact leaked-resource cause not isolated):**
+  - **Prior evidence:** `bun run test` stalled without final summary; unit-only and integration-only runs stalled; integration excluding `tests/integration/mcp/**` completed (1002 pass, 75 skip, 0 fail). Suspected neighborhoods included `tests/unit/opencode/startup.test.ts` and MCP integration around `tests/integration/mcp/mcp-v2.test.ts`, but not proven sole causes.
+  - **Post-fix evidence:** targeted runs completed — `tests/unit/opencode/startup.test.ts` (21 pass), `tests/integration/mcp/mcp-v2.test.ts` (29 pass), all `tests/integration/mcp` (50 pass, 3 files), and multiple unit subsets including storage/services/server/scheduler/opencode groups. Full `bun run test` completed with summary: **6081 pass, 78 skip, 0 fail, 31200 expect() calls, 6159 tests across 461 files [403.66s]** (native process completed; no hang observed). No test-runner behavior changes, no skips/disables, no blind timeout increases.
+  - **Root-cause status:** exact hanging file/process/timer/worker/server/unclosed resource **not definitively isolated**. The hang was not reproduced after the capabilities-guard correction and lint/format cleanup commit; causation is **not proven** (no specific leaked handle identified). Recorded as resolved-by-observation in this validation run.
+
+- **Lint/format baseline (resolved):**
+  - **Root cause:** pre-existing/unrelated `tests/integration/opencode/process-ownership.test.ts` had unused `HOLD_SCRIPT` and a formatter line-wrap discrepancy.
+  - **Correction:** removed genuinely unused `HOLD_SCRIPT` constant and applied Biome formatting; test behavior/process-ownership coverage preserved (no refactor). Included in commit `366369f` (see note above).
+  - **Evidence:** `bun run lint` -> **exit 0**; `bun run format:check` -> **exit 0**.
+
+- **Cumulative local validation (CI-equivalent sequence, `.github/workflows/tests.yml` `verify` steps; local Bun 1.4.4 vs CI pin 1.4.2):**
+  - `bun run typecheck` -> **exit 0**
+  - `bun run lint` -> **exit 0**
+  - `bun run format:check` -> **exit 0**
+  - `bun run test:locations` -> **exit 0**
+  - `bun run build` -> **exit 0**
+  - `bun run test` -> **exit 0** (6081 pass, 78 skip, 0 fail, 31200 expect() calls, 6159 tests, 461 files)
+  - `bun run test:shutdown` -> **exit 0** (1 pass)
+  - `bun run test:startup-rollback` -> **exit 0** (2 pass)
+  - `bun run test:lifecycle-integration` -> **exit 0** (3 pass)
+  - `bun run test:dom` -> **exit 0** (814 pass, 0 fail, 4612 expect() calls, 82 files)
+  - `bun run test:quarantine` -> **exit 0** (no stale quarantine entries)
+
+- **Roadmap status:** `LIB-IMPL-01` through `LIB-IMPL-04` remain **DONE**. No unrelated conditional reliability tasks marked DONE/reopened.
+
+- **Remaining limitations / CI-only:** no live OpenCode server/runtime/browser verification performed. CI-only jobs not executed locally (`opencode-runtime`, scoped `e2e`, `opencode-g3`, `tauri`, dispatch-only jobs). Local Bun version differs from CI pin (1.4.4 vs 1.4.2); no material discrepancy observed in this run. No push/merge performed. `main` untouched.
