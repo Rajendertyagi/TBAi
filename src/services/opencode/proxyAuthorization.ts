@@ -52,9 +52,16 @@ export { OPENCODE_SESSION_HEADER };
  * Carries the status the proxy answers with, so the route does not have to
  * re-derive it and the refusal reason stays attached to the decision.
  */
+export type OpenCodeProxyRefusalCause =
+  | "session_mismatch"
+  | "missing_session"
+  | "unknown_session"
+  | "workspace_unresolvable";
+
 export class OpenCodeProxyRefusalError extends Error {
   constructor(
     readonly status: 400 | 403,
+    readonly causeCode: OpenCodeProxyRefusalCause,
     message: string,
   ) {
     super(message);
@@ -107,19 +114,28 @@ export async function authorizeOpenCodeProxyRequest(input: {
   if (pathSessionId && headerSessionId && pathSessionId !== headerSessionId) {
     throw new OpenCodeProxyRefusalError(
       400,
+      "session_mismatch",
       "The session id in the request path does not match the session header",
     );
   }
 
   const sessionId = pathSessionId ?? headerSessionId;
   if (!sessionId) {
-    throw new OpenCodeProxyRefusalError(403, "The request does not name an OpenCode session");
+    throw new OpenCodeProxyRefusalError(
+      403,
+      "missing_session",
+      "The request does not name an OpenCode session",
+    );
   }
 
-  const normalizedOwner = serviceOwner || "managed";
+  const normalizedOwner = serviceOwner || "local";
   const conversation = await conversationService.findByOpenCodeSession(normalizedOwner, sessionId);
   if (!conversation) {
-    throw new OpenCodeProxyRefusalError(403, "The OpenCode session is not known to this server");
+    throw new OpenCodeProxyRefusalError(
+      403,
+      "unknown_session",
+      "The OpenCode session is not known to this server",
+    );
   }
 
   let directory: string;
@@ -132,6 +148,7 @@ export async function authorizeOpenCodeProxyRequest(input: {
     // back to its own working directory.
     throw new OpenCodeProxyRefusalError(
       403,
+      "workspace_unresolvable",
       err instanceof Error
         ? err.message
         : "The workspace for this OpenCode session could not be resolved",

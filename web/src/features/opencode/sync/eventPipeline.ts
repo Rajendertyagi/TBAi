@@ -591,6 +591,21 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     // no longer live by definition but has not been replaced yet.
     if (!host.ownsRuntime(failed)) return;
     if (retryWait !== null) return;
+    // A 403 is an authorization/scope refusal (e.g. session not yet known or
+    // workspace unresolvable). Retrying the same stream request in a loop will
+    // not fix it; fail immediately so the UI can surface the refusal and the
+    // session/bootstrap can be refreshed explicitly.
+    if (error.status === 403) {
+      exhausted = true;
+      host.dispatch({
+        type: "connection_changed",
+        connection: { type: "failed", attempt: reconnectAttempt },
+      });
+      host.dispatch({ type: "load_failed", error });
+      host.failReady(failed, error);
+      host.retireAttempt(failed);
+      return;
+    }
     // Terminal failure: no more auto-retries after exhausting the budget.
     if (reconnectAttempt >= host.config.maxReconnectAttempts) {
       exhausted = true;

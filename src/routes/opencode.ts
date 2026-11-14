@@ -710,12 +710,17 @@ app.all("*", async (c) => {
     });
   } catch (err) {
     if (err instanceof OpenCodeProxyRefusalError) {
+      const sessionId =
+        match.parameters.sessionID ?? reqHeaders.get(OPENCODE_SESSION_HEADER) ?? undefined;
       logger.warn("opencode", "proxy.authorization_refused", {
         requestId,
         method,
         pathname: upstreamPath,
         status: err.status,
         reason: err.message,
+        refusalCause: err.causeCode,
+        sessionId,
+        serviceOwner,
       });
       return c.json({ error: err.message }, err.status);
     }

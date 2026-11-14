@@ -47,16 +47,15 @@ export function useOpenCodeRuntime(
   const runtime = useV2AssistantRuntime(controller, conversationId);
 
   useEffect(() => {
-    // The runtime is loaded only once the session exists. Before the
-    // bootstrap resolves there is no session id, and the transport would ask
-    // the server for a scope it does not have: the event subscription names
-    // the session it belongs to, and the server refuses a request that names
-    // none. Waiting is the honest behaviour, and the client is rebuilt when
-    // the session id arrives.
-    if (!sessionId) return;
+    // The runtime is loaded only once the session exists and its workspace
+    // scope is resolved. Before bootstrap resolves there is no session id, and
+    // without a resolved directory the proxy cannot authorize the event stream
+    // (it would refuse with 403). Waiting is the honest behaviour; the client
+    // is rebuilt when the session id or directory arrives.
+    if (!sessionId || !eventDirectory) return;
     void controller.load().catch(() => undefined);
     return () => controller.dispose();
-  }, [controller, sessionId]);
+  }, [controller, sessionId, eventDirectory]);
 
   useOpenCodeAuxiliaryResync(controller);
 

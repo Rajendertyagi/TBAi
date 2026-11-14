@@ -130,6 +130,10 @@ export function OpenCodeView() {
       .then((data) => {
         if (cancelled) return;
         setTimedOut(false);
+        if (!data.directory) {
+          setError("OpenCode session workspace could not be resolved");
+          return;
+        }
         // Both are set in one update, so the runtime — which only mounts once
         // `sessionId` exists — always builds its event subscription from a
         // client that already carries the scope.
