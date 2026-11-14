@@ -1,196 +1,82 @@
-import { useEffect, useState } from "react";
-import { useAvailabilityStore } from "../availability/availabilityStore";
-import { apiFetch } from "../../lib/platform";
+import { useEffect, useRef } from "react";
+import {
+  acquireCapabilities,
+  buildOpenCodeThinkingOptions,
+  normalizeOpenCodeCapabilities,
+  readOpenCodeCapabilities,
+  releaseCapabilities,
+  resetCapabilitiesStoreForTests,
+  useCapabilitiesStore,
+  type NormalizedOpenCodeCapabilities,
+  type OpenCodeAgentOption,
+  type OpenCodeCapabilities,
+  type OpenCodeDefaultModel,
+  type OpenCodeModelOption,
+  type OpenCodeThinkingOption,
+} from "./capabilitiesStore";
 
-export interface OpenCodeAgentOption {
-  id: string;
-  name: string;
-  description?: string;
-}
-
-export interface OpenCodeModelOption {
-  id: string;
-  name: string;
-  providerID: string;
-  family?: string;
-  /** Thinking levels (OpenCode "variants") the model exposes. Empty = no thinking control. */
-  variants: string[];
-  /**
-   * Host-reported context/output limits. Absent when the server omits them —
-   * the context ring falls back to the configured default window.
-   */
-  limit?: { context: number; output: number };
-}
-
-/**
- * The model the server offers when the reader has not chosen one.
- *
- * Descriptor only. The server's own default response carries the provider's
- * credentials in `settings`; the backend projects those out before this point,
- * and nothing re-adds them.
- */
-export interface OpenCodeDefaultModel {
-  readonly providerID: string;
-  readonly modelID: string;
-  readonly name: string;
-}
-
-export interface OpenCodeCapabilities {
-  agents: OpenCodeAgentOption[];
-  models: OpenCodeModelOption[];
-  /** Absent when the server advertises no default. */
-  defaultModel?: OpenCodeDefaultModel;
-}
-
-/**
- * A thinking-level option the OpenCode thinking chip renders. `id` is ""
- * (empty string = "Default" = omit the variant field) or a live variant id.
- */
-export interface OpenCodeThinkingOption {
-  id: string;
-  label: string;
-}
-
-/**
- * Builds the thinking options list for a given model: always a "Default"
- * entry (= omit the variant), followed by the model's live variant ids.
- * Returns an empty list when the model has no variants — the chip hides.
- */
-export function buildOpenCodeThinkingOptions(
-  // `null` is accepted as well as `undefined`: the guard below already treats a
-  // missing model identically, and the model chip's catalogue lookup returns
-  // `null` for an id this install does not carry. The body has always handled
-  // it; only the declared type was narrower than the behaviour.
-  model: OpenCodeModelOption | null | undefined,
-): OpenCodeThinkingOption[] {
-  if (!model || model.variants.length === 0) return [];
-  return [{ id: "", label: "Default" }, ...model.variants.map((v) => ({ id: v, label: v }))];
-}
-
-/**
- * Reads the capabilities payload, turning a non-2xx response into an error.
- *
- * A failed fetch must never be read as "this install has no models": the body of
- * a 5xx proxied response is an `{ error }` object, and parsing it as a catalogue
- * would populate the picker with an authoritative-looking empty list. The
- * caller's catch keeps the previous lists, which is the honest outcome.
- *
- * @param response - The capabilities response.
- * @returns The parsed capabilities.
- * @throws Error carrying the server's message, or `HTTP <status>` when the body
- *   is not JSON.
- */
-export async function readOpenCodeCapabilities(response: Response): Promise<OpenCodeCapabilities> {
-  if (!response.ok) {
-    let detail: string | null = null;
-    try {
-      const body: unknown = await response.json();
-      if (body && typeof body === "object" && "error" in body && typeof body.error === "string")
-        detail = body.error;
-    } catch {
-      // Not a JSON error envelope; the status is all we have.
-    }
-    throw new Error(detail ?? `HTTP ${response.status}`);
-  }
-  return (await response.json()) as OpenCodeCapabilities;
-}
+export {
+  buildOpenCodeThinkingOptions,
+  normalizeOpenCodeCapabilities,
+  readOpenCodeCapabilities,
+  resetCapabilitiesStoreForTests,
+};
+export type {
+  NormalizedOpenCodeCapabilities,
+  OpenCodeAgentOption,
+  OpenCodeCapabilities,
+  OpenCodeDefaultModel,
+  OpenCodeModelOption,
+  OpenCodeThinkingOption,
+};
 
 /**
  * Live-queries the managed OpenCode server for its available agents and models.
  * Pass `enabled = false` (e.g. when the Direct engine is selected) to skip the
  * request entirely so the server is not started unnecessarily. Every value comes
  * from the server — nothing is hardcoded.
+ *
+ * State is shared across all enabled consumers: simultaneous mounts produce one
+ * request, recovery epochs trigger one authoritative refresh for active
+ * consumers, and failed refreshes retain the last successful catalogue.
  */
 export function useOpenCodeCapabilities(enabled = true) {
-  const [agents, setAgents] = useState<OpenCodeAgentOption[]>([]);
-  const [models, setModels] = useState<OpenCodeModelOption[]>([]);
-  const [defaultModel, setDefaultModel] = useState<OpenCodeDefaultModel | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const agents = useCapabilitiesStore((s) => s.agents);
+  const models = useCapabilitiesStore((s) => s.models);
+  const defaultModel = useCapabilitiesStore((s) => s.defaultModel);
+  const isLoading = useCapabilitiesStore((s) => s.isLoading);
+  const error = useCapabilitiesStore((s) => s.error);
+  const acquiredRef = useRef(false);
 
-  // Coordinated recovery (Phase 3.8): refetch authoritative capabilities
-  // when the backend returns. Failure retains the previous lists.
-  const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` is a store counter that is never read in the body - it is the refetch trigger. Availability recovery changes no prop this effect observes, but the capabilities that were fetched against a dead server have to be fetched again once the server is back.
   useEffect(() => {
     if (!enabled) {
-      setAgents([]);
-      setModels([]);
-      setDefaultModel(undefined);
-      setIsLoading(false);
-      setError(null);
+      if (acquiredRef.current) {
+        acquiredRef.current = false;
+        releaseCapabilities();
+      }
       return;
     }
-    // Abortable: the request can outlive its owner (route change while the
-    // managed server is still booting). Aborting frees the client; the
-    // server singleton keeps whatever state it reached by design.
-    const controller = new AbortController();
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-    apiFetch("/api/opencode/capabilities", { signal: controller.signal })
-      .then(readOpenCodeCapabilities)
-      .then((data: OpenCodeCapabilities) => {
-        if (cancelled) return;
-        setAgents(data.agents ?? []);
-        // Only a well-formed descriptor is carried forward. A malformed one would
-        // become a model reference that the server rejects on the first turn,
-        // which is the exact failure this default exists to prevent.
-        setDefaultModel(
-          data.defaultModel &&
-            typeof data.defaultModel.providerID === "string" &&
-            data.defaultModel.providerID.length > 0 &&
-            typeof data.defaultModel.modelID === "string" &&
-            data.defaultModel.modelID.length > 0
-            ? {
-                providerID: data.defaultModel.providerID,
-                modelID: data.defaultModel.modelID,
-                name:
-                  typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
-                    ? data.defaultModel.name
-                    : data.defaultModel.modelID,
-              }
-            : undefined,
-        );
-        // Keep the optional variants field total for the picker contract.
-        setModels(
-          (data.models ?? []).map((m) => ({
-            ...m,
-            variants: m.variants ?? [],
-            // Pass through only well-formed limits; anything else stays
-            // absent so the ring uses the default window.
-            limit:
-              m.limit &&
-              typeof m.limit.context === "number" &&
-              Number.isFinite(m.limit.context) &&
-              m.limit.context > 0 &&
-              typeof m.limit.output === "number" &&
-              Number.isFinite(m.limit.output) &&
-              m.limit.output > 0
-                ? {
-                    context: Math.floor(m.limit.context),
-                    output: Math.floor(m.limit.output),
-                  }
-                : undefined,
-          })),
-        );
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        // Deliberate aborts are owner teardown, not failures: stay silent so
-        // no error flashes for a navigation the user already left.
-        if (e instanceof Error && e.name === "AbortError") return;
-        setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
+    if (!acquiredRef.current) {
+      acquiredRef.current = true;
+      acquireCapabilities();
+    }
     return () => {
-      cancelled = true;
-      controller.abort();
+      if (acquiredRef.current) {
+        acquiredRef.current = false;
+        releaseCapabilities();
+      }
     };
-  }, [enabled, recoveryEpoch]);
+  }, [enabled]);
+
+  if (!enabled) {
+    return {
+      agents: [] as OpenCodeAgentOption[],
+      models: [] as OpenCodeModelOption[],
+      defaultModel: undefined as OpenCodeDefaultModel | undefined,
+      isLoading: false,
+      error: null as string | null,
+    };
+  }
 
   return { agents, models, defaultModel, isLoading, error };
 }

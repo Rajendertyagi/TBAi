@@ -8,7 +8,10 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { readOpenCodeCapabilities } from "@web/features/opencode/useOpenCodeCapabilities.ts";
+import {
+  normalizeOpenCodeCapabilities,
+  readOpenCodeCapabilities,
+} from "@web/features/opencode/useOpenCodeCapabilities.ts";
 
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -33,5 +36,35 @@ describe("readOpenCodeCapabilities", () => {
     const capabilities = await readOpenCodeCapabilities(json(200, { agents: [], models: [] }));
     expect(capabilities.agents).toEqual([]);
     expect(capabilities.models).toEqual([]);
+  });
+});
+
+describe("normalizeOpenCodeCapabilities", () => {
+  it("preserves validation/defaulting semantics for models and defaultModel", () => {
+    const normalized = normalizeOpenCodeCapabilities({
+      agents: [{ id: "a", name: "A" }],
+      models: [
+        {
+          id: "m1",
+          name: "M1",
+          providerID: "p",
+          limit: { context: 100.7, output: 20.2 },
+        } as any,
+        {
+          id: "m2",
+          name: "M2",
+          providerID: "p",
+          variants: ["x"],
+          limit: { context: 0, output: 20 },
+        } as any,
+      ],
+      defaultModel: { providerID: "p", modelID: "m1" } as any,
+    });
+
+    expect(normalized.models[0]?.variants).toEqual([]);
+    expect(normalized.models[0]?.limit).toEqual({ context: 100, output: 20 });
+    expect(normalized.models[1]?.variants).toEqual(["x"]);
+    expect(normalized.models[1]?.limit).toBeUndefined();
+    expect(normalized.defaultModel).toEqual({ providerID: "p", modelID: "m1", name: "m1" });
   });
 });

@@ -28,6 +28,7 @@ beforeAll(async () => {
     openCodeView: "web/src/features/opencode/OpenCodeView.tsx",
     conversationsList: "web/src/features/sidebar/hooks/useConversationsList.ts",
     capabilities: "web/src/features/opencode/useOpenCodeCapabilities.ts",
+    capabilitiesStore: "web/src/features/opencode/capabilitiesStore.ts",
     conversationConfig: "web/src/features/opencode/useOpenCodeConversationConfig.ts",
     recovery: "web/src/features/availability/recovery.ts",
   };
@@ -256,7 +257,14 @@ describe("epoch-driven refetch subscriptions (Phase 3.8)", () => {
   });
 
   it("[P3-09d] OpenCode capabilities + conversation config refetch on recoveryEpoch", () => {
-    expect(sources.capabilities).toContain("[enabled, recoveryEpoch]");
+    // Capabilities refetch is coordinated by the shared store (one authoritative
+    // refresh for active consumers) rather than per-hook effect deps.
+    expect(sources.capabilities).toContain("capabilitiesStore");
+    expect(sources.capabilities).toContain("acquireCapabilities");
+    expect(sources.capabilities).toContain("releaseCapabilities");
+    expect(sources.capabilitiesStore).toContain("useAvailabilityStore.subscribe");
+    expect(sources.capabilitiesStore).toContain("recoveryEpoch");
+    expect(sources.capabilitiesStore).toContain("ensureForActiveSubscribers(true)");
     expect(sources.conversationConfig).toContain("[conversationId, recoveryEpoch]");
   });
 });
