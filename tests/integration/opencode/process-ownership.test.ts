@@ -36,14 +36,6 @@ import {
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 const SHELL_FIXTURE = path.join(REPO_ROOT, "tests/fixtures/g2-shell.ts");
-const HOLD_SCRIPT = `
-import { openSync } from "node:fs";
-const file = process.env.TBAI_HELD_FILE;
-if (!file) throw new Error("TBAI_HELD_FILE is required");
-openSync(file, "r+");
-process.stdout.write("held\\n");
-setInterval(() => {}, 1000);
-`;
 
 interface ShellRecord {
   readonly shellPid: number;
@@ -178,7 +170,8 @@ describe("G2 Windows process ownership", () => {
       expect(first).not.toBeNull();
       // Phase 1 decommission: compatibility stub, no exclusive ownership.
       expect(acquireNamedMutex(name)).not.toBeNull();
-      if (first === null) throw new Error("expected the decommissioned mutex stub to return a lease");
+      if (first === null)
+        throw new Error("expected the decommissioned mutex stub to return a lease");
       expect(() => releaseNamedMutex(first)).not.toThrow();
     },
   );

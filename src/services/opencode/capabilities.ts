@@ -345,12 +345,23 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
   // If the resolved target was superseded during the read, the transport is
   // invalidated and requests fail; a successful read must still be tagged with
   // the exact captured target identity it was obtained from.
-  const current = readConnectionState().target;
-  if (
-    current.mode === "unresolved" ||
-    current.targetId !== target.targetId ||
-    readConnectionState().revision !== target.targetRevision
-  ) {
+  //
+  // A managed fallback read is valid when the connection state is still the same
+  // unresolved snapshot the resolver observed (no installed target, same
+  // revision). Any installed-target change, clear, replacement, or revision move
+  // is a genuine supersession/mixed identity and must be rejected.
+  const currentState = readConnectionState();
+  const current = currentState.target;
+  const isStableUnresolvedFallback =
+    target.targetId == null &&
+    current.mode === "unresolved" &&
+    currentState.revision === target.targetRevision;
+  const isSameInstalledTarget =
+    target.targetId != null &&
+    current.mode !== "unresolved" &&
+    current.targetId === target.targetId &&
+    currentState.revision === target.targetRevision;
+  if (!isStableUnresolvedFallback && !isSameInstalledTarget) {
     // The active target changed after this catalogue was read. Returning it
     // tagged as the new target would mix identities; callers will refresh for
     // the current target, so report this read as superseded.
