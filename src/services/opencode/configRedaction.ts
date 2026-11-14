@@ -1,3 +1,5 @@
+import { parseOpenCodeConfigText } from "./configParse";
+
 /**
  * Credential redaction for the OpenCode configuration projection.
  *
@@ -305,28 +307,22 @@ export function redactOpenCodeConfigDocument(
 /**
  * Produces the redacted projection of the configuration file's **text**.
  *
- * The text is parsed, redacted and re-serialized, so the result is a valid
- * JSON document with the same shape and the same key names — with the
- * credentials masked.
+ * The text is parsed with the shared JSON/JSONC reader, redacted, and
+ * re-serialized as a normalized JSON document with the same structure and key
+ * names — with credentials masked. Comments and original formatting are not
+ * preserved in this preview; the source file itself remains unchanged.
  *
- * A file whose text is not a JSON object **cannot** be redacted: there is no
- * structure to walk, and a textual scan would be a guess that could leak the
- * very value it was meant to hide. Such text is withheld, which the caller
- * signals with the document's own `malformed` flag.
+ * A file whose text is not a valid JSON/JSONC object **cannot** be redacted:
+ * there is no trusted structure to walk, and a textual scan would be a guess
+ * that could leak the very value it was meant to hide. Such text is withheld.
  *
- * @param raw - The file's text.
- * @returns The redacted text, or an empty string when the text cannot be
- *   parsed into an object (including an empty file, which stays empty).
+ * @param raw - The file's original source text.
+ * @returns The redacted normalized JSON text, or an empty string when the text
+ *   cannot be parsed into an object (including an empty file, which stays empty).
  */
 export function redactOpenCodeConfigText(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return raw;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return "";
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "";
-  return `${JSON.stringify(redactOpenCodeConfigDocument(parsed as Record<string, unknown>), null, 2)}\n`;
+  const parsed = parseOpenCodeConfigText(raw);
+  if (parsed.kind === "empty") return raw;
+  if (parsed.kind === "invalid") return "";
+  return `${JSON.stringify(redactOpenCodeConfigDocument(parsed.doc), null, 2)}\n`;
 }

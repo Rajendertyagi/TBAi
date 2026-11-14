@@ -21,14 +21,17 @@ import * as realConfig from "@web/features/opencode/openCodeConfig.ts";
 import { openCodeConfigCopy } from "@web/features/opencode/configCopy.ts";
 import type { OpenCodeRuntimeStatus } from "@web/features/opencode/runtimeStatus.ts";
 
-const SNAPSHOT = {
+const BASE_SNAPSHOT = {
   path: "C:/cfg/opencode.json",
   discoveredPaths: ["C:/cfg/opencode.json"],
   raw: "{}",
   malformed: false,
   editable: true,
-  permissions: [{ action: "shell", resource: "*", effect: "ask" }],
-} as const;
+  writeDisabledReason: null as null | "adopted_g4_unproven" | "managed_root_not_owned",
+  permissions: [{ action: "shell", resource: "*", effect: "ask" }] as readonly unknown[],
+};
+
+let snapshot = { ...BASE_SNAPSHOT, permissions: [...BASE_SNAPSHOT.permissions] };
 
 /** How many times the page asked for the configuration. */
 let configReads = 0;
@@ -37,7 +40,7 @@ mock.module("@web/features/opencode/openCodeConfig.ts", () => ({
   ...realConfig,
   fetchOpenCodeConfig: async () => {
     configReads += 1;
-    return { ...SNAPSHOT, permissions: [...SNAPSHOT.permissions] };
+    return { ...snapshot, permissions: [...(snapshot.permissions ?? [])] };
   },
 }));
 
@@ -116,6 +119,7 @@ function alertText(container: HTMLElement): string {
 describe("the configuration page on a degraded adopted service", () => {
   beforeEach(() => {
     configReads = 0;
+    snapshot = { ...BASE_SNAPSHOT, permissions: [...BASE_SNAPSHOT.permissions] };
   });
 
   it("says the route is absent instead of reporting a broken file", async () => {
@@ -151,6 +155,35 @@ describe("the configuration page on a degraded adopted service", () => {
     const mounted = await mount();
     expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
     expect(mounted.container.textContent).toContain("Native OpenCode JSON");
+    unmount(mounted);
+  });
+
+  it("renders a valid readable JSONC snapshot without malformed warning and keeps controls disabled", async () => {
+    runtimeStatus = { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 };
+    snapshot = {
+      path: "C:/cfg/opencode.jsonc",
+      discoveredPaths: ["C:/cfg/opencode.jsonc"],
+      raw: '{\n  "shell": "powershell",\n  "permissions": [\n    {\n      "action": "shell",\n      "resource": "*",\n      "effect": "ask"\n    }\n  ]\n}\n',
+      malformed: false,
+      editable: false,
+      writeDisabledReason: "managed_root_not_owned",
+      permissions: [{ action: "shell", resource: "*", effect: "ask" }],
+    };
+    const mounted = await mount();
+    const text = mounted.container.textContent ?? "";
+    expect(text).not.toContain(openCodeConfigCopy.states.malformed);
+    expect(text).toContain("Native OpenCode JSON");
+    expect(text).toContain(openCodeConfigCopy.json.normalized);
+    expect(text).toContain("shell");
+    expect(text).toContain(openCodeConfigCopy.states.writesDisabled.managed_root_not_owned);
+    const save = [...mounted.container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Save"),
+    );
+    expect(
+      save?.hasAttribute("disabled") ||
+        save?.getAttribute("aria-disabled") === "true" ||
+        save === undefined,
+    ).toBe(true);
     unmount(mounted);
   });
 });

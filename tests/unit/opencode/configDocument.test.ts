@@ -680,18 +680,30 @@ describe("readOpenCodeConfigDocument", () => {
     }
   });
 
-  it("reports a JSONC global config as malformed rather than rewriting it", async () => {
-    // OpenCode accepts JSONC, and `JSON.parse` does not. Editing such a file
-    // with a JSON serializer would delete the user's comments on the first
-    // save, so it is reported read-only instead.
+  it("reads a valid JSONC global config without marking it malformed", async () => {
+    // OpenCode accepts JSONC. A valid JSONC document must be readable for
+    // inspection and permission extraction, while its original source remains
+    // unchanged and writes stay refused by policy elsewhere.
     const dir = `${Bun.env.TEMP ?? "."}/tbai-jsonc-${Date.now()}`;
-    await Bun.write(`${dir}/opencode.jsonc`, '{\n  // keep me\n  "shell": "powershell"\n}');
+    const path = `${dir}/opencode.jsonc`;
+    const raw =
+      '{\n  // keep me\n  "shell": "powershell",\n  "permissions": [\n    { "action": "question", "resource": "*", "effect": "ask" },\n  ]\n}';
+    await Bun.write(path, raw);
     try {
-      const doc = await read([{ type: "directory", path: dir }]);
-      expect(doc.malformed).toBe(true);
-      expect(doc.raw).toContain("keep me");
+      const doc = await read([
+        { type: "directory", path: dir },
+        {
+          type: "document",
+          path,
+          info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
+        },
+      ]);
+      expect(doc.malformed).toBe(false);
+      expect(doc.raw).toBe(raw);
+      expect(doc.doc.shell).toBe("powershell");
+      expect(doc.doc.permissions).toEqual([{ action: "question", resource: "*", effect: "ask" }]);
     } finally {
-      await Bun.file(`${dir}/opencode.jsonc`).delete();
+      await Bun.file(path).delete();
     }
   });
 
@@ -746,6 +758,106 @@ describe("readOpenCodeConfigDocument", () => {
     } finally {
       await Bun.file(first).delete();
       await Bun.file(second).delete();
+    }
+  });
+
+  it("reads a valid selected JSONC document with comments, trailing commas and nested data", async () => {
+    const path = `${Bun.env.TEMP ?? "."}/tbai-selected-${Date.now()}.json`;
+    const raw = `{
+  // top comment
+  "shell": "powershell",
+  "nested": { "a": [1, 2,], "b": { "c": true, }, },
+  "permissions": [
+    { "action": "question", "resource": "*", "effect": "ask" },
+  ],
+}`;
+    await Bun.write(path, raw);
+    try {
+      const doc = await read([
+        {
+          type: "document",
+          path,
+          info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
+        },
+      ]);
+      expect(doc.malformed).toBe(false);
+      expect(doc.raw).toBe(raw);
+      expect(doc.doc.shell).toBe("powershell");
+      expect((doc.doc.nested as any).a).toEqual([1, 2]);
+      expect((doc.doc.nested as any).b.c).toBe(true);
+      expect(doc.doc.permissions).toEqual([{ action: "question", resource: "*", effect: "ask" }]);
+    } finally {
+      await Bun.file(path).delete();
+    }
+  });
+
+  it("reads a valid JSONC document from a .json path without marking it malformed", async () => {
+    const path = `${Bun.env.TEMP ?? "."}/tbai-jsonc-in-json-${Date.now()}.json`;
+    const raw =
+      '{\n  // comment in .json\n  "permissions": [{ "action": "shell", "resource": "*", "effect": "ask" }],\n}';
+    await Bun.write(path, raw);
+    try {
+      const doc = await read([{ type: "document", path, info: { permissions: [] } }]);
+      expect(doc.malformed).toBe(false);
+      expect(doc.raw).toBe(raw);
+      expect(doc.doc.permissions).toEqual([{ action: "shell", resource: "*", effect: "ask" }]);
+    } finally {
+      await Bun.file(path).delete();
+    }
+  });
+
+  it("reports invalid JSONC, arrays and scalar roots as malformed", async () => {
+    const cases = [
+      { name: "invalid-jsonc", text: '{\n  // broken\n  "a": ,\n}' },
+      { name: "array-root", text: "[1, 2, 3]" },
+      { name: "string-root", text: '"hello"' },
+      { name: "null-root", text: "null" },
+    ];
+    for (const item of cases) {
+      const path = `${Bun.env.TEMP ?? "."}/tbai-${item.name}-${Date.now()}.json`;
+      await Bun.write(path, item.text);
+      try {
+        const doc = await read([{ type: "document", path, info: {} }]);
+        expect(doc.malformed).toBe(true);
+        expect(doc.raw).toBe(item.text);
+        expect(doc.doc).toEqual({});
+      } finally {
+        await Bun.file(path).delete();
+      }
+    }
+  });
+
+  it("treats an empty or whitespace-only document as readable and empty", async () => {
+    const path = `${Bun.env.TEMP ?? "."}/tbai-empty-${Date.now()}.json`;
+    await Bun.write(path, "   \n\t  ");
+    try {
+      const doc = await read([{ type: "document", path, info: {} }]);
+      expect(doc.malformed).toBe(false);
+      expect(doc.raw).toBe("   \n\t  ");
+      expect(doc.doc).toEqual({});
+    } finally {
+      await Bun.file(path).delete();
+    }
+  });
+
+  it("does not treat a valid JSONC global config as broken when another document is healthy", async () => {
+    const dir = `${Bun.env.TEMP ?? "."}/tbai-jsonc-good-${Date.now()}`;
+    const globalPath = `${dir}/opencode.jsonc`;
+    const healthy = `${Bun.env.TEMP ?? "."}/tbai-healthy2-${Date.now()}.json`;
+    const raw =
+      '{\n  // global\n  "permissions": [{ "action": "question", "resource": "*", "effect": "ask" }],\n}';
+    await Bun.write(globalPath, raw);
+    await Bun.write(healthy, JSON.stringify({ plugins: ["x"] }, null, 2));
+    try {
+      const doc = await read([
+        { type: "directory", path: dir },
+        { type: "document", path: healthy, info: { plugins: ["x"] } },
+      ]);
+      expect(doc.malformed).toBe(false);
+      expect(doc.path).toBe(healthy);
+    } finally {
+      await Bun.file(globalPath).delete();
+      await Bun.file(healthy).delete();
     }
   });
 });

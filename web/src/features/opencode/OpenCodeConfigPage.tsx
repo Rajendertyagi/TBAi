@@ -151,10 +151,11 @@ function EffectSelect({
 }
 
 /**
- * The native JSON view: the file's structure with every credential masked.
+ * The native configuration preview: a safe redacted, normalized JSON view.
  *
- * A file that could not be parsed has no structure to redact, so its text is
- * withheld rather than shown unredacted.
+ * A file that could not be parsed has no trusted structure to redact, so its
+ * text is withheld rather than shown unredacted. The source file is never
+ * modified by this view.
  */
 function NativeJson({ raw, malformed }: { raw: string; malformed: boolean }) {
   if (malformed) {
@@ -691,6 +692,11 @@ export function OpenCodeConfigPage() {
             description={openCodeConfigCopy.json.description}
           >
             <NativeJson raw={snapshot.raw} malformed={snapshot.malformed} />
+            {!snapshot.malformed && snapshot.raw.trim().length > 0 && (
+              <p className="text-xs leading-5 text-muted-foreground">
+                {openCodeConfigCopy.json.normalized}
+              </p>
+            )}
           </SettingsSection>
 
           {!snapshot.malformed && (

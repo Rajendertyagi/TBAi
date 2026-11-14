@@ -3,6 +3,7 @@ import { z } from "zod";
 import { OPENCODE_CONFIG } from "../../config/opencode";
 import { logger } from "../../lib/logger";
 import { createOpenCodeClient } from "./client";
+import { parseOpenCodeConfigText } from "./configParse";
 import type { OpenCodeTransport } from "./http";
 
 /** Joins a directory and a file name using the host's path separator. */
@@ -81,11 +82,11 @@ export interface OpenCodeConfigDocument {
   readonly path: string;
   /** Every path the server reported, in the order it reported them. */
   readonly discoveredPaths: readonly string[];
-  /** The parsed document. Empty object when the file is absent or blank. */
+  /** The parsed document. Empty object when the file is absent, blank, or malformed. */
   readonly doc: Readonly<Record<string, unknown>>;
-  /** The file's raw text, for the native-JSON view. */
+  /** The file's original source text, preserved unchanged for read-only display. */
   readonly raw: string;
-  /** True when the text exists but is not a JSON object. Never auto-written. */
+  /** True when the text exists but is not a valid JSON/JSONC object document. Never auto-written. */
   readonly malformed: boolean;
 }
 
@@ -235,8 +236,8 @@ export async function readOpenCodeConfigDocument(
   const discoveredPaths = discoveredPathsOf(entries.data);
 
   // The server's parsed `info` is authoritative for content, but the page must
-  // also show the real file text. A file that is absent, blank, or not a JSON
-  // object is reported as such and is NEVER written by this module.
+  // also show the real file text. A file that is absent, blank, or not a valid
+  // JSON/JSONC object is reported as such and is NEVER written by this module.
   const raw = await readFileText(selected.path);
   if (raw === null) {
     return {
@@ -247,37 +248,26 @@ export async function readOpenCodeConfigDocument(
       malformed: false,
     };
   }
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
+  const parsed = parseOpenCodeConfigText(raw);
+  if (parsed.kind === "empty") {
     return { path: selected.path, discoveredPaths, doc: {}, raw, malformed: false };
   }
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        path: selected.path,
-        discoveredPaths,
-        doc: selected.doc,
-        raw,
-        malformed: true,
-      };
-    }
+  if (parsed.kind === "invalid") {
     return {
       path: selected.path,
       discoveredPaths,
-      doc: parsed as Record<string, unknown>,
-      raw,
-      malformed: false,
-    };
-  } catch {
-    return {
-      path: selected.path,
-      discoveredPaths,
-      doc: selected.doc,
+      doc: {},
       raw,
       malformed: true,
     };
   }
+  return {
+    path: selected.path,
+    discoveredPaths,
+    doc: parsed.doc,
+    raw,
+    malformed: false,
+  };
 }
 
 /**
@@ -340,21 +330,14 @@ function discoveredPathsOf(entries: readonly z.infer<typeof configEntrySchema>[]
 }
 
 /**
- * Whether config text exists and is not a JSON object.
+ * Whether config text exists but is not a valid JSON/JSONC object document.
  *
  * An ABSENT or empty file is not malformed: it is a document with nothing in it,
  * which is a legitimate base for a first write. Text that is present but does
  * not parse to an object is malformed, and nothing may be written to it.
  */
 function isUnparsable(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return false;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return parsed === null || typeof parsed !== "object" || Array.isArray(parsed);
-  } catch {
-    return true;
-  }
+  return parseOpenCodeConfigText(raw).kind === "invalid";
 }
 
 /**
@@ -365,10 +348,9 @@ function isUnparsable(raw: string): boolean {
  * the host, so it can only be learned from the server — never computed here.
  *
  * Both the `.json` and `.jsonc` names are checked because OpenCode accepts
- * either, and a `jsonc` file with comments would not survive `JSON.parse`. A
- * JSONC global config is therefore reported as malformed rather than silently
- * rewritten: this feature can only safely edit strict JSON, and saying so is
- * better than destroying the user's comments on the first save.
+ * either. A valid JSONC global config is readable and must not be reported as
+ * malformed; an invalid or non-object document is reported read-only instead of
+ * being silently rewritten or ignored.
  *
  * @returns The path and text of the broken file, or null when there is none.
  */
@@ -391,13 +373,6 @@ async function findUnreadableGlobalConfig(
   return null;
 }
 
-/**
- * Serializes a document for disk, preserving every key TBAi did not touch.
- *
- * Two-space indent matches what the file already uses, so a one-rule change
- * produces a one-rule diff instead of reflowing the whole document. Key order
- * is insertion order, so a key that was already present keeps its position.
- */
 export function serializeOpenCodeConfig(doc: Readonly<Record<string, unknown>>): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }

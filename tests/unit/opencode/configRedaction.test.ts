@@ -303,7 +303,47 @@ describe("redactOpenCodeConfigText", () => {
 
   it("withholds text it cannot parse, because it cannot redact it", () => {
     expect(redactOpenCodeConfigText("{ this is not json")).toBe("");
+    expect(redactOpenCodeConfigText('{\n  // broken\n  "a": ,\n}')).toBe("");
     expect(redactOpenCodeConfigText("[1, 2, 3]")).toBe("");
+    expect(redactOpenCodeConfigText('"secret"')).toBe("");
+  });
+
+  it("redacts valid JSONC as a normalized JSON preview without leaking secrets", () => {
+    const raw = `{
+  // provider config
+  "shell": "powershell",
+  "providers": {
+    "acme": {
+      "settings": { "apiKey": "${SECRET}", },
+      "headers": { "Authorization": "Bearer ${SECRET}" }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "remote": {
+        "oauth": { "client_secret": "${SECRET}" },
+        "headers": { "X-Token": "{env:ACME_TOKEN}" }
+      }
+    }
+  },
+  "permissions": [
+    { "action": "question", "resource": "*", "effect": "ask" },
+  ],
+}`;
+    const text = redactOpenCodeConfigText(raw);
+    expect(text).not.toBe("");
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain("ACME_TOKEN");
+    expect(text).not.toContain("// provider config");
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed.shell).toBe("powershell");
+    expect(parsed.permissions).toEqual([{ action: "question", resource: "*", effect: "ask" }]);
+    const providers = (parsed.providers as Record<string, any>).acme;
+    expect(providers.settings.apiKey).toBe(REDACTED_CONFIG_VALUE);
+    expect(providers.headers.Authorization).toBe(REDACTED_CONFIG_VALUE);
+    const remote = (parsed.mcp as any).servers.remote;
+    expect(remote.oauth.client_secret).toBe(REDACTED_CONFIG_VALUE);
+    expect(remote.headers["X-Token"]).toBe(REDACTED_CONFIG_VALUE);
   });
 
   it("redacts a substitution reference in the raw text too", () => {

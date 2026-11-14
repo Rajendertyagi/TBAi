@@ -144,7 +144,9 @@ export const openCodeConfigCopy = {
   },
   json: {
     description:
-      "The configuration file with every credential masked. Keys and structure are exactly as they are on disk; provider keys, headers, OAuth secrets and environment values are replaced with [redacted].",
+      "A safe redacted preview of the configuration. Keys and structure are preserved; provider keys, headers, OAuth secrets, environment values and substitution references are replaced with [redacted].",
+    normalized:
+      "This preview is normalized JSON for safe display. Comments and original formatting are not shown here, and the source file is unchanged.",
     empty: "The file is empty or does not exist yet.",
     withheld:
       "The file could not be parsed, so its text cannot be redacted and is not shown here. The file is at the path above.",
@@ -183,7 +185,7 @@ export const openCodeConfigCopy = {
     loading: "Reading the OpenCode configuration…",
     error: "Could not read the OpenCode configuration.",
     malformed:
-      "This configuration file is not valid JSON, so it is shown read-only. Fix the file by hand; OpenCode cannot load it until it parses.",
+      "This configuration file is not valid JSON or JSONC, so it is shown read-only. Fix the file by hand; OpenCode cannot load it until it parses.",
     /**
      * Why the page is read-only. Each reason is a fact about the runtime, not a
      * fault the reader caused, so it reads as an explanation rather than an
