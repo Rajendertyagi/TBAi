@@ -646,6 +646,8 @@
   - `bun test tests/unit/opencode/ownership.test.ts tests/integration/opencode/process-ownership.test.ts` -> **exit 0** (14 pass, 0 fail, 32 expect() calls)
   - `bun test tests/integration/opencode/serverManager.test.ts` -> **exit 0** (40 pass, 0 fail, 72 expect() calls)
 
-- **Not run locally / CI-only:** `tests/integration/opencode/opencode-ownership-runtime.test.ts` (requires `TBAI_OPENCODE_RUNTIME_TESTS=1` and real OpenCode binary/runtime environment), full `opencode-runtime` suite, and GitHub Windows CI verification for the candidate SHA were not executed in this session. The fix targets the diagnosed root cause but **Windows CI `opencode-runtime` must pass on the candidate SHA before claiming success**.
+- **Local Real-Binary Runtime Validation (exit 0):**
+  - TBAI_OPENCODE_RUNTIME_TESTS=1 bun test tests/integration/opencode/opencode-ownership-runtime.test.ts -> **exit 0** (2 pass, 0 fail, 27 expect() calls in 9.90s)
+  - TBAI_OPENCODE_RUNTIME_TESTS=1 bun run scripts/run-opencode-runtime-suites.ts -> **exit 0** (9/9 required runtime suites passed with real opencode binary v2.2.6)
 
-- **Remaining limitations:** no live OpenCode server/runtime/browser verification performed locally. No push/merge performed. `main` untouched. Candidate fix is uncommitted at time of roadmap update in this step and must be committed as a focused change for review/CI.
+- **Remaining limitations / CI status:** Verified locally against real OpenCode binary. Windows CI verification on GitHub Actions for the exact candidate SHA must pass on push/PR. No push/merge performed. main untouched.

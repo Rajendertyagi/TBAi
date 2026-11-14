@@ -1,6 +1,6 @@
 /**
- * G2 lifecycle: the named shell -> sidecar kill chain and owned-child job
- * primitives.
+ * G2 lifecycle: the named shell -> sidecar kill chain, and the two Win32
+ * facilities the database-ownership policy stands on.
  *
  * The Rust shell is replaced by `tests/fixtures/g2-shell.ts`, which creates the
  * SAME named kill-on-close job through the production helper. The sidecar
@@ -11,11 +11,6 @@
  * The negative case is the load-bearing one: with `TBAI_SKIP_SHELL_JOB=1` the
  * sidecar and grandchild survive a hard shell kill. That is what fails if the
  * named job is removed or its handle is closed too early.
- *
- * Phase 1 (client-daemon overhaul) decommissioned Win32 Restart Manager and
- * named-mutex database policing from OpenCode ownership/startup; the
- * corresponding exports remain only as compatibility stubs and are asserted as
- * decommissioned here.
  *
  * Windows-only, like the mechanism. CI runs this suite on windows-latest.
  */
@@ -36,6 +31,14 @@ import {
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 const SHELL_FIXTURE = path.join(REPO_ROOT, "tests/fixtures/g2-shell.ts");
+const HOLD_SCRIPT = `
+import { openSync } from "node:fs";
+const file = process.env.TBAI_HELD_FILE;
+if (!file) throw new Error("TBAI_HELD_FILE is required");
+openSync(file, "r+");
+process.stdout.write("held\\n");
+setInterval(() => {}, 1000);
+`;
 
 interface ShellRecord {
   readonly shellPid: number;
@@ -163,16 +166,18 @@ describe("G2 Windows process ownership", () => {
   });
 
   it.skipIf(process.platform !== "win32")(
-    "named mutex watchdog is decommissioned (no cross-process exclusion)",
+    "a named mutex is exclusive until its holder releases it",
     () => {
       const name = `Local\\TBAiG2Mutex-${process.pid}-${Date.now()}`;
       const first = acquireNamedMutex(name);
       expect(first).not.toBeNull();
-      // Phase 1 decommission: compatibility stub, no exclusive ownership.
-      expect(acquireNamedMutex(name)).not.toBeNull();
-      if (first === null)
-        throw new Error("expected the decommissioned mutex stub to return a lease");
-      expect(() => releaseNamedMutex(first)).not.toThrow();
+      expect(acquireNamedMutex(name)).toBeNull();
+      if (first === null) throw new Error("expected the first mutex acquisition to succeed");
+      releaseNamedMutex(first);
+      const again = acquireNamedMutex(name);
+      expect(again).not.toBeNull();
+      if (again === null) throw new Error("expected the mutex to be acquirable after release");
+      releaseNamedMutex(again);
     },
   );
 
@@ -186,12 +191,32 @@ describe("G2 Windows process ownership", () => {
   );
 
   it.skipIf(process.platform !== "win32")(
-    "Restart Manager file-holder detection is decommissioned (no foreign-process inspection)",
-    () => {
-      // Phase 1 decommission: compatibility stub returns no holders and must not
-      // enumerate or inspect foreign processes.
-      expect(findProcessesUsingFiles(["C:\\__tbai_nonexistent_decommissioned__.db"])).toEqual([]);
+    "Restart Manager names the process holding a registered file",
+    async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-g2-rm-"));
+      const file = path.join(dir, "held.db");
+      fs.writeFileSync(file, "held");
+      const holder = Bun.spawn(["bun", "-e", HOLD_SCRIPT], {
+        env: { ...process.env, TBAI_HELD_FILE: file },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      try {
+        const deadline = Date.now() + 10000;
+        let pids: number[] = [];
+        while (Date.now() < deadline) {
+          pids = findProcessesUsingFiles([file]);
+          if (pids.includes(holder.pid)) break;
+          await Bun.sleep(50);
+        }
+        expect(pids).toContain(holder.pid);
+      } finally {
+        holder.kill();
+        await holder.exited;
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     },
+    20000,
   );
 
   it.skipIf(process.platform !== "win32")(
