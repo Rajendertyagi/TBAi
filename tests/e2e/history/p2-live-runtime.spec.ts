@@ -332,10 +332,12 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     const created = await request.post("/api/conversations", {
       data: { title: `p2 concurrent ${Date.now()}`, workspaceMode: "simple", engine: "direct" },
     });
+    expect(created.ok(), `create conversation failed: ${created.status()}`).toBe(true);
     const { id } = (await created.json()) as { id: string };
     try {
-      for (let batch = 0; batch < 250; batch += 25) {
-        await Promise.all(
+      const total = 250;
+      for (let batch = 0; batch < total; batch += 25) {
+        const responses = await Promise.all(
           Array.from({ length: 25 }, (_, offset) => {
             const index = batch + offset;
             return request.post(`/api/conversations/${id}/messages`, {
@@ -353,7 +355,44 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
             });
           }),
         );
+        for (const [offset, res] of responses.entries()) {
+          expect(res.ok(), `seed POST seed-${batch + offset} failed: ${res.status()}`).toBe(true);
+        }
       }
+
+      // Verify the complete seeded history and chain before exercising the UI.
+      const allRes = await request.get(`/api/conversations/${id}/messages`);
+      expect(allRes.ok(), `list messages failed: ${allRes.status()}`).toBe(true);
+      const allData = (await allRes.json()) as {
+        messages: Array<{ id: string; parent_id: string | null }>;
+      };
+      expect(allData.messages, "seeded message count").toHaveLength(total);
+      const byId = new Map(allData.messages.map((m) => [m.id, m.parent_id]));
+      for (let i = 0; i < total; i++) {
+        const messageId = `seed-${i}`;
+        expect(byId.has(messageId), `missing seeded message ${messageId}`).toBe(true);
+        expect(byId.get(messageId), `broken chain at ${messageId}`).toBe(
+          i === 0 ? null : `seed-${i - 1}`,
+        );
+      }
+
+      // Verify the initial authoritative window exposes older history before
+      // expecting the paging control. This distinguishes seed/server paging issues
+      // from UI publication/rendering issues.
+      const windowRes = await request.get(
+        `/api/conversations/${id}/messages/window?direction=older&limit=100`,
+      );
+      expect(windowRes.ok(), `initial window failed: ${windowRes.status()}`).toBe(true);
+      const windowData = (await windowRes.json()) as {
+        messages: Array<{ id: string }>;
+        hasMoreBefore: boolean;
+        hasMoreAfter: boolean;
+        contiguous: boolean;
+      };
+      expect(windowData.contiguous, "initial window must be contiguous").toBe(true);
+      expect(windowData.hasMoreBefore, "initial window must have older history").toBe(true);
+      expect(windowData.messages.length, "initial window must not be empty").toBeGreaterThan(0);
+      expect(windowData.messages[windowData.messages.length - 1]?.id).toBe(`seed-${total - 1}`);
 
       await page.goto(`/#/chat/${id}`);
       await expect(page.getByText("concurrent-body-249")).toBeVisible({ timeout: 30000 });
@@ -374,7 +413,7 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
         await control.click({ timeout: 5000 }).catch(() => undefined);
         await page.waitForTimeout(600);
       }
-      // �then one genuinely OVERLAPPING press: two navigations with pages still
+      // then one genuinely OVERLAPPING press: two navigations with pages still
       // landing, which is the race this test exists for.
       const again = page.getByRole("button", { name: /load earlier/i }).first();
       if ((await again.count()) > 0) {
