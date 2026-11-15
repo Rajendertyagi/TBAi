@@ -21,7 +21,7 @@ mock.module(pathToFileURL(path.join(REPO_ROOT, "web/src/app/adapter.ts")).href, 
   },
 }));
 
-const { MemoryRouter, Route, Routes, useLocation } = await import("react-router");
+const { MemoryRouter, Route, Routes, useLocation, useNavigate } = await import("react-router");
 const { useConversationTab } = await import("@web/features/chat/state/useConversationTab.ts");
 const { useWelcomeEngineStore } = await import("@web/features/chat/state/welcomeEngine.ts");
 const { useChatTabsStore } = await import("@web/features/chat/state/chatTabs.ts");
@@ -48,6 +48,7 @@ function DraftProbe() {
   useConversationTab(undefined, "chat");
   const location = useLocation();
   const welcome = useWelcomeEngineStore();
+  const state = (location.state ?? null) as Record<string, unknown> | null;
   return (
     <div
       data-testid="probe"
@@ -57,7 +58,9 @@ function DraftProbe() {
       data-variant={welcome.variant}
       data-auto={String(welcome.autoApprove)}
       data-path={location.pathname}
-      data-state={location.state ? "1" : "0"}
+      data-has-fallback={String(Boolean(state?.tbaiDraftFallback))}
+      data-consumed={String(state?.tbaiDraftFallbackConsumed ?? "")}
+      data-other={String(state?.other ?? "")}
     />
   );
 }
@@ -91,14 +94,15 @@ describe("useConversationTab draft fallback intent", () => {
     resetStores();
   });
 
-  it("preserves OpenCode fallback intent for the draft and keeps autoApprove", async () => {
+  it("preserves OpenCode fallback intent for the draft, consumes marker, and keeps autoApprove/unrelated state", async () => {
     useWelcomeEngineStore.setState({ autoApprove: true });
     const { container, unmount } = mount([
       {
         pathname: "/chat/new",
-        state: { tbaiDraftFallback: { engine: "opencode" } },
+        state: { tbaiDraftFallback: { engine: "opencode" }, other: "keep" },
       },
     ]);
+    await act(async () => {});
     await act(async () => {});
     const probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
     expect(probe.dataset.engine).toBe("opencode");
@@ -106,6 +110,9 @@ describe("useConversationTab draft fallback intent", () => {
     expect(probe.dataset.model).toBe("");
     expect(probe.dataset.variant).toBe("");
     expect(probe.dataset.auto).toBe("true");
+    expect(probe.dataset.hasFallback).toBe("false");
+    expect(probe.dataset.consumed).toBe("opencode");
+    expect(probe.dataset.other).toBe("keep");
     unmount();
   });
 
@@ -126,5 +133,158 @@ describe("useConversationTab draft fallback intent", () => {
     expect(probe.dataset.variant).toBe("");
     expect(probe.dataset.auto).toBe("true");
     unmount();
+  });
+
+  it("does not reapply stale fallback intent after remount on the consumed draft entry", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    let root: Root;
+    let show = true;
+    function Toggle() {
+      return show ? <DraftProbe /> : <div data-testid="gone" />;
+    }
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <MemoryRouter
+          initialEntries={
+            [{ pathname: "/chat/new", state: { tbaiDraftFallback: { engine: "opencode" } } }] as any
+          }
+        >
+          <Routes>
+            <Route path="/chat/new" element={<Toggle />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    await act(async () => {});
+    let probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
+    expect(probe.dataset.engine).toBe("opencode");
+    expect(probe.dataset.hasFallback).toBe("false");
+    expect(probe.dataset.consumed).toBe("opencode");
+
+    show = false;
+    act(() => {
+      root!.render(
+        <MemoryRouter
+          initialEntries={
+            [{ pathname: "/chat/new", state: { tbaiDraftFallbackConsumed: "opencode" } }] as any
+          }
+        >
+          <Routes>
+            <Route path="/chat/new" element={<Toggle />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    // Remount probe on an already-consumed draft history entry: must preserve OpenCode, not reset to Direct.
+    show = true;
+    act(() => {
+      root!.render(
+        <MemoryRouter
+          initialEntries={
+            [{ pathname: "/chat/new", state: { tbaiDraftFallbackConsumed: "opencode" } }] as any
+          }
+        >
+          <Routes>
+            <Route path="/chat/new" element={<Toggle />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
+    expect(probe.dataset.engine).toBe("opencode");
+    expect(probe.dataset.hasFallback).toBe("false");
+    expect(probe.dataset.consumed).toBe("opencode");
+
+    act(() => root!.unmount());
+    container.remove();
+  });
+
+  it("preserves consumed fallback draft across navigation history (back/forward)", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    let root: Root;
+    function Controls() {
+      const navigate = useNavigate();
+      return (
+        <div>
+          <button type="button" data-testid="to-chat" onClick={() => navigate("/chat/abc")}>
+            chat
+          </button>
+          <button type="button" data-testid="back" onClick={() => navigate(-1 as any)}>
+            back
+          </button>
+        </div>
+      );
+    }
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <MemoryRouter
+          initialEntries={
+            [
+              { pathname: "/chat/new", state: { tbaiDraftFallback: { engine: "opencode" } } },
+              "/chat/abc",
+            ] as any
+          }
+          initialIndex={0}
+        >
+          <Routes>
+            <Route
+              path="/chat/new"
+              element={
+                <>
+                  <DraftProbe />
+                  <Controls />
+                </>
+              }
+            />
+            <Route
+              path="/chat/:threadId"
+              element={
+                <>
+                  <DraftProbe />
+                  <Controls />
+                </>
+              }
+            />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    await act(async () => {});
+    let probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
+    expect(probe.dataset.path).toBe("/chat/new");
+    expect(probe.dataset.engine).toBe("opencode");
+    expect(probe.dataset.hasFallback).toBe("false");
+    expect(probe.dataset.consumed).toBe("opencode");
+
+    const toChat = container.querySelector('[data-testid="to-chat"]') as HTMLButtonElement;
+    act(() => {
+      toChat.click();
+    });
+    await act(async () => {});
+    probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
+    expect(probe.dataset.path).toBe("/chat/abc");
+
+    const back = container.querySelector('[data-testid="back"]') as HTMLButtonElement;
+    act(() => {
+      back.click();
+    });
+    await act(async () => {});
+    await act(async () => {});
+    probe = container.querySelector('[data-testid="probe"]') as HTMLElement;
+    expect(probe.dataset.path).toBe("/chat/new");
+    expect(probe.dataset.engine).toBe("opencode");
+    expect(probe.dataset.hasFallback).toBe("false");
+    expect(probe.dataset.consumed).toBe("opencode");
+
+    act(() => root!.unmount());
+    container.remove();
   });
 });

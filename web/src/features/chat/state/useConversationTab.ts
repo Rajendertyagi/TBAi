@@ -23,6 +23,7 @@ import { useWelcomeEngineStore } from "./welcomeEngine";
  * consumed during draft initialization; never persisted as a user preference.
  */
 const DRAFT_FALLBACK_INTENT_KEY = "tbaiDraftFallback" as const;
+const DRAFT_FALLBACK_CONSUMED_KEY = "tbaiDraftFallbackConsumed" as const;
 
 type DraftFallbackIntent = { engine: "opencode" };
 
@@ -30,6 +31,20 @@ function readDraftFallbackIntent(location: Location): DraftFallbackIntent | null
   const state = location.state as Record<string, unknown> | null | undefined;
   const intent = state?.[DRAFT_FALLBACK_INTENT_KEY] as DraftFallbackIntent | undefined;
   return intent?.engine === "opencode" ? intent : null;
+}
+
+function hasConsumedDraftFallbackIntent(location: Location): boolean {
+  const state = location.state as Record<string, unknown> | null | undefined;
+  return state?.[DRAFT_FALLBACK_CONSUMED_KEY] === "opencode";
+}
+
+function consumeDraftFallbackIntentState(state: unknown): Record<string, unknown> | null {
+  if (!state || typeof state !== "object") return null;
+  const rest = { ...(state as Record<string, unknown>) };
+  if (!(DRAFT_FALLBACK_INTENT_KEY in rest)) return rest;
+  delete rest[DRAFT_FALLBACK_INTENT_KEY];
+  rest[DRAFT_FALLBACK_CONSUMED_KEY] = "opencode";
+  return rest;
 }
 
 /**
@@ -152,13 +167,29 @@ export function useConversationTab(
           model: "",
           variant: "",
         });
+        const consumedState = consumeDraftFallbackIntentState(location.state);
+        if (consumedState) {
+          navigate(location.pathname, { replace: true, state: consumedState });
+        }
       }
+      return;
+    }
+    if (hasConsumedDraftFallbackIntent(location)) {
+      // Intent was already consumed for this draft history entry; preserve the
+      // initialized OpenCode draft without re-triggering from a stale marker.
+      consumedFallbackKeyRef.current = location.key;
+      useWelcomeEngineStore.setState({
+        engine: "opencode",
+        agent: "",
+        model: "",
+        variant: "",
+      });
       return;
     }
     consumedFallbackKeyRef.current = null;
     // Reset welcome engine to defaults for a fresh draft (preserve autoApprove behavior as before).
     useWelcomeEngineStore.setState({ engine: "direct", agent: "", model: "", variant: "" });
-  }, [kind, isDraft, location.key, location.state, location]);
+  }, [kind, isDraft, location, location.key, location.pathname, location.state, navigate]);
 
   return { isDraft };
 }
