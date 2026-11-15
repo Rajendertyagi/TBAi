@@ -1,189 +1,84 @@
 # OpenCode Subsystem — Context and Handoff
 
-**Last updated:** 2026-10-19
-**Repository:** `D:\Temp\ai-chat-app` (TBAi)
-**Branch:** `ci/tauri-e2e-verify`
-**HEAD:** `b1c48a483b2455687d8de9735068d296ebc96d8d`
+**Last updated:** 2026-11-15  
+**Repository:** `D:\Temp\ai-chat-app` (TBAi)  
+**Branch:** `develop` (working tree contains uncommitted managed-only runtime simplification)
 
 > Read this file before asking for project context. Update it after meaningful investigations, decisions, approved implementation stages, and test runs. Do not duplicate `AGENTS.md` — point to it.
 
 ---
 
-## 1. Project purpose and architecture
+## 1. Purpose and boundaries
 
-TBAi is a small, provider-agnostic AI chat app (React 19 + Vite + TS + Tailwind v4 frontend, Hono + Bun backend, SQLite persistence). See `AGENTS.md` for the full architecture, ownership rules, and engineering standards.
+TBAi is a small, provider-agnostic AI chat app. See `AGENTS.md` for architecture, ownership, and engineering standards.
 
-The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` backend, `web/src/features/opencode/` frontend) that wraps the managed `opencode serve` process and the official `@opencode/client` V2 client. It provides a "Code" mode (agent) alongside Direct Chat, with session lifecycle, tool execution, permissions, forms, and streaming. The isolation boundary is documented in `AGENTS.md` under "OpenCode isolation boundary."
+The OpenCode subsystem is an **isolated feature**:
+- Backend: `src/services/opencode/` owns the managed `opencode serve` process, session lifecycle, import, config/capability access, proxy/authz, and runtime state. The rest of the backend never imports the OpenCode client.
+- Frontend: `web/src/features/opencode/` owns the native V2 client, event reduction, history, permissions/forms, cancellation, and external-store controller. Shared chat UI composes through engine-neutral props; OpenCode-only capability stays behind the feature boundary.
+- Tool UI: `web/src/tools/opencode/` is the frontend OpenCode tool-UI owner.
 
----
-
-## 2. Audit baseline
-
-- **Branch:** `ci/tauri-e2e-verify`
-- **HEAD:** `b1c48a483b2455687d8de9735068d296ebc96d8d`
-- **Working tree:** Clean (as of 2026-10-19)
-- **Verification:** `bun run verify` exit 0 (4309 pass / 43 skip / 0 fail, 319 files, 4352 tests, 333.04s); `bun run typecheck` exit 0; lint + format:check clean.
-- **OpenCode CLI version:** 2.2.6 (sole supported runtime; stable releases at or above 2.2.6 are admitted by policy, with capability checks on live services)
-- **Client:** `@opencode/client` (official V2 client)
-- **GitHub Actions:** Run 39160063675 completed with success (all 3 jobs: verify, e2e, tauri).
-
-### Audit history
-- **Round 1 (2026-10-18):** Full deep audit of the OpenCode subsystem. Verdict: conditionally acceptable. 10 findings (1 High, 3 Medium, 6 Low).
-- **Round 2 (2026-10-19):** Group 1 remediation design (A1 binary resolution, F1 bounded reconnection). Read-only. No implementation.
-- **Round 3 (2026-10-19):** Finalized remediation design with Paseo/OpenChamber insights. Created this handoff file.
-- **Round 4 (2026-10-19):** Simplified A1/F1 design. Resolved retry-reset semantics and Windows launcher handling.
-- **Round 5 (2026-10-19):** Resolved final design questions. Updated with reference-app findings.
-- **Round 6 (2026-10-19):** Finalized A1/F1 plan. Corrected acceptance-test counts, error classification, and backoff formula.
+OpenCode uses the official `@opencode/client` V2 client (pinned `2.2.6` in this repo). Direct Chat, AI SDK, MCP, and the independent app scheduler remain separate.
 
 ---
 
-## 3. Audit findings
+## 2. Managed-only runtime (current)
 
-### Confirmed defects
+TBAi owns **exactly one managed `opencode serve` runtime**.
 
-| # | Area | Issue | Severity | Evidence |
-|---|------|-------|----------|----------|
-| A1 | Binary resolution | `resolveManagedBinary` only checks `Bun.which`. No fallback paths. App fails when binary isn't on PATH. | **High** | `runtime.ts:resolveManagedBinary` — only env var + `Bun.which`. User hit this error. |
-| F1 | Synchronization | No max reconnect attempt limit. Permanently unreachable server spins at 10s intervals forever. | Medium | `sync/eventPipeline.ts:scheduleReconnect` — no max attempt check. |
-| B1 | Session lifecycle | `invalidateBootstrap` is a no-op. Deleted conversation mid-bootstrap leaves stale session. | Medium | `sessionBootstrap.ts:invalidateBootstrap` — "Conservative by contract" comment, does nothing. |
-
-### Unverified risks
-
-| # | Area | Issue | Severity | Evidence |
-|---|------|-------|----------|----------|
-| A2 | Process lifecycle | `onExit` restart race during shutdown. | Low | `serverManager.ts:onExit` checks `this.stopping` but race window exists. |
-| F2 | Synchronization | Event buffer capped at 512. Overflow drops assistant message events. | Medium | `sync/eventPipeline.ts:288` — `eventBuffer.length > 512` filter. |
-| F3 | History loading | Convergence pass cap at 4. Incomplete history if not converged. | Low | `config.ts:OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP = 4` |
-| F4 | Event handling | Event deduplication uses 256-event window. Could fail with >256 events. | Low | `config.ts:OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256` |
-| H5 | Shutdown | `onExit` restart race during shutdown. | Low | `serverManager.ts:onExit` |
-
-### Intentional design decisions
-
-| # | Area | Decision | Rationale |
-|---|------|----------|-----------|
-| E1 | Tool execution | Tool list is manually maintained (`v2Tools.ts`). | OpenCode has no tool catalogue endpoint. Drift guard catches stale names. |
-| D3 | Workspace | No path traversal/symlink checks in TBAi. | Relies on OpenCode's own enforcement. |
-| B5 | Session lifecycle | `assignSessionModelIfMissing` swallows errors. | Session returned without model is better than no session. |
-| G2 | Frontend boundary | `Composer.tsx` and `StatusBar.tsx` import OpenCode feature components directly. | UI composition, not runtime dependency. |
+- **No external runtime selection:** TBAi does not discover, adopt, attach to, revalidate, or rediscover independently running external OpenCode servers for runtime selection.
+- **Obsolete external env vars:** `OPENCODE_URL`, `OPENCODE_HOST`, and `OPENCODE_PORT` are ignored for TBAi runtime selection. When present, startup logs a warning and continues with managed startup; they must not silently redirect runtime selection.
+- **Managed registration:** TBAi may publish and clean up its own managed registration/ownership records as needed for the managed runtime it owns. Registration is not used to adopt external services.
+- **Startup/lifecycle:** `src/services/opencode/startup.ts` starts the managed runtime once per process (skips in automated test runs/shutdown/already-installed cases). `src/services/opencode/serverManager.ts` owns managed process start, readiness, cleanup, restart/shutdown behavior, and Windows process ownership/cleanup constraints. `src/services/opencode/connectionState.ts` owns the managed target, request context/transport, shutdown latch, and runtime-target change notifications.
+- **Runtime target/status:** Server-wide/runtime surfaces resolve to the installed managed target or start the managed child on demand (`src/services/opencode/runtimeTarget.ts`). Status/events expose managed/unresolved runtime identity without credentials.
 
 ---
 
-## 4. Remediation design
+## 3. Legacy external-bound conversations (compatibility)
 
-### A1 — OpenCode binary resolution (simplified)
+Conversations historically bound to an external/remote OpenCode service remain externally owned and **fail closed** in the managed-only runtime.
 
-**Root cause:** `resolveManagedBinary` in `src/services/opencode/runtime.ts` only checks `Bun.which("opencode")`. No fallback paths. App fails when binary isn't on PATH.
-
-**Resolution contract (minimal, portable):**
-
-1. If `OPENCODE_BINARY` is explicitly configured, resolve and validate that command. If it is invalid or unsupported, fail clearly; do not silently fall back.
-2. Otherwise, resolve `opencode` through the current process `PATH`, using Bun's built-in lookup (`Bun.which`). Avoid scanning hardcoded installation directories or detecting individual package managers.
-3. Validate the resolved command with a bounded version probe (`--version`, 2s timeout) and the existing supported-version rules (2.2.6+ stable).
-4. Use the same launch semantics for probing and starting the managed process.
-5. Handle a resolved Windows `.cmd` launcher through a safe, tested Windows-specific launch mechanism (`cmd /c`). Do not search guessed npm package-internal executable paths.
-6. If no valid command is found, return an actionable error explaining installation, PATH, and `OPENCODE_BINARY` options.
-
-**Windows `.cmd` handling (verified):**
-- `Bun.spawn(['cmd', '/c', pathWithSpaces])` correctly preserves argument boundaries (tested with paths containing spaces — exit 0, correct output).
-- `cmd /c` with a quoted path works for both `spawn` and `spawnSync`.
-- User-controlled input cannot become unintended shell syntax because the path is passed as a single array element (Bun handles quoting).
-- **Verified behavior:** `cmd /c` with spaced paths works (tested 2026-10-19).
-- **Documented behavior:** Bun.spawn passes array elements as separate argv entries.
-- **Proposed (untested):** The actual `createChild` and `detectOpenCodeVersion` modifications using `cmd /c` wrapper. The mechanism is verified; the integration is not yet tested.
-
-**Candidate ordering:** env var (exclusive) → PATH lookup → version probe → error. No fallback directory scanning.
-
-**Security:** Only PATH and env var. No directory traversal or globbing. Validate file exists and is executable. Log selected path (non-secret).
-
-**Error classification (existing, no new classes needed):**
-- No executable resolved → `OpenCodeBinaryMissingError` (thrown by `resolveManagedBinary` when `Bun.which` returns null and no env var is set).
-- Executable resolved but unsupported version → `UnsupportedOpenCodeVersionError` (thrown by `detectOpenCodeVersion` when version is outside range).
-- Executable resolved but cannot be launched or probed → `OpenCodeBinaryMissingError` is NOT appropriate. The existing `detectOpenCodeVersion` throws a plain `Error` ("OpenCode binary did not report a valid version" or "OpenCode binary could not be started") when `Bun.spawnSync` fails or produces no parseable version. This is a startup/probe failure, not a missing binary. No new error class needed — the existing plain `Error` is sufficient and is caught by `toOpenCodeError` as "unknown" kind.
-
-**Reuse version-probe results:** Probe once per candidate during resolution. Pass the already-probed version to `detectOpenCodeVersion` to avoid duplicate probes.
-
-**Bounded startup-probe time:** Per-candidate timeout 2s. Total budget: 10s.
-
-**Acceptance tests (6):**
-1. env var set → uses env var (no PATH query).
-2. env var set but invalid → throws (no fallback).
-3. PATH has binary → uses PATH.
-4. no PATH → throws `OpenCodeBinaryMissingError` with actionable message.
-5. binary found but wrong version → throws `UnsupportedOpenCodeVersionError`.
-6. `.cmd` wrapper → probe and spawn use `cmd /c` wrapper.
-
-### F1 — Bounded frontend reconnection
-
-**Root cause:** `scheduleReconnect` in `sync/eventPipeline.ts` has no max attempt limit. Permanently unreachable server spins at 10s intervals forever.
-
-**Design:**
-- **Retry limit:** 10 reconnect retries after the initial connection attempt fails. Justification: exponential backoff capped at 10s → ~55.75s cumulative waiting time. Long enough for transient issues, short enough to surface terminal error within ~1 minute. Matches `OPENCODE_INIT_TIMEOUT_MS` (15s) philosophy.
-- **Terminal state:** When retries exhausted → dispatch `{ type: "connection_changed", connection: { type: "failed", attempt: reconnectAttempt } }` + `{ type: "load_failed", error: { kind: "connection", message: "..." } }`. Set `reconnectTimer = null`, set `connectionFailed = true`.
-- **Manual retry:** The existing "Reconnect" button in `OpenCodeStatus.tsx` (wired via `onReconnect` prop to `reconnect` in `useOpenCodeRuntime`) already serves as the manual retry. It creates a new client + controller (full reconnect). No new `retryConnection()` method needed on the controller — the existing reconnect flow handles recovery from the failed state. The `connectionFailed` flag is cleared when a new controller is created.
-- **Reset rules:** `reconnectAttempt = 0` on successful hydration, manual retry, dispose. NOT reset on generation change (retry budget is per-controller).
-- **Duplicate timer prevention:** `scheduleReconnect` checks `reconnectTimer !== null`. `dispose()` clears timer. (No `retryConnection` method — reuse existing `reconnect` flow.)
-- **Stale callback prevention:** `startConnection` checks `disposed` and `generation === currentGeneration`. Reconnect timer callback checks `disposed`.
-
-**Backoff formula (verified from source):**
-- `delay = min(OPENCODE_V2_MAX_RECONNECT_DELAY_MS, OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS * 2 ** reconnectAttempt)`
-- `OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250`
-- `OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000`
-- `reconnectAttempt` starts at 0, increments after each failure.
-
-**Attempt-count semantics:**
-- 1 initial connection attempt + 10 reconnect retries = 11 total connection attempts maximum.
-- The initial attempt has no delay. Each of the 10 retries has a delay computed by the backoff formula.
-- Delays: 250 + 500 + 1000 + 2000 + 4000 + 8000 + 10000 + 10000 + 10000 + 10000 = 55,750ms ≈ 55.75s cumulative *waiting* time.
-- This is the time spent *waiting* between retries. Additional time is spent on each connection attempt (network round-trip, server response). Total time from first failure to terminal state = 55.75s + connection attempt durations.
-- The 10th retry's delay is 10s (capped). After the 10th retry fails, no more retries. Terminal state is entered.
-- Acceptance test must verify: 1 initial attempt + at most 10 reconnect retries + no 11th retry.
-
-**Retry-reset semantics (resolved):**
-- `generation` represents the current active event stream connection (set at line 740 after `client.connect()` succeeds, nulled at line 479 in `scheduleReconnect` and line 1180 in `dispose`).
-- A new conversation creates a new controller (`createV2ThreadController`), so `reconnectAttempt` starts at 0. The retry budget is per-controller, not per-generation.
-- `reconnectAttempt` is reset to 0 only on successful hydration (line 747) and manual retry. It is NOT reset on generation change alone (a failed reconnect should count as a retry).
-- Stale generation callbacks **CAN** reset the counter: the guard does not
-  prevent the reset, it is the path that reaches it. `hydrate` returns *early*
-  (it does not throw) when the generation changed, so the superseded attempt
-  reaches the success tail and runs `reconnectAttempt = 0`. The audit
-  reproduced this: with a budget of 3, six failure cycles produced **7**
-  connection attempts and the controller never reached `{type:"failed"}`.
-  **This line was wrong** and is corrected here; the runtime-remediation plan
-  (§2.2) records the finding and the fix. The accounting rule that replaced
-  it is: the retry budget is **attempt-scoped** — a superseded attempt's
-  success does not reset the budget of the attempt that replaced it, because
-  the reader's turn did not succeed.
-- Disposal clears the timer and sets `disposed = true`, preventing further resets.
-
-**UI file scope:**
-- `sync/eventPipeline.ts` — add `connectionFailed` flag, max attempt check in `scheduleReconnect`, terminal state dispatch.
-- `v2Types.ts` — add `connection: { type: "failed", attempt: number }` to `V2ConnectionState`.
-- `config.ts` — add `OPENCODE_V2_MAX_RECONNECT_ATTEMPTS = 10`.
-- `OpenCodeStatus.tsx` — already has "Reconnect" button wired via `onReconnect`. May need label change from "Reconnect" to "Retry" on failed state. Minimal change.
-
-**Acceptance tests:**
-- Unit: exhaustion - 1 initial attempt + 10 reconnect retries -> terminal state, no 11th retry.
-- Unit: recovery — failure then success → counter reset, connected state.
-- Unit: manual retry — terminal state → reconnect (new controller) → attempts reconnection.
-- Unit: disposal — dispose during reconnect → no further attempts.
-- Unit: stale generation — old generation's reconnect doesn't fire.
-- Unit: no duplicate timers — overlapping scheduleReconnect calls → one timer.
-- Unit: counter reset on success and dispose.
-- Unit: no reset on generation change.
+- TBAi never reassigns them to local/managed, never rewrites session IDs, never points old external session IDs at the managed DB, and never probes external services.
+- History/service access for a remote-bound conversation is refused with:  
+  `The original external OpenCode service for this conversation is unavailable. TBAi now supports its managed OpenCode runtime only.`  
+  (`OpenCodeHistoryBoundaryError`, refusal `adopted_unavailable` in current implementation; route mapping treats unresolved history-boundary refusals as `503` where applicable).
+- Ownership migration/canonicalization and existing records/history must be preserved. Orphan reconciliation must not probe or remove legacy external-owned sessions through the managed server.
 
 ---
 
-## 5. Persistent project handoff
+## 4. Key modules
 
-**File:** `docs/opencode-context.md` (this file).
-
-**No existing suitable handoff file found.** The existing `docs/pm-opencode-frontend-audit.md` and `docs/pm-opencode-store-audit.md` are point-in-time audit reports, not living context documents.
+- `src/config/opencode.ts` — OpenCode config/constants.
+- `src/services/opencode/serverManager.ts` — managed process lifecycle, readiness, cleanup, registration publish/owned cleanup integration.
+- `src/services/opencode/connectionState.ts` — managed target/request context/transport, shutdown, runtime-target events.
+- `src/services/opencode/startup.ts` — managed-only startup and compatibility no-op revalidation APIs.
+- `src/services/opencode/runtimeTarget.ts` — server-wide managed runtime resolution/status.
+- `src/services/opencode/serviceAccess.ts` — conversation history/service access resolution; legacy external-bound fail closed.
+- `src/services/opencode/historyBoundary.ts` — history ownership model and boundary errors.
+- `src/services/opencode/import.ts` — import from the active managed runtime target only.
+- `src/services/opencode/sessions.ts` — session ensure/terminate/reconcile behavior.
+- `src/services/opencode/orphanReconciler.ts` — managed-only orphan reconciliation; skips legacy external-owned rows.
+- `src/services/opencode/registration.ts` — managed registration read/write/owned cleanup helpers.
+- `src/services/opencode/configWritePolicy.ts` — config write refusal policy (managed root not TBAi-owned).
+- `src/routes/opencode.ts` — HTTP boundary for runtime status/events, config, proxy, import, capabilities/commands, session operations.
+- `web/src/features/opencode/*` — frontend runtime/config/status/capabilities UI and V2 controller/store integration.
 
 ---
 
-## 6. Approval state
+## 5. Required preserved capabilities
 
-**Implementation not approved.** This document proposes designs and acceptance criteria. No code changes have been made. Awaiting explicit approval before implementation.
+Managed-only simplification must preserve required OpenCode features and safety guarantees, including: session lifecycle and import from the active managed server, history/sync/streaming/events, models/agents/commands, permissions/approvals/questions/forms, terminal/execution, diffs/workspace, config behavior, context/compaction, scheduled OpenCode execution, orphan reconciliation/safe deletion, V2 client/proxy/authz/workspace security, and managed status/reconnect/recovery/failure notifications. Direct Chat, AI SDK, MCP, and the independent app scheduler remain untouched.
+
+---
+
+## 6. Verification notes (2026-11-15, in-progress)
+
+- Baseline: `2c88db1a1f2d326aea036e6bf3a7cddc6fe8a3d2` (`develop`).
+- Backend/frontend managed-only refactor applied in working tree; adoption/recovery modules and adoption-era tests removed or rewritten.
+- `bunx tsc --noEmit -p tsconfig.json` — pass.
+- `cd web && bunx tsc --noEmit` — pass.
+- `bunx tsc --noEmit -p tests/tsconfig.backend.json` — pass after test rewrites.
+- Targeted OpenCode unit/integration tests (service access, startup, runtime target, history boundary, config write policy, import, orphan reconciler, registration, HTTP transport, compatibility, sessions, import preservation, transport contract, service continuity) — pass in targeted run (see session transcript for exact counts).
+- Full `bun run verify` and required additional gates: pending/in progress at time of writing; record exact results before completion.
 
 ---
 
@@ -191,25 +86,4 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 
 | Date | Action | Details |
 |------|--------|---------|
-| 2026-10-18 | Full deep audit | 10 findings (1 High, 3 Medium, 6 Low). Verdict: conditionally acceptable. |
-| 2026-10-19 | Group 1 remediation design (Round 2) | A1 + F1 designs proposed. Read-only. |
-| 2026-10-19 | Group 1 remediation design (Round 3) | Finalized designs with Paseo/OpenChamber insights. Created this handoff file. |
-| 2026-10-19 | OpenCode context file created | `docs/opencode-context.md` — persistent handoff. |
-| 2026-10-19 | Simplified A1/F1 design | Replaced over-engineered binary discovery with portable contract. Updated F1 with minimal scope. |
-| 2026-10-19 | Round 4: Finalized design | Resolved retry-reset semantics and Windows launcher handling. Verified `cmd /c` with spaced paths. |
-| 2026-10-19 | Round 5: Resolved final design questions | Retry-reset semantics resolved. Windows `cmd /c` verified with spaced paths. Decisions finalized. |
-| 2026-10-19 | Round 6: Reference-app findings | Updated with Paseo/OpenChamber comparison. Selected minimal patterns, rejected over-engineering. |
-| 2026-10-19 | Round 7: Finalized A1/F1 plan | Corrected acceptance-test counts, error classification, backoff formula. Verified `cmd /c` with spaced paths. |
-| 2026-10-19 | Round 9: Final documentation consistency fix | Corrected A1 error classification (probe failure is not missing). Corrected F1 UI wording (reuse existing Reconnect button, no new retry API). Verified handoff file updated. |
-
----
-
-## 8. Next action
-
-Await explicit approval to implement Group 1 fixes (A1 + F1). Upon approval:
-1. Implement A1 (binary resolution) in `src/services/opencode/runtime.ts` + `serverManager.ts`.
-2. Implement F1 (bounded reconnection) in `web/src/features/opencode/v2ThreadController.ts` + `config.ts` + `v2Types.ts`. (No new `retryConnection()` method — reuse existing `reconnect` flow.)
-3. Add unit tests for both.
-4. Run `bun run verify` and `bun run typecheck`.
-5. Commit and push to `ci/tauri-e2e-verify`.
-6. Update this handoff file with results.
+| 2026-11-15 | Managed-only runtime simplification | Removed external discovery/adoption/attachment/revalidation/rediscovery from active runtime selection; kept managed registration publish/owned cleanup; legacy external-bound conversations fail closed with specified unavailable message; rewrote/retired adoption-era tests and updated runtime/config/status/import/orphan/session access paths. |

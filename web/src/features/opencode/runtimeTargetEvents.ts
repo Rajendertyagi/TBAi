@@ -14,12 +14,12 @@ function parseTargetIdentity(data: string): {
   backendInstanceId: string;
   targetRevision: number;
   targetId: number | null;
-  mode: "unresolved" | "managed" | "adopted";
+  mode: "unresolved" | "managed";
 } | null {
   try {
     const parsed = JSON.parse(data) as Record<string, unknown>;
     const mode = parsed.mode;
-    if (mode !== "unresolved" && mode !== "managed" && mode !== "adopted") return null;
+    if (mode !== "unresolved" && mode !== "managed") return null;
     const backendInstanceId =
       typeof parsed.backendInstanceId === "string" ? parsed.backendInstanceId : "";
     const targetRevision =

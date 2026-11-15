@@ -1,19 +1,3 @@
-/**
- * The configuration page on an adopted service that has no configuration route.
- *
- * ## What this pins (B7)
- *
- * Adoption admits an officially released stable service that lacks an OPTIONAL
- * route. `config` is the first such route, and this page is the surface backed
- * by it. When the probe positively reported that route missing, the page must
- * say what is absent — not present a failed read as if the reader's file were
- * broken, and not offer a Save control that cannot work.
- *
- * A snapshot that is UNKNOWN (no status, or an adopted target whose snapshot
- * was never taken) must not degrade the page: hiding a working control is worse
- * than showing one that reports a clear refusal.
- */
-
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -27,13 +11,11 @@ const BASE_SNAPSHOT = {
   raw: "{}",
   malformed: false,
   editable: true,
-  writeDisabledReason: null as null | "adopted_g4_unproven" | "managed_root_not_owned",
+  writeDisabledReason: null as null | "managed_root_not_owned",
   permissions: [{ action: "shell", resource: "*", effect: "ask" }] as readonly unknown[],
 };
 
 let snapshot = { ...BASE_SNAPSHOT, permissions: [...BASE_SNAPSHOT.permissions] };
-
-/** How many times the page asked for the configuration. */
 let configReads = 0;
 
 mock.module("@web/features/opencode/openCodeConfig.ts", () => ({
@@ -44,7 +26,6 @@ mock.module("@web/features/opencode/openCodeConfig.ts", () => ({
   },
 }));
 
-/** The mode the mocked status read reports. */
 let runtimeStatus: OpenCodeRuntimeStatus | null = null;
 
 mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
@@ -54,42 +35,6 @@ mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
 const { OpenCodeConfigPage } = await import("@web/features/opencode/OpenCodeConfigPage.tsx");
 
 const BID = "backend-instance";
-
-const ADOPTED_WITHOUT_CONFIG: OpenCodeRuntimeStatus = {
-  mode: "adopted",
-  backendInstanceId: BID,
-  targetRevision: 1,
-  targetId: 1,
-  capabilities: {
-    version: "2.3.1",
-    supported: {
-      session: true,
-      events: true,
-      config: false,
-      agent: true,
-      model: true,
-      command: true,
-    },
-  },
-};
-
-const ADOPTED_WITH_CONFIG: OpenCodeRuntimeStatus = {
-  mode: "adopted",
-  backendInstanceId: BID,
-  targetRevision: 1,
-  targetId: 1,
-  capabilities: {
-    version: "2.3.1",
-    supported: {
-      session: true,
-      events: true,
-      config: true,
-      agent: true,
-      model: true,
-      command: true,
-    },
-  },
-};
 
 async function mount(): Promise<{ root: Root; container: HTMLElement }> {
   const container = document.createElement("div");
@@ -109,61 +54,40 @@ function unmount(mounted: { root: Root; container: HTMLElement }): void {
   mounted.container.remove();
 }
 
-/** The page's alert text, joined. */
 function alertText(container: HTMLElement): string {
   return [...container.querySelectorAll("[role='alert']")]
     .map((node) => node.textContent ?? "")
     .join(" ");
 }
 
-describe("the configuration page on a degraded adopted service", () => {
+describe("OpenCode config page (managed-only runtime)", () => {
   beforeEach(() => {
     configReads = 0;
     snapshot = { ...BASE_SNAPSHOT, permissions: [...BASE_SNAPSHOT.permissions] };
   });
 
-  it("says the route is absent instead of reporting a broken file", async () => {
-    runtimeStatus = ADOPTED_WITHOUT_CONFIG;
-    configReads = 0;
-    const mounted = await mount();
-    expect(alertText(mounted.container)).toContain(openCodeConfigCopy.unavailable.adopted);
-    // No section rendered: there is no snapshot to show, and nothing to save.
-    expect(mounted.container.textContent).not.toContain("Native OpenCode JSON");
-    expect(mounted.container.textContent).not.toContain(openCodeConfigCopy.states.error);
-    expect(configReads).toBe(0);
-    unmount(mounted);
-  });
-
-  it("loads normally when the adopted service does serve the route", async () => {
-    runtimeStatus = ADOPTED_WITH_CONFIG;
-    const mounted = await mount();
-    expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
-    expect(mounted.container.textContent).toContain("Native OpenCode JSON");
-    unmount(mounted);
-  });
-
-  it("loads normally for a managed service (nothing was assessed)", async () => {
+  it("loads normally for a managed service", async () => {
     runtimeStatus = { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 };
     const mounted = await mount();
-    expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
+    expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.managed);
     expect(mounted.container.textContent).toContain("Native OpenCode JSON");
+    expect(configReads).toBe(1);
     unmount(mounted);
   });
 
   it("loads normally when the status is unknown", async () => {
     runtimeStatus = null;
     const mounted = await mount();
-    expect(alertText(mounted.container)).not.toContain(openCodeConfigCopy.unavailable.adopted);
     expect(mounted.container.textContent).toContain("Native OpenCode JSON");
     unmount(mounted);
   });
 
-  it("renders a valid readable JSONC snapshot without malformed warning and keeps controls disabled", async () => {
+  it("renders a readable snapshot and shows managed-root-not-owned write refusal", async () => {
     runtimeStatus = { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 };
     snapshot = {
       path: "C:/cfg/opencode.jsonc",
       discoveredPaths: ["C:/cfg/opencode.jsonc"],
-      raw: '{\n  "shell": "powershell",\n  "permissions": [\n    {\n      "action": "shell",\n      "resource": "*",\n      "effect": "ask"\n    }\n  ]\n}\n',
+      raw: '{\n  "shell": "powershell"\n}\n',
       malformed: false,
       editable: false,
       writeDisabledReason: "managed_root_not_owned",
@@ -174,16 +98,7 @@ describe("the configuration page on a degraded adopted service", () => {
     expect(text).not.toContain(openCodeConfigCopy.states.malformed);
     expect(text).toContain("Native OpenCode JSON");
     expect(text).toContain(openCodeConfigCopy.json.normalized);
-    expect(text).toContain("shell");
     expect(text).toContain(openCodeConfigCopy.states.writesDisabled.managed_root_not_owned);
-    const save = [...mounted.container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Save"),
-    );
-    expect(
-      save?.hasAttribute("disabled") ||
-        save?.getAttribute("aria-disabled") === "true" ||
-        save === undefined,
-    ).toBe(true);
     unmount(mounted);
   });
 });

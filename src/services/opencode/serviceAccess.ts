@@ -2,9 +2,9 @@
  * Resolves the service a history operation may use, and refuses when the
  * conversation's history lives on a different scope (local vs remote).
  *
- * This is the single place that answers "which service owns this conversation's
- * OpenCode session, and may it be touched?". Callers receive one access value;
- * they never branch on managed-versus-adopted themselves.
+ * TBAi owns exactly one managed OpenCode runtime. Conversations whose history is
+ * owned by an external/remote OpenCode service remain externally owned and must
+ * fail closed: TBAi never probes, adopts, or rebinds them to the managed runtime.
  */
 import type { Conversation } from "../../types";
 import {
@@ -16,15 +16,11 @@ import {
   type OpenCodeTransport,
 } from "./connectionState";
 import {
-  assertSameHistoryOwner,
-  describeHistoryOwner,
-  historyOwnerFromTarget,
   LOCAL_OWNER,
   OpenCodeHistoryBoundaryError,
   readConversationHistoryOwner,
   type OpenCodeHistoryOwner,
 } from "./historyBoundary";
-import { getLostAdoptedRecovery, isConversationBoundToLostAdopted } from "./recovery";
 import { openCodeServerManager } from "./serverManager";
 
 /** The service one history operation is allowed to use. Immutable. */
@@ -32,15 +28,13 @@ export type OpenCodeServiceAccess = Readonly<{
   readonly owner: OpenCodeHistoryOwner;
   /** Canonical, slash-free origin of the installed target. */
   readonly baseUrl: string;
-  /**
-   * The bounded transport captured with the target. It carries the credential
-   * for exactly this origin, so a caller cannot pair one service's credential
-   * with another service's address.
-   */
+  /** The bounded transport captured with the target. */
   readonly transport: OpenCodeTransport;
 }>;
 
-/** Captures one access value from an installed target. */
+const EXTERNAL_UNAVAILABLE_MESSAGE =
+  "The original external OpenCode service for this conversation is unavailable. TBAi now supports its managed OpenCode runtime only.";
+
 function captureInstalledAccess(owner: OpenCodeHistoryOwner): OpenCodeServiceAccess {
   const context = captureOpenCodeRequestContext();
   return Object.freeze({
@@ -51,87 +45,50 @@ function captureInstalledAccess(owner: OpenCodeHistoryOwner): OpenCodeServiceAcc
 }
 
 /**
- * Resolves the service a conversation's history may be read or written
- * through, or refuses.
+ * Resolves the managed service for a conversation's history operation.
  *
- * Ordering is the contract: the installed target is consulted first.
- * A remote-bound conversation is refused before any local managed startup work runs.
- *
- * @throws {OpenCodeHistoryBoundaryError} when the binding names another service scope,
- *   or when it names a remote service that is not installed.
+ * @throws {OpenCodeHistoryBoundaryError} when the conversation is bound to an
+ *   external/remote service that TBAi no longer connects to.
  * @throws {OpenCodeNotReadyError} after shutdown.
  */
 export async function resolveOpenCodeServiceAccess(
   conversation: Pick<Conversation, "id" | "opencodeSessionId" | "opencodeServiceOwner">,
 ): Promise<OpenCodeServiceAccess> {
-  // Shutdown clears the target, so this must be asked explicitly: otherwise an
-  // unbound conversation would fall through to the managed start below.
   if (readShutdownState().shutdownStarted) throw new OpenCodeNotReadyError();
 
   const recorded = readConversationHistoryOwner(conversation);
-
-  // Affinity-safe adopted recovery: conversations bound to a lost adopted
-  // service must not be silently switched to another server (including managed
-  // fallback). Refuse as unavailable until the original service is restored.
-  if (isConversationBoundToLostAdopted(conversation)) {
-    const lost = getLostAdoptedRecovery()?.lost;
-    const owner = lost?.owner ?? recorded;
-    throw new OpenCodeHistoryBoundaryError(
-      "adopted_unavailable",
-      conversation.id,
-      `This conversation's OpenCode history belongs to ${owner ? describeHistoryOwner(owner) : "the adopted OpenCode service"}, ` +
-        "which is not available.",
-    );
-  }
-
-  const installedTarget = readConnectionState().target;
-  if (installedTarget.mode !== "unresolved") {
-    const active = historyOwnerFromTarget(installedTarget) as OpenCodeHistoryOwner;
-    assertSameHistoryOwner(conversation.id, recorded, active);
-    return captureInstalledAccess(active);
-  }
-
-  // Nothing is installed. A remote-bound conversation is refused BEFORE the
-  // managed manager is asked for anything, so a fallback or startup race can
-  // never start a managed child for history that lives on a remote server.
   if (recorded?.kind === "remote") {
     throw new OpenCodeHistoryBoundaryError(
       "adopted_unavailable",
       conversation.id,
-      `This conversation's OpenCode history belongs to ${describeHistoryOwner(recorded)}, ` +
-        "which is not available.",
+      EXTERNAL_UNAVAILABLE_MESSAGE,
     );
   }
 
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
-
-  // The start publishes a managed target before it resolves. Re-read rather
-  // than assume: an adopted target installed concurrently must still own the
-  // check.
-  const publishedTarget = readConnectionState().target;
-  if (publishedTarget.mode !== "unresolved") {
-    const active = historyOwnerFromTarget(publishedTarget) as OpenCodeHistoryOwner;
-    // A restored adopted service must not silently take over conversations that
-    // correctly started using managed fallback.
-    if (isConversationBoundToLostAdopted(conversation)) {
-      const lost = getLostAdoptedRecovery()?.lost;
-      const owner = lost?.owner ?? recorded;
-      throw new OpenCodeHistoryBoundaryError(
-        "adopted_unavailable",
-        conversation.id,
-        `This conversation's OpenCode history belongs to ${owner ? describeHistoryOwner(owner) : "the adopted OpenCode service"}, ` +
-          "which is not available.",
-      );
-    }
-    assertSameHistoryOwner(conversation.id, recorded, active);
-    return captureInstalledAccess(active);
+  const installedTarget = readConnectionState().target;
+  if (installedTarget.mode === "managed") {
+    return captureInstalledAccess(LOCAL_OWNER);
   }
 
-  // Fallback managed access: the URL came from the manager, which owns the one
-  // managed credential.
+  const baseUrl = await openCodeServerManager.ensureBaseUrl();
+  const publishedTarget = readConnectionState().target;
+  if (publishedTarget.mode === "managed") {
+    return captureInstalledAccess(LOCAL_OWNER);
+  }
+
   return Object.freeze({
     owner: LOCAL_OWNER,
     baseUrl,
     transport: createManagedFallbackTransport(baseUrl),
   });
+}
+
+/**
+ * Compatibility alias: managed-only runtime has no lost-adopted recovery path.
+ * External-bound conversations still fail closed.
+ */
+export async function resolveOpenCodeServiceAccessAllowLost(
+  conversation: Pick<Conversation, "id" | "opencodeSessionId" | "opencodeServiceOwner">,
+): Promise<OpenCodeServiceAccess> {
+  return resolveOpenCodeServiceAccess(conversation);
 }

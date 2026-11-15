@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import type { OpenCodeClient } from "@/services/opencode/client";
-import { installAdoptedTarget, clearTarget } from "@/services/opencode/connectionState";
+
 import type { OpenCodeTransport } from "@/services/opencode/http";
 import { OpenCodeError } from "@/services/opencode/errors";
 import type { OpenCodeOrphanRecord } from "@/services/storage/opencodeSessionOrphans";
@@ -1142,18 +1142,14 @@ describe("runOrphanReconciliationOnce — scope and bounds", () => {
 });
 
 /**
- * H3/B3 — the reconciler acts only on history the service it can reach owns.
- *
- * The journal row names its service. A row owned by an adopted service is
- * skipped outright: the managed server's answer about a same-shaped session id
- * says nothing about the adopted service's history, and probing or removing it
- * would be acting on another service's data.
+ * Managed-only runtime: legacy external-owned rows must never be probed or
+ * removed through the managed server.
  */
-describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
-  const ADOPTED = "remote:http://127.0.0.1:51234";
+describe("runOrphanReconciliationOnce — legacy external ownership", () => {
+  const REMOTE = "remote:http://127.0.0.1:51234";
 
-  it("never probes an adopted service's row through the managed server", async () => {
-    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
+  it("never probes a legacy external-owned row through the managed server", async () => {
+    const h = makeHarness({ rows: [record({ serviceOwner: REMOTE })] });
     h.state.remote.add("ses_orphan0001");
     start(h.deps);
 
@@ -1173,22 +1169,9 @@ describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
     expect(h.state.rows).toHaveLength(1);
   });
 
-  it("skips an adopted delete marker, so the managed server never removes it", async () => {
-    const h = makeHarness({ rows: [record({ phase: "delete", serviceOwner: ADOPTED })] });
-    start(h.deps);
-
-    const report = await runOrphanReconciliationOnce();
-
-    expect(report).toMatchObject({ scanned: 1, skippedOtherService: 1, removed: 0 });
-    expect(h.state.getCalls).toHaveLength(0);
-    expect(h.state.removeCalls).toHaveLength(0);
-    expect(h.state.deletedSettles).toHaveLength(0);
-    expect(h.state.rows).toHaveLength(1);
-  });
-
-  it("still reconciles a managed row (non-vacuity)", async () => {
+  it("still reconciles a managed/local row (non-vacuity)", async () => {
     const h = makeHarness({
-      rows: [record({ serviceOwner: "managed", phase: "intent", lateCreateRisk: false })],
+      rows: [record({ serviceOwner: "local", phase: "intent", lateCreateRisk: false })],
     });
     start(h.deps);
 
@@ -1196,40 +1179,6 @@ describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
 
     expect(report).toMatchObject({ scanned: 1, skippedOtherService: 0, absent: 1 });
     expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
-  });
-
-  it("defers an adopted row when the adopted service is unavailable without touching lastCheckedAt", async () => {
-    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
-    start(h.deps);
-
-    const report = await runOrphanReconciliationOnce();
-
-    expect(report).toMatchObject({ scanned: 1, skippedOtherService: 1 });
-    expect(h.state.defers).toEqual([
-      { conversationId: "conv-1", sessionId: "ses_orphan0001", untilMs: NOW + 60_000 },
-    ]);
-    expect(h.state.rows[0]?.lastCheckedAt).toBeNull();
-  });
-
-  it("reconciles an adopted row when matching adopted target is installed using captured transport", async () => {
-    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
-    installAdoptedTarget({
-      origin: "http://127.0.0.1:51234",
-      password: "test-adopted-password",
-      profileId: "explicit:http://127.0.0.1:51234",
-    });
-
-    try {
-      start(h.deps);
-      const report = await runOrphanReconciliationOnce();
-
-      expect(report).toMatchObject({ scanned: 1, skippedOtherService: 0, absent: 1 });
-      expect(h.state.clientBaseUrls).toEqual(["http://127.0.0.1:51234"]);
-      expect(h.state.clientTransports).toHaveLength(1);
-      expect(h.state.clientTransports[0]).toBeDefined();
-    } finally {
-      clearTarget();
-    }
   });
 });
 

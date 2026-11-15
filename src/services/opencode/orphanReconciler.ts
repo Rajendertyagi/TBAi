@@ -6,18 +6,8 @@ import {
   type OpenCodeOrphanRecord,
 } from "../storage/opencodeSessionOrphans";
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
-import {
-  captureOpenCodeRequestContext,
-  createManagedFallbackTransport,
-  readConnectionState,
-  type OpenCodeRequestContext,
-} from "./connectionState";
-import {
-  canonicalizeServiceOwner,
-  LOCAL_HISTORY_OWNER,
-  historyOwnerFromTarget,
-  serializeHistoryOwner,
-} from "./historyBoundary";
+import { createManagedFallbackTransport } from "./connectionState";
+import { canonicalizeServiceOwner, LOCAL_HISTORY_OWNER } from "./historyBoundary";
 import type { OpenCodeTransport } from "./http";
 import { openCodeServerManager } from "./serverManager";
 import {
@@ -496,53 +486,30 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
 
-      let targetUrl: string;
-      let targetTransport: OpenCodeTransport | undefined;
-
       const recordScope = canonicalizeServiceOwner(record.serviceOwner);
       const isRecordLocal = recordScope === LOCAL_HISTORY_OWNER;
 
       if (!isRecordLocal) {
-        let matchedAdoptedContext: OpenCodeRequestContext | null = null;
-        try {
-          const state = readConnectionState();
-          if (state.target.mode === "adopted") {
-            const currentOwner = historyOwnerFromTarget(state.target);
-            const currentScope = currentOwner ? serializeHistoryOwner(currentOwner) : null;
-            if (currentScope === recordScope) {
-              const context = captureOpenCodeRequestContext();
-              if (context.mode === "adopted") {
-                matchedAdoptedContext = context;
-              }
-            }
-          }
-        } catch {
-          matchedAdoptedContext = null;
+        // Legacy external/remote-owned sessions must never be probed or removed
+        // through TBAi's managed runtime.
+        if (reconcilerDeps.defer) {
+          await reconcilerDeps.defer(record.conversationId, record.sessionId, now() + 60_000);
         }
-
-        if (!matchedAdoptedContext) {
-          if (reconcilerDeps.defer) {
-            await reconcilerDeps.defer(record.conversationId, record.sessionId, now() + 60_000);
-          }
-          report.skippedOtherService += 1;
-          logger.debug("opencode", "opencode.orphan_reconcile_other_service", {
-            conversationId: record.conversationId,
-            phase: record.phase,
-          });
-          continue;
-        }
-
-        targetUrl = matchedAdoptedContext.baseUrl;
-        targetTransport = matchedAdoptedContext.transport;
-      } else {
-        const url = await runningBaseUrl();
-        if (url === null) {
-          report.skippedNoServer += 1;
-          continue;
-        }
-        targetUrl = url;
-        targetTransport = undefined;
+        report.skippedOtherService += 1;
+        logger.debug("opencode", "opencode.orphan_reconcile_other_service", {
+          conversationId: record.conversationId,
+          phase: record.phase,
+        });
+        continue;
       }
+
+      const url = await runningBaseUrl();
+      if (url === null) {
+        report.skippedNoServer += 1;
+        continue;
+      }
+      const targetUrl = url;
+      const targetTransport: OpenCodeTransport | undefined = undefined;
 
       const client = reconcilerDeps.createClient(
         targetUrl,

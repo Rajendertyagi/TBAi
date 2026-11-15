@@ -1,32 +1,10 @@
 ﻿import { afterEach, describe, expect, it } from "bun:test";
 import {
-  installAdoptedTarget,
   installManagedTarget,
   readBackendInstanceId,
   resetConnectionStateForTests,
 } from "@/services/opencode/connectionState.ts";
-import type { OpenCodeServiceCapabilities } from "@/services/opencode/compatibility.ts";
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
-
-/**
- * `GET /api/opencode/status` â€” the stable status the UI renders (Â§4.2).
- *
- * The route reads the installed target and never resolves one, so a status
- * poll can neither start a managed child nor contact an adopted service. The
- * payload carries no origin, password or registration path.
- */
-
-const CAPABILITIES: OpenCodeServiceCapabilities = {
-  version: "2.2.6",
-  supported: {
-    session: true,
-    events: true,
-    config: false,
-    agent: true,
-    model: true,
-    command: true,
-  },
-};
 
 const { default: openCodeApp } = await import("@/routes/opencode.ts");
 
@@ -58,22 +36,6 @@ describe("GET /api/opencode/status", () => {
     const response = await readStatus();
     expect(await response.json()).toEqual({
       mode: "managed",
-      backendInstanceId: readBackendInstanceId(),
-      targetRevision: 1,
-      targetId,
-    });
-  });
-
-  it("reports an adopted service and its capability snapshot", async () => {
-    const targetId = installAdoptedTarget({
-      origin: "http://127.0.0.1:5055",
-      password: "synthetic-adopted-password",
-      capabilities: CAPABILITIES,
-    });
-    const response = await readStatus();
-    expect(await response.json()).toEqual({
-      mode: "adopted",
-      capabilities: CAPABILITIES,
       backendInstanceId: readBackendInstanceId(),
       targetRevision: 1,
       targetId,

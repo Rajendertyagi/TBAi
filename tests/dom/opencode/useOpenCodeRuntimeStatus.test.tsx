@@ -1,20 +1,3 @@
-/**
- * The runtime-status read: when it happens, and what a failure does to it.
- *
- * ## What this pins
- *
- * The status is a SNAPSHOT of an install. Mode changes only when the backend
- * adopts at startup or falls back to managed, and the browser's one cheap
- * signal that something changed is the runtime's own connection: a runtime
- * that just CONNECTED proves a target was installed (the managed service starts
- * lazily, on the first Code request), so the read taken at mount is stale.
- * That is why `refreshKey` exists — and why a timer does not.
- *
- * A failed read KEEPS the previous mode. Erasing it would make every surface
- * fall back to "unknown" during a blip after a reconnect that demonstrably
- * worked.
- */
-
 import { afterEach, describe, expect, it } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -22,7 +5,6 @@ import { resetRuntimeTargetStoreForTests } from "@web/features/opencode/runtimeS
 import { resetRuntimeTargetEventsForTests } from "@web/features/opencode/runtimeTargetEvents.ts";
 import { useOpenCodeRuntimeStatus } from "@web/features/opencode/useOpenCodeRuntimeStatus.ts";
 
-/** The response the stubbed backend gives, or a failure sentinel. */
 const BID = "backend-instance";
 let nextResponse: { kind: "json"; body: unknown } | { kind: "fail"; message: string } = {
   kind: "json",
@@ -83,16 +65,9 @@ function stubEventSource(): void {
     FakeEventSource as unknown as typeof EventSource;
 }
 
-/** A probe that renders the hook's result as data attributes. */
 function Probe({ refreshKey, enabled }: { refreshKey: string; enabled?: boolean }) {
   const { status, error } = useOpenCodeRuntimeStatus(enabled, refreshKey);
-  return (
-    <div
-      data-status={status?.mode ?? "none"}
-      data-capabilities={status?.mode === "adopted" && status.capabilities ? "yes" : "no"}
-      data-error={error ?? ""}
-    />
-  );
+  return <div data-status={status?.mode ?? "none"} data-error={error ?? ""} />;
 }
 
 interface Mounted {
@@ -145,7 +120,7 @@ afterEach(() => {
   resetRuntimeTargetStoreForTests();
 });
 
-describe("useOpenCodeRuntimeStatus", () => {
+describe("useOpenCodeRuntimeStatus (managed-only)", () => {
   it("reads the status once on mount", async () => {
     stubFetch();
     stubEventSource();
@@ -156,46 +131,13 @@ describe("useOpenCodeRuntimeStatus", () => {
     unmount(mounted);
   });
 
-  it("carries the adopted capability snapshot through the parser", async () => {
-    stubFetch();
-    stubEventSource();
-    nextResponse = {
-      kind: "json",
-      body: {
-        mode: "adopted",
-        backendInstanceId: BID,
-        targetRevision: 2,
-        targetId: 2,
-        capabilities: {
-          version: "2.3.1",
-          supported: {
-            session: true,
-            events: true,
-            config: false,
-            agent: true,
-            model: true,
-            command: true,
-          },
-        },
-      },
-    };
-    const mounted = await mount({ refreshKey: "connected" });
-    expect(statusOf(mounted.container)).toBe("adopted");
-    expect(
-      mounted.container.querySelector("[data-capabilities]")?.getAttribute("data-capabilities"),
-    ).toBe("yes");
-    unmount(mounted);
-  });
-
   it("re-reads when the refresh key changes, and not before", async () => {
     stubFetch();
     stubEventSource();
     const mounted = await mount({ refreshKey: "connecting" });
     expect(requests).toHaveLength(1);
-    // Same key (including a plain re-render) is not a reason to ask again.
     await rerender(mounted, { refreshKey: "connecting" });
     expect(requests).toHaveLength(1);
-    // A connected runtime proves a target was installed since the mount read.
     await rerender(mounted, { refreshKey: "connected" });
     expect(requests).toHaveLength(2);
     unmount(mounted);
@@ -206,19 +148,13 @@ describe("useOpenCodeRuntimeStatus", () => {
     stubEventSource();
     nextResponse = {
       kind: "json",
-      body: {
-        mode: "adopted",
-        capabilities: null,
-        backendInstanceId: BID,
-        targetRevision: 2,
-        targetId: 2,
-      },
+      body: { mode: "managed", backendInstanceId: BID, targetRevision: 2, targetId: 2 },
     };
     const mounted = await mount({ refreshKey: "connected" });
-    expect(statusOf(mounted.container)).toBe("adopted");
+    expect(statusOf(mounted.container)).toBe("managed");
     nextResponse = { kind: "fail", message: "backend went away" };
     await rerender(mounted, { refreshKey: "reconnecting" });
-    expect(statusOf(mounted.container)).toBe("adopted");
+    expect(statusOf(mounted.container)).toBe("managed");
     expect(errorOf(mounted.container)).toBe("backend went away");
     unmount(mounted);
   });
@@ -232,7 +168,7 @@ describe("useOpenCodeRuntimeStatus", () => {
     unmount(mounted);
   });
 
-  it("refetches authoritative status when a runtime target lifecycle event arrives without remount or recovery epoch change", async () => {
+  it("refetches authoritative status when a runtime target lifecycle event arrives", async () => {
     stubFetch();
     stubEventSource();
     nextResponse = {
@@ -241,22 +177,15 @@ describe("useOpenCodeRuntimeStatus", () => {
     };
     const mounted = await mount({ refreshKey: "connected" });
     expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(1);
-    expect(statusOf(mounted.container)).toBe("managed");
 
     nextResponse = {
       kind: "json",
-      body: {
-        mode: "adopted",
-        capabilities: null,
-        backendInstanceId: BID,
-        targetRevision: 2,
-        targetId: 2,
-      },
+      body: { mode: "managed", backendInstanceId: BID, targetRevision: 2, targetId: 2 },
     };
     await act(async () => {
       FakeEventSource.instances[0]?.emit("opencode.runtime_target", {
         backendInstanceId: BID,
-        mode: "adopted",
+        mode: "managed",
         targetRevision: 2,
         targetId: 2,
       });
@@ -265,7 +194,7 @@ describe("useOpenCodeRuntimeStatus", () => {
     expect(
       requests.filter((u) => u.includes("/api/opencode/status")).length,
     ).toBeGreaterThanOrEqual(2);
-    expect(statusOf(mounted.container)).toBe("adopted");
+    expect(statusOf(mounted.container)).toBe("managed");
     unmount(mounted);
   });
 
@@ -294,7 +223,7 @@ describe("useOpenCodeRuntimeStatus", () => {
     await act(async () => {
       FakeEventSource.instances[0]?.emit("opencode.runtime_target", {
         backendInstanceId: BID,
-        mode: "adopted",
+        mode: "managed",
         targetRevision: 2,
         targetId: 2,
       });
@@ -305,8 +234,7 @@ describe("useOpenCodeRuntimeStatus", () => {
     await act(async () => {
       resolveNew(
         Response.json({
-          mode: "adopted",
-          capabilities: null,
+          mode: "managed",
           backendInstanceId: BID,
           targetRevision: 2,
           targetId: 2,
@@ -314,7 +242,7 @@ describe("useOpenCodeRuntimeStatus", () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(statusOf(mounted.container)).toBe("adopted");
+    expect(statusOf(mounted.container)).toBe("managed");
 
     await act(async () => {
       resolveOld(
@@ -327,7 +255,7 @@ describe("useOpenCodeRuntimeStatus", () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(statusOf(mounted.container)).toBe("adopted");
+    expect(statusOf(mounted.container)).toBe("managed");
     unmount(mounted);
   });
 });

@@ -10,7 +10,7 @@ import {
   readShutdownState,
   resetConnectionStateForTests,
   setShutdownStateReaderForTests,
-  type OpenCodeAdoptedCredential,
+  type OpenCodeManagedCredential,
 } from "@/services/opencode/connectionState.ts";
 import {
   OpenCodeOriginMismatchError,
@@ -53,12 +53,11 @@ function stubFetch(
   return calls;
 }
 
-/** A frozen adopted credential whose password reads are counted. */
-function countingCredential(password: string, origin = ORIGIN) {
+/** A frozen managed credential whose password reads are counted. */
+function countingCredential(password: string) {
   let reads = 0;
-  const credential: OpenCodeAdoptedCredential = Object.freeze({
-    kind: "adopted",
-    origin,
+  const credential: OpenCodeManagedCredential = Object.freeze({
+    kind: "managed",
     get password() {
       reads += 1;
       return password;
@@ -87,7 +86,7 @@ afterEach(() => {
 describe("TT1 — origin normalization", () => {
   it("accepts the same origin with different case and a trailing slash in the binding", async () => {
     const calls = stubFetch(() => new Response("ok", { status: 200 }));
-    const { credential } = countingCredential(MANAGED_PASSWORD, "http://localhost:4096");
+    const { credential } = countingCredential(MANAGED_PASSWORD);
     const transport = createBoundedTransport({
       origin: "HTTP://LocalHost:4096/",
       credential,

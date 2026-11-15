@@ -12,7 +12,7 @@ import {
   isLoopbackHost,
   canonicalizeServiceOwner,
 } from "@/services/opencode/historyBoundary.ts";
-import type { OpenCodeTarget } from "@/services/opencode/connectionState.ts";
+import type { TargetLike } from "@/services/opencode/historyBoundary.ts";
 
 /**
  * The simplified local/remote conversation ownership model.
@@ -177,65 +177,12 @@ describe("historyOwnerFromTarget", () => {
   });
 
   it("maps a managed target to local owner", () => {
-    const target = {
+    const target: TargetLike = {
       mode: "managed",
       baseUrl: "http://127.0.0.1:4000",
       origin: "http://127.0.0.1:4000",
-      credential: { kind: "managed", password: "p" },
-    } as OpenCodeTarget;
+    };
     expect(historyOwnerFromTarget(target)).toEqual(LOCAL_OWNER);
-  });
-
-  it("maps a default loopback adopted target to local owner", () => {
-    const target = {
-      mode: "adopted",
-      baseUrl: "http://127.0.0.1:51234",
-      origin: "http://127.0.0.1:51234",
-      credential: {
-        kind: "adopted",
-        origin: "http://127.0.0.1:51234",
-        password: "p",
-      },
-      profileId: "default",
-    } as OpenCodeTarget;
-    expect(historyOwnerFromTarget(target)).toEqual(LOCAL_OWNER);
-  });
-
-  it("maps an explicit loopback adopted target to remote owner", () => {
-    const target = {
-      mode: "adopted",
-      baseUrl: "http://127.0.0.1:4000",
-      origin: "http://127.0.0.1:4000",
-      credential: {
-        kind: "adopted",
-        origin: "http://127.0.0.1:4000",
-        password: "p",
-      },
-      profileId: "explicit:http://127.0.0.1:4000",
-    } as OpenCodeTarget;
-    expect(historyOwnerFromTarget(target)).toEqual({
-      kind: "remote",
-      origin: "http://127.0.0.1:4000",
-      profileId: "explicit:http://127.0.0.1:4000",
-    });
-  });
-
-  it("maps an external adopted target to remote owner", () => {
-    const target = {
-      mode: "adopted",
-      baseUrl: "https://opencode.example.com",
-      origin: "https://opencode.example.com",
-      credential: {
-        kind: "adopted",
-        origin: "https://opencode.example.com",
-        password: "p",
-      },
-    } as OpenCodeTarget;
-    expect(historyOwnerFromTarget(target)).toEqual({
-      kind: "remote",
-      origin: "https://opencode.example.com",
-      profileId: "explicit:https://opencode.example.com",
-    });
   });
 });
 

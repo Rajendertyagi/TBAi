@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
-import { OpenCodeAttemptSupersededError } from "@/services/opencode/connectionState.ts";
+
 import {
   OPENCODE_CAPABILITY_PROBES,
   assessOpenCodeCompatibility,
@@ -184,16 +184,6 @@ describe("B7 — probeOpenCodeCapabilities reads each route once", () => {
 
     const probes = await probeOpenCodeCapabilities({ origin: ORIGIN, transport });
     for (const id of opencodeCapabilityIds()) expect(probes[id]).toBe("unknown");
-  });
-
-  it("rethrows an attempt refusal instead of recording it as probe data", async () => {
-    const { transport } = transportFrom(() => {
-      throw new OpenCodeAttemptSupersededError(7);
-    });
-
-    await expect(probeOpenCodeCapabilities({ origin: ORIGIN, transport })).rejects.toBeInstanceOf(
-      OpenCodeAttemptSupersededError,
-    );
   });
 
   it("cancels every response body", async () => {

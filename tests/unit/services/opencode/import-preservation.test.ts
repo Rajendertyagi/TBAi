@@ -10,12 +10,9 @@ import { decodeSourceRef, encodeSourceRef } from "@/services/opencode/import";
  * environment; these tests verify pure contracts and critical preservation guards.
  */
 describe("OpenCode import service contracts", () => {
-  it("round-trips sourceRef payloads used for freshness/target binding", () => {
-    const managed = { mode: "managed" as const, origin: "http://127.0.0.1:4096" };
+  it("round-trips managed sourceRef payloads used for freshness/target binding", () => {
+    const managed = { mode: "managed" as const, targetId: 42, origin: "http://127.0.0.1:4096" };
     expect(decodeSourceRef(encodeSourceRef(managed))).toEqual(managed);
-
-    const adopted = { mode: "adopted" as const, targetId: 42, origin: "http://localhost:5000" };
-    expect(decodeSourceRef(encodeSourceRef(adopted))).toEqual(adopted);
   });
 
   it("rejects invalid sourceRef payloads", () => {

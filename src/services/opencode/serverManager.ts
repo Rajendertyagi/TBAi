@@ -1,4 +1,4 @@
-import { spawn, type Subprocess } from "bun";
+﻿import { spawn, type Subprocess } from "bun";
 import fs from "node:fs";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
 import {
@@ -34,14 +34,11 @@ import {
   type OpenCodeCompatibilityAssessment,
 } from "./compatibility";
 import {
-  OpenCodeAttemptSupersededError,
   OpenCodeNotReadyError,
   clearManagedTarget,
   installManagedTarget,
-  isAttemptActive,
   readShutdownState,
   registerManagedChildStopProvider,
-  type AdoptionAttempt,
   type ManagedChildStopProvider,
   type OpenCodeShutdownResult,
 } from "./connectionState";
@@ -299,7 +296,7 @@ export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
       ),
       exitRejection,
     ]).catch((err: unknown) => {
-      // A process exit must fail readiness immediately — never wait out the
+      // A process exit must fail readiness immediately â€” never wait out the
       // interval before surfacing it.
       clearTimeout(timer);
       throw err;
@@ -338,16 +335,16 @@ export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
 export type ManagedStartState = "pending" | "fulfilled" | "rejected";
 
 /** Why a child is being asked to stop. */
-export type ManagedCleanupCause = "shutdown" | "start-failure" | "fallback" | "attempt" | "manager";
+export type ManagedCleanupCause = "shutdown" | "start-failure" | "fallback" | "manager";
 
-/** Who asked for a child to stop: an attempt id, or a fixed manager/shutdown role. */
-export type ManagedCleanupRequester = AdoptionAttempt | "shutdown" | "manager";
+/** Who asked for a child to stop. */
+export type ManagedCleanupRequester = "shutdown" | "manager";
 
-/** A deferred retry trigger for a cleanup request that could not initiate (§3.4). */
+/** A deferred retry trigger for a cleanup request that could not initiate (Â§3.4). */
 export type ManagedCleanupTrigger = "T1" | "T2" | "T3" | "T4";
 
 /**
- * One acquisition of the shared managed start (§3.4.1). The handle keeps its
+ * One acquisition of the shared managed start (Â§3.4.1). The handle keeps its
  * own waiter so the caller can release its share exactly once.
  */
 export interface ManagedStartHandle {
@@ -373,7 +370,7 @@ export interface ManagedStartSnapshot {
    * The promise the manager published for its current start, by identity.
    *
    * `readyPromisePresent` answers "is one published?"; AT3 asks the stronger
-   * question — is it the SAME object the record and every caller hold? — so the
+   * question â€” is it the SAME object the record and every caller hold? â€” so the
    * seam has to expose the promise itself. Test-only, like the rest of this view.
    */
   readonly readyPromise: Promise<string> | null;
@@ -392,9 +389,6 @@ export interface ManagedStartSnapshot {
   readonly childHasStop: boolean;
   readonly publishedChild: Subprocess | null;
   readonly stopping: boolean;
-  readonly unreleasedAttemptIds: readonly number[];
-  readonly releasedAttemptIds: readonly number[];
-  readonly countedAttemptIds: readonly number[];
   readonly pendingCleanup: Readonly<{
     child: Subprocess;
     state: "pending" | "target-owned";
@@ -409,18 +403,9 @@ interface StartDeferred {
   readonly reject: (error: unknown) => void;
 }
 
-interface WaiterRecord {
-  readonly attempt: AdoptionAttempt;
-  readonly startId: number;
-  released: boolean;
-  listener: (() => void) | null;
-}
-
 interface StartRecord {
   readonly startId: number;
   readonly deferred: StartDeferred;
-  readonly owner: AdoptionAttempt | null;
-  readonly waiters: Set<WaiterRecord>;
   child: Subprocess | null;
   state: ManagedStartState;
   withdrawn: boolean;
@@ -441,9 +426,7 @@ interface PendingCleanup {
 }
 
 function cleanupRequestKey(request: CleanupRequest): string {
-  const requester = request.requester;
-  if (typeof requester === "string") return JSON.stringify([request.cause, requester, requester]);
-  return JSON.stringify([request.cause, "attempt", requester.attemptId]);
+  return JSON.stringify([request.cause, request.requester]);
 }
 
 /**
@@ -452,10 +435,10 @@ function cleanupRequestKey(request: CleanupRequest): string {
  * and stops it gracefully on shutdown.
  *
  * Readiness is gated on an actual HTTP probe (see `waitForHttpReady`), so the
- * base URL is only ever returned once the server is reachable — never merely
+ * base URL is only ever returned once the server is reachable â€” never merely
  * spawned.
  *
- * Child ownership (§3.4): every child the manager spawns is registered in
+ * Child ownership (Â§3.4): every child the manager spawns is registered in
  * `liveChildren` synchronously at `spawn()`; a start is a reservation in
  * `startRecords`; an attempt is a waiter on that start, never an owner of the
  * child. Every stop is published once per child in `childStops`, and a
@@ -485,8 +468,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   private readonly startRecords = new Map<number, StartRecord>();
   /** The reservation a caller may join, or null when none is joinable. */
   private currentStartId: number | null = null;
-  /** Waiter records per start id; a start with no entry has no waiters. */
-  private readonly startWaiters = new Map<number, Set<WaiterRecord>>();
+  // Managed-only runtime: no adoption-attempt waiters.
   /** The start id a spawned child was attributed to, written at `spawn()`. */
   private readonly childStartId = new WeakMap<Subprocess, number>();
   /** Every child this manager owns until its exit is observed. */
@@ -568,19 +550,23 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
    * Returns the base URL of a running, ready server, starting one if needed.
    *
    * The started child is published as the connection state's managed target
-   * after readiness succeeds and before this resolves (§1.9.3). This is the
+   * after readiness succeeds and before this resolves (Â§1.9.3). This is the
    * manager-owned path: it has no attempt, holds no waiter, and is the only
    * caller allowed to publish without an attempt guard.
    *
    * @throws {Error} after shutdown has begun.
    * @throws {OpenCodeReadinessCanceledError} when readiness is cancelled.
    */
+  /**
+   * Returns the base URL of a running, ready server, starting one if needed.
+   *
+   * The started child is published as the connection state's managed target
+   * after readiness succeeds and before this resolves.
+   */
   async ensureBaseUrl(): Promise<string> {
     if (this.stopping) throw new Error("OpenCode server is shutting down");
-    const handle = this.acquireManagedStart(null);
+    const handle = this.acquireManagedStart();
     const baseUrl = await handle.promise;
-    // `installManagedTarget` refuses after shutdown. Publishing before this
-    // caller returns is what makes the address it receives a usable binding.
     if (handle.deliverable() && this.publishedChild !== handle.child()) {
       this.publishedTargetId = installManagedTarget({
         baseUrl,
@@ -593,59 +579,14 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * Starts (or joins) the managed server for one attempt and publishes it as
-   * the connection state's managed target.
-   *
-   * The guard and the install share one synchronous block after the start
-   * resolves: a superseded attempt installs nothing and may only request
-   * cleanup of the child it awaited (§3.2).
-   *
-   * @throws {OpenCodeNotReadyError} when the attempt is refused after shutdown.
-   * @throws {OpenCodeAttemptSupersededError} when the attempt is no longer current.
-   */
-  async ensureManagedTarget(attempt: AdoptionAttempt): Promise<string> {
-    const handle = this.acquireManagedStart(attempt);
-    let baseUrl: string;
-    try {
-      baseUrl = await handle.promise;
-    } catch (error) {
-      handle.release();
-      this.requestChildCleanup(handle.child(), { cause: "attempt", requester: attempt });
-      throw error;
-    }
-    if (!isAttemptActive(attempt) || !handle.deliverable()) {
-      handle.release();
-      this.requestChildCleanup(handle.child(), { cause: "attempt", requester: attempt });
-      throw this.attemptRefusal(attempt);
-    }
-    this.publishedTargetId = installManagedTarget({
-      baseUrl,
-      password: getOpenCodeAuthPassword(this.config),
-      attempt,
-    });
-    lazyCapabilityRegistry.bindToService(baseUrl);
-    this.publishedChild = handle.child();
-    handle.release();
-    return baseUrl;
-  }
-
-  /**
-   * Acquires the shared managed start synchronously (§3.4.1).
+   * Acquires the shared managed start synchronously.
    *
    * A deliverable start is joined, an in-flight start is joined, and only
-   * otherwise is a new start reserved. The reservation, its deferred, the
-   * current-start slot and the caller's waiter all exist before the start is
-   * scheduled, so a spawn can never precede its own reservation.
-   *
-   * @throws {OpenCodeNotReadyError} after shutdown.
-   * @throws {OpenCodeAttemptSupersededError} when the supplied attempt is stale.
+   * otherwise is a new start reserved.
    */
-  acquireManagedStart(attempt: AdoptionAttempt | null = null): ManagedStartHandle {
+  acquireManagedStart(): ManagedStartHandle {
     if (this.stopping) throw new Error("OpenCode server is shutting down");
-    if (attempt !== null && !isAttemptActive(attempt)) throw this.attemptRefusal(attempt);
-    if (attempt !== null) {
-      this.restartAttempts = 0;
-    } else if (
+    if (
       !this.inRestart &&
       this.child === null &&
       this.currentStartId === null &&
@@ -662,7 +603,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       const joinable =
         current.state === "pending" ||
         (current.state === "fulfilled" && this.isDeliverable(current));
-      if (joinable) return this.handleFor(current, this.registerWaiter(current, attempt));
+      if (joinable) return this.handleFor(current);
     }
 
     const startId = this.nextStartId;
@@ -676,8 +617,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     const record: StartRecord = {
       startId,
       deferred: { promise, resolve, reject },
-      owner: attempt,
-      waiters: new Set(),
       child: null,
       state: "pending",
       withdrawn: false,
@@ -687,28 +626,27 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     this.startRecords.set(startId, record);
     this.currentStartId = startId;
     this.readyPromise = promise;
-    const waiter = this.registerWaiter(record, attempt);
     queueMicrotask(() => {
       void this.runManagedStart(record).catch((error: unknown) => {
         this.settleRejected(record, error);
       });
     });
-    return this.handleFor(record, waiter);
+    return this.handleFor(record);
   }
 
-  private handleFor(record: StartRecord, waiter: WaiterRecord | null): ManagedStartHandle {
+  private handleFor(record: StartRecord): ManagedStartHandle {
     return Object.freeze({
       startId: record.startId,
       promise: record.deferred.promise,
       child: () => record.child,
       deliverable: () => this.isDeliverable(record),
       release: () => {
-        if (waiter !== null) this.release(waiter);
+        // Managed-only: callers share the start; no per-caller waiter ownership.
       },
     });
   }
 
-  /** The one synchronous "may this child be handed out" predicate (§3.4.1). */
+  /** The one synchronous "may this child be handed out" predicate. */
   private isDeliverable(record: StartRecord): boolean {
     return (
       record.state === "fulfilled" &&
@@ -720,61 +658,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       !this.childStops.has(record.child)
     );
   }
-
-  /** Registers one attempt as a waiter, or returns null for the manager itself. */
-  private registerWaiter(
-    record: StartRecord,
-    attempt: AdoptionAttempt | null,
-  ): WaiterRecord | null {
-    if (attempt === null) return null;
-    const waiter: WaiterRecord = {
-      attempt,
-      startId: record.startId,
-      released: false,
-      listener: null,
-    };
-    record.waiters.add(waiter);
-    let waiters = this.startWaiters.get(record.startId);
-    if (waiters === undefined) {
-      waiters = new Set();
-      this.startWaiters.set(record.startId, waiters);
-    }
-    waiters.add(waiter);
-    if (attempt.controller.signal.aborted) {
-      // The attempt never waits, so it never holds the child.
-      waiter.released = true;
-      return waiter;
-    }
-    const listener = (): void => {
-      this.release(waiter);
-    };
-    waiter.listener = listener;
-    attempt.controller.signal.addEventListener("abort", listener, { once: true });
-    return waiter;
-  }
-
-  /** Releases one waiter once and fires T1 when no counted waiter remains. */
-  private release(waiter: WaiterRecord): void {
-    if (waiter.released) return;
-    waiter.released = true;
-    if (waiter.listener !== null) {
-      waiter.attempt.controller.signal.removeEventListener("abort", waiter.listener);
-      waiter.listener = null;
-    }
-    this.lifecycleEvent(`release:${waiter.attempt.attemptId}`);
-    const record = this.startRecords.get(waiter.startId);
-    const remaining = record === undefined ? [] : [...record.waiters].filter((w) => !w.released);
-    if (remaining.length === 0) {
-      this.startWaiters.delete(waiter.startId);
-      this.retryPendingFor(record?.child ?? null);
-    }
-  }
-
-  private attemptRefusal(attempt: AdoptionAttempt): Error {
-    if (readShutdownState().shutdownStarted) return new OpenCodeNotReadyError();
-    return new OpenCodeAttemptSupersededError(attempt.attemptId);
-  }
-
   /** Resolves and validates the managed V2 binary; overridable in tests. */
   protected resolveBinary(): string {
     return resolveAndValidateManagedBinary(this.config).path;
@@ -973,9 +856,9 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       .catch(() => undefined);
 
     if (!reservationCurrent) {
-      // Never adopted through the current-child pointer; still owned until exit.
+      // Reservation lost (withdrawn/superseded by shutdown or newer start); child still owned until exit.
       if (this.shutdownBegun()) throw new OpenCodeReadinessCancelledError();
-      throw new OpenCodeAttemptSupersededError(record.owner?.attemptId ?? -1);
+      throw new OpenCodeReadinessCancelledError();
     }
 
     const startMs = Date.now();
@@ -987,7 +870,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     // Only the current child may publish a port. A child whose reservation lost
     // the slot may still announce; that address is not handed out.
     if (this.child !== child) {
-      throw new OpenCodeAttemptSupersededError(record.owner?.attemptId ?? -1);
+      throw new OpenCodeReadinessCancelledError();
     }
     this.port = target.port;
     const baseUrl = target.baseUrl;
@@ -1064,8 +947,8 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       );
     }
     // The moment this process became reachable. `waitForHttpReady` proves the
-    // server is LISTENING — not that its provider catalogue has finished
-    // loading — and the two are seconds apart. Consumers that need the
+    // server is LISTENING â€” not that its provider catalogue has finished
+    // loading â€” and the two are seconds apart. Consumers that need the
     // catalogue (rather than just a URL) use this to tell "still starting"
     // from "genuinely empty", instead of guessing with their own heuristic.
     if (this.child === child) this.readyAtMs = Date.now();
@@ -1095,7 +978,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * Settles one start as fulfilled, exactly once (§3.4).
+   * Settles one start as fulfilled, exactly once (Â§3.4).
    *
    * Separate from {@link settleRejected} rather than one branch on a union: the
    * tests project compiles this file with `strictNullChecks: false`, where
@@ -1114,7 +997,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * Settles one start as failed, exactly once (§3.4). The order is fixed:
+   * Settles one start as failed, exactly once (Â§3.4). The order is fixed:
    * state, releases, pointer detachment by identity, one cleanup request,
    * identity-guarded binding eviction, then delivery of the outcome.
    */
@@ -1124,7 +1007,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     record.baseUrl = null;
     record.outcome = error;
     this.lifecycleEvent("settle:state=rejected");
-    for (const waiter of [...record.waiters]) this.releaseForSettlement(waiter);
     if (record.child !== null && this.child === record.child) {
       this.child = null;
       this.port = null;
@@ -1134,7 +1016,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     if (record.child !== null && this.liveChildren.has(record.child)) {
       this.requestChildCleanup(record.child, {
         cause: "start-failure",
-        requester: record.owner ?? "manager",
+        requester: "manager",
       });
     }
     if (this.readyPromise === record.deferred.promise) this.readyPromise = null;
@@ -1145,18 +1027,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     // T2: the start settled, after the settlement's own cleanup request and
     // delivery are complete.
     if (record.child !== null) this.retryPendingFor(record.child);
-  }
-
-  /** Releases a waiter during settlement without firing its trigger. */
-  private releaseForSettlement(waiter: WaiterRecord): void {
-    if (waiter.released) return;
-    waiter.released = true;
-    if (waiter.listener !== null) {
-      waiter.attempt.controller.signal.removeEventListener("abort", waiter.listener);
-      waiter.listener = null;
-    }
-    this.startWaiters.delete(waiter.startId);
-    this.lifecycleEvent(`release:${waiter.attempt.attemptId}`);
   }
 
   /**
@@ -1243,7 +1113,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * Exit is per-child and identity-guarded (§3.4.1). Pointer nullness is never
+   * Exit is per-child and identity-guarded (Â§3.4.1). Pointer nullness is never
    * used as a proxy for child identity: a stale child's late exit may reap only
    * itself and must not disturb a newer child's pointers, binding or recovery.
    */
@@ -1334,16 +1204,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       });
   }
 
-  /** Waiters that count against C1: unreleased and belonging to a live attempt. */
-  private countedWaiters(child: Subprocess): WaiterRecord[] {
-    const startId = this.childStartId.get(child);
-    if (startId === undefined) return [];
-    const record = this.startRecords.get(startId);
-    if (record === undefined) return [];
-    return [...record.waiters].filter(
-      (waiter) => !waiter.released && isAttemptActive(waiter.attempt),
-    );
-  }
+  // Managed-only runtime: no adoption-attempt waiters (C1 removed).
 
   private recordForChild(child: Subprocess): StartRecord | null {
     const startId = this.childStartId.get(child);
@@ -1352,7 +1213,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * The one decision point for whether a child may be stopped (§3.4).
+   * The one decision point for whether a child may be stopped (Â§3.4).
    *
    * Joining a published stop happens first and is unconditional. Otherwise the
    * three conditions are evaluated; a request that cannot initiate is recorded
@@ -1372,7 +1233,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     if (request.requester !== "shutdown") {
       if (this.publishedChild === child) failing.push("T3");
       if (record !== null && record.state === "pending") failing.push("T2");
-      if (this.countedWaiters(child).length > 0) failing.push("T1");
     }
 
     if (failing.length > 0) {
@@ -1393,10 +1253,10 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       for (const trigger of failing) obligation.waitingFor.add(trigger);
       logger.debug("opencode", "opencode.cleanup_deferred", {
         pid: child.pid,
-        condition: failing.includes("T3") ? "C3" : failing.includes("T2") ? "C2" : "C1",
+        condition: failing.includes("T3") ? "C3" : "C2",
         triggers: failing,
         cause: request.cause,
-        requester: typeof request.requester === "string" ? request.requester : "attempt",
+        requester: request.requester,
       });
       return null;
     }
@@ -1426,8 +1286,8 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   /**
    * Publishes the one stop promise for a child, before anything is signalled.
    *
-   * Steps 1–3 are synchronous and invoke no process API; re-entrant callers
-   * therefore find the published promise and join it (§3.4, RC16).
+   * Steps 1â€“3 are synchronous and invoke no process API; re-entrant callers
+   * therefore find the published promise and join it (Â§3.4, RC16).
    */
   private stopChild(child: Subprocess): Promise<OpenCodeShutdownResult> {
     const existing = this.childStops.get(child);
@@ -1441,7 +1301,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     this.lifecycleEvent("stop:published");
     // One settlement path for every outcome. A failed stop is reported exactly
     // once with the child's pid, and the published promise always RESOLVES:
-    // a throw and a returned rejection both arrive here as `{ok:false}` (§1.9.3.2).
+    // a throw and a returned rejection both arrive here as `{ok:false}` (Â§1.9.3.2).
     let settled = false;
     const finish = (result: OpenCodeShutdownResult): void => {
       if (settled) return;
@@ -1472,7 +1332,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   /**
    * SIGTERM, a bounded wait, SIGKILL, and a second bounded wait. A stop that
    * cannot confirm termination is reported as such; it never claims the
-   * process is gone (§6.5).
+   * process is gone (Â§6.5).
    */
   protected async runStopSequence(child: Subprocess): Promise<OpenCodeShutdownResult> {
     try {
@@ -1561,7 +1421,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
 
   /**
    * Shutdown step 4's synchronous half: clear the cached binding and copy the
-   * live-child registry before any per-child decision is collected (§1.9.3.2).
+   * live-child registry before any per-child decision is collected (Â§1.9.3.2).
    */
   private clearBindingForShutdown(): void {
     if (this.currentStartId !== null) {
@@ -1604,7 +1464,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   }
 
   /**
-   * Read-only snapshot of the start/cleanup state (§3.4.1). Test-only: no
+   * Read-only snapshot of the start/cleanup state (Â§3.4.1). Test-only: no
    * production call site exists, and it exposes no mutator.
    */
   protected startStateSnapshot(child?: Subprocess): ManagedStartSnapshot {
@@ -1639,25 +1499,6 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       childHasStop: recordChild !== null && this.childStops.has(recordChild),
       publishedChild: this.publishedChild,
       stopping: this.stopping,
-      unreleasedAttemptIds: Object.freeze(
-        record === undefined
-          ? []
-          : [...record.waiters]
-              .filter((waiter) => !waiter.released)
-              .map((w) => w.attempt.attemptId),
-      ),
-      releasedAttemptIds: Object.freeze(
-        record === undefined
-          ? []
-          : [...record.waiters].filter((waiter) => waiter.released).map((w) => w.attempt.attemptId),
-      ),
-      countedAttemptIds: Object.freeze(
-        record === undefined
-          ? []
-          : [...record.waiters]
-              .filter((waiter) => !waiter.released && isAttemptActive(waiter.attempt))
-              .map((w) => w.attempt.attemptId),
-      ),
       pendingCleanup:
         obligation === undefined
           ? null

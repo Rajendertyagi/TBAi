@@ -114,11 +114,11 @@ export const OPENCODE_CONFIG = {
   authPasswordLegacyEnvVar: "OPENCODE_SERVER_PASSWORD",
   /** Both names are set to one value so server and client can never disagree. */
   authPasswordChildEnvVars: ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"] as const,
-  /** Explicit adopted server endpoint URL override (e.g. "http://127.0.0.1:56873"). */
+  /** Obsolete external runtime URL; ignored for TBAi runtime selection. */
   serverUrlEnvVar: "OPENCODE_URL",
-  /** Explicit adopted server host override. */
+  /** Obsolete external runtime host; ignored for TBAi runtime selection. */
   serverHostEnvVar: "OPENCODE_HOST",
-  /** Explicit adopted server port override. */
+  /** Obsolete external runtime port; ignored for TBAi runtime selection. */
   serverPortEnvVar: "OPENCODE_PORT",
   /** Graceful shutdown window before SIGKILL. */
   shutdownTimeoutMs: 5_000,
@@ -148,20 +148,8 @@ export const OPENCODE_CONFIG = {
   registrationDefaultFilename: "service.json",
   /** Prefix for a channel that maps to its own file (`service-<channel>.json`). */
   registrationChannelFilenamePrefix: "service-",
-  /** One loopback probe against an already-running adopted service (§6.5). */
+  /** Timeout for managed capability/read probes against the managed service. */
   discoveryProbeTimeoutMs: 5_000,
-  /** Revalidation cadence for an adopted service, to detect a lost service. */
-  adoptionRevalidateIntervalMs: 30_000,
-  /**
-   * Bounded probes that must ALL fail to reach the adopted service before its
-   * loss is CONFIRMED (§1.5.1 row 6). One failure is a transient network
-   * condition and preserves a working target; a confirmed loss clears it and
-   * falls back to the managed service (D3). Policy, not a measurement: the
-   * number only has to be defensible as "more than a single blip".
-   */
-  adoptedLossConfirmAttempts: 2,
-  /** Pause between those confirming probes. */
-  adoptedLossRetryDelayMs: 250,
   /**
    * Time between SIGTERM and the SIGKILL decision for a managed child stop.
    * Part of the shared stop completion's worst case (§1.9.3.2, §6.5).
@@ -217,9 +205,6 @@ export type OpenCodeConfig = {
   readonly registrationDefaultFilename: string;
   readonly registrationChannelFilenamePrefix: string;
   readonly discoveryProbeTimeoutMs: number;
-  readonly adoptionRevalidateIntervalMs: number;
-  readonly adoptedLossConfirmAttempts: number;
-  readonly adoptedLossRetryDelayMs: number;
   readonly opencodeChildStopGraceMs: number;
   readonly opencodeChildStopKillMs: number;
   readonly maxRestartAttempts: number;

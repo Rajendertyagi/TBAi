@@ -413,11 +413,10 @@ describe("OpenCode session import service", () => {
         importOpenCodeSession({ sessionId: "ses_1", sourceRef: mismatchedOriginRef }),
       ).rejects.toThrow(OpenCodeImportStaleSourceError);
 
-      const mismatchedModeRef = encodeSourceRef({
-        mode: "adopted",
-        targetId: 42,
-        origin: "http://127.0.0.1:4096",
-      });
+      const mismatchedModeRef = Buffer.from(
+        JSON.stringify({ mode: "adopted", targetId: 42, origin: "http://127.0.0.1:4096" }),
+        "utf8",
+      ).toString("base64url");
       await expect(
         importOpenCodeSession({ sessionId: "ses_1", sourceRef: mismatchedModeRef }),
       ).rejects.toThrow(OpenCodeImportStaleSourceError);
@@ -438,7 +437,7 @@ describe("OpenCode session import service", () => {
         providerId: null,
         workspaceMode: "simple",
         opencodeSessionId: "ses_dup_test",
-        opencodeServiceOwner: "managed",
+        opencodeServiceOwner: "local",
         opencodeImported: true,
         engine: "opencode",
       });

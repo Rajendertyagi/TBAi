@@ -14,8 +14,9 @@
  *    using the isolated database does NOT cause TBAi to refuse startup. SQLite WAL
  *    provides safe concurrency; both services remain running and neither process
  *    is killed or interfered with.
- * 2. Adopt-first discovery: when a compatible OpenCode service is registered,
- *    TBAi adopts it without spawning a competing managed server.
+ * 2. Managed-only runtime: a registered external OpenCode service is not adopted;
+ *    TBAi starts its own managed server, publishes managed registration, and does
+ *    not terminate the external service.
  * 3. Managed process lifecycle: a managed server started on its database is killed
  *    with the sidecar when the desktop shell is hard-killed (via the Windows Job
  *    Object contract), its registration is updated on clean restart, and no orphan
@@ -303,9 +304,9 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
     }
   }, 120000);
 
-  it("adopts a compatible registered OpenCode service without spawning a competing managed server", async () => {
+  it("ignores a registered external OpenCode service and starts its own managed server", async () => {
     const binary = resolveManagedBinary(OPENCODE_CONFIG).path;
-    const isolation = createIsolation("adopt-first");
+    const isolation = createIsolation("managed-only-ignores-external");
     const servicePort = allocateTestLoopbackPort();
     const serviceUrl = `http://127.0.0.1:${servicePort}`;
     const service = Bun.spawn(
@@ -330,7 +331,8 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
       }).catch(() => undefined);
       expect(pidAlive(service.pid)).toBe(true);
 
-      // Write valid service.json registration pointing to the running service
+      // Write a service.json registration pointing to the running external service.
+      // Managed-only runtime must not adopt or attach to it.
       const regDir = path.join(isolation.stateHome, "opencode");
       fs.mkdirSync(regDir, { recursive: true });
       const regPath = path.join(regDir, "service.json");
@@ -344,21 +346,31 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
         }),
       );
 
-      // Start sidecar with TBAI_G2_ADOPT=1
       const runDir = path.join(isolation.root, "sidecar-run");
-      run = await startRealShell(isolation, binary, runDir, { TBAI_G2_ADOPT: "1" });
+      run = await startRealShell(isolation, binary, runDir);
       expect(run.error).toBeNull();
       expect(run.ready).not.toBeNull();
       if (!run.ready) throw new Error("sidecar did not become ready");
 
-      expect(run.ready.mode).toBe("adopted");
-      expect(run.ready.baseUrl).toBe(serviceUrl);
-      expect(run.ready.adoptedPid).toBe(service.pid);
-      // No competing managed OpenCode child should have been spawned
-      expect(run.ready.managedPid).toBeNull();
-      expect(pidAlive(service.pid)).toBe(true);
+      expect(run.ready.mode).toBe("managed");
+      expect(run.ready.adoptedPid).toBeNull();
+      expect(run.ready.managedPid).not.toBeNull();
+      if (run.ready.managedPid === null) throw new Error("no managed OpenCode PID found");
+      expect(run.ready.managedPid).not.toBe(service.pid);
+      expect(run.ready.baseUrl).not.toBe(serviceUrl);
+      expect(pidAlive(run.ready.managedPid)).toBe(true);
+      expect(await descendantAlive(run.ready.baseUrl)).toBe(true);
 
-      // Cleaning up the sidecar does NOT terminate the adopted service
+      // External service remains running and untouched by managed startup.
+      expect(pidAlive(service.pid)).toBe(true);
+      expect(await descendantAlive(serviceUrl)).toBe(true);
+
+      // Registration is published for the managed child, not the external service.
+      expect(fs.existsSync(regPath)).toBe(true);
+      const reg = JSON.parse(fs.readFileSync(regPath, "utf8"));
+      expect(reg.pid).toBe(run.ready.managedPid);
+
+      // Cleaning up the managed sidecar does NOT terminate the external service.
       await cleanupRun(run);
       run = null;
       expect(pidAlive(service.pid)).toBe(true);

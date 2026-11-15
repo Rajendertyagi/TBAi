@@ -410,46 +410,7 @@ export function parseRegistrationOrigin(raw: string): string {
   return origin;
 }
 
-export type ExplicitOpenCodeServerConfig = Readonly<{
-  origin: string;
-  password: string;
-}>;
-
-export function hasExplicitServerConfig(
-  env: NodeJS.ProcessEnv = process.env,
-  config: OpenCodeConfig = OPENCODE_CONFIG,
-): boolean {
-  return Boolean(env[config.serverUrlEnvVar]?.trim() || env[config.serverPortEnvVar]?.trim());
-}
-
-export function resolveExplicitServerConfig(
-  env: NodeJS.ProcessEnv = process.env,
-  config: OpenCodeConfig = OPENCODE_CONFIG,
-): ExplicitOpenCodeServerConfig | null {
-  const urlVar = env[config.serverUrlEnvVar]?.trim();
-  const hostVar = env[config.serverHostEnvVar]?.trim();
-  const portVar = env[config.serverPortEnvVar]?.trim();
-
-  let rawUrl: string | undefined;
-  if (urlVar) {
-    rawUrl = urlVar;
-  } else if (portVar) {
-    const host = hostVar || "127.0.0.1";
-    rawUrl = `http://${host}:${portVar}`;
-  }
-
-  if (!rawUrl) return null;
-
-  const origin = parseRegistrationOrigin(rawUrl);
-  const password =
-    env[config.authPasswordEnvVar]?.trim() || env[config.authPasswordLegacyEnvVar]?.trim() || "";
-
-  if (!password) {
-    refuse("missing_credential", "explicit OpenCode configuration carries no password");
-  }
-
-  return Object.freeze({ origin, password });
-}
+// External runtime selection/discovery APIs removed: TBAi uses its managed runtime only.
 
 /** The record a TBAi-managed server publishes for discovery by other instances. */
 export type OpenCodeRegistrationPublishRecord = Readonly<{
@@ -587,20 +548,4 @@ export async function removeOpenCodeRegistrationIfOwned(
   }
 }
 
-/** Reads a registration, returning null when no record is present. Never throws. */
-export async function readOpenCodeRegistrationIfPresent(
-  options: OpenCodeRegistrationReadOptions = {},
-): Promise<OpenCodeRegistrationRecord | null> {
-  try {
-    return await readOpenCodeRegistration(options);
-  } catch (error) {
-    if (
-      error instanceof OpenCodeRegistrationRefusalError &&
-      error.refusal === "registration_missing"
-    ) {
-      return null;
-    }
-    // Presence helper must never throw unhandled errors; treat unreadable/invalid as absent.
-    return null;
-  }
-}
+// External registration discovery helper removed: managed-only runtime does not adopt external servers.

@@ -57,7 +57,7 @@ export interface OpenCodeCapabilitiesTarget {
   readonly backendInstanceId: string;
   readonly targetRevision: number;
   readonly targetId: number | null;
-  readonly mode: "managed" | "adopted";
+  readonly mode: "managed";
 }
 
 export interface OpenCodeCapabilities {
@@ -133,11 +133,7 @@ async function fetchModels(client?: OpenCodeClient): Promise<ModelInfo[]> {
 }
 
 /**
- * A client bound to the active service, whoever owns it.
- *
- * The transport comes from the installed target, so an adopted service is
- * asked with its own credential and TBAi's managed password never leaves for
- * an origin it does not belong to (§1.9.3).
+ * A client bound to the active managed service.
  */
 async function activeServiceClient(): Promise<OpenCodeClient> {
   const target = await resolveOpenCodeRuntimeTarget();
@@ -147,11 +143,8 @@ async function activeServiceClient(): Promise<OpenCodeClient> {
 /**
  * Reads a server's advertised default model, or `undefined`.
  *
- * Exported so a caller holding a per-service client (an adopted service, H3/B3)
- * can ask ITS server for the default instead of the managed one. It is given
- * the client rather than building one, because building one means
- * `ensureBaseUrl()` — which starts a managed process and would answer from the
- * wrong service.
+ * Exported so a caller holding a per-service client can ask that service for
+ * the default. It is given the client rather than building one.
  *
  * Never throws. The three ways this can come back empty are all "no default",
  * not "broken": the server reports `data: null`, the request fails, or the
@@ -190,10 +183,10 @@ export async function fetchDefaultModel(
 }
 
 /**
- * Discovers the agents and models exposed by the ACTIVE OpenCode service
- * (managed or adopted, D1/H5). Starts the managed server on first call when
- * nothing is installed, and queries its live capability endpoints. Nothing is
- * hardcoded — every agent/model string comes from the server response.
+ * Discovers the agents and models exposed by the active managed OpenCode
+ * service. Starts the managed server on first call when nothing is installed,
+ * and queries its live capability endpoints. Nothing is hardcoded — every
+ * agent/model string comes from the server response.
  *
  * @returns The live agent and model lists (empty lists when the server reports none).
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
@@ -287,11 +280,9 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
 
   let raw: RawCapabilities;
   try {
-    // The "catalogue still loading" window exists because the MANAGED child
-    // answers `/api/info` before its provider catalogue loads. An adopted
-    // service has been running for its own reasons and is not starting up, so
-    // waiting there would delay the picker for a state that does not apply.
-    raw = await readCatalogueSettled(client, target.mode === "managed");
+    // The "catalogue still loading" window exists because the managed child
+    // answers `/api/info` before its provider catalogue loads.
+    raw = await readCatalogueSettled(client, true);
   } catch (err) {
     throw toOpenCodeError(err);
   }

@@ -174,33 +174,7 @@ describe("CT5 — a document path must resolve inside one configuration root", (
   });
 });
 
-describe("CT7 — an adopted service's configuration is not written", () => {
-  it("refuses an adopted write before any I/O", () => {
-    let error: unknown;
-    try {
-      assertOpenCodeConfigWriteAllowed({ mode: "adopted" });
-    } catch (caught) {
-      error = caught;
-    }
-    expect(error).toBeInstanceOf(OpenCodeConfigWriteDisabledError);
-    expect((error as OpenCodeConfigWriteDisabledError).code).toBe("OPENCODE_CONFIG_WRITE_DISABLED");
-    expect((error as OpenCodeConfigWriteDisabledError).reason).toBe("adopted_g4_unproven");
-  });
-
-  it("keeps the refusal when the proof is explicitly absent", () => {
-    expect(() => assertOpenCodeConfigWriteAllowed({ mode: "adopted", g4Verified: false })).toThrow(
-      OpenCodeConfigWriteDisabledError,
-    );
-  });
-
-  it("allows an adopted write only once the G4 proof is supplied", () => {
-    expect(() =>
-      assertOpenCodeConfigWriteAllowed({ mode: "adopted", g4Verified: true }),
-    ).not.toThrow();
-  });
-});
-
-describe("the managed service's configuration is not written either", () => {
+describe("managed-only runtime — configuration writes remain refused", () => {
   it("refuses because the child has no TBAi-owned configuration root", () => {
     let error: unknown;
     try {
@@ -209,24 +183,13 @@ describe("the managed service's configuration is not written either", () => {
       error = caught;
     }
     expect(error).toBeInstanceOf(OpenCodeConfigWriteDisabledError);
+    expect((error as OpenCodeConfigWriteDisabledError).code).toBe("OPENCODE_CONFIG_WRITE_DISABLED");
     expect((error as OpenCodeConfigWriteDisabledError).reason).toBe("managed_root_not_owned");
-    // The message has to name the reason a reader can act on: the document is
-    // the user's own, not a TBAi file with a wrong path.
     expect((error as OpenCodeConfigWriteDisabledError).message).toContain("user's own");
   });
 
-  it("cannot be enabled by the adopted-mode G4 switch", () => {
-    // `g4Verified` is the adopted path's switch. It must never make a managed
-    // write legal, because the managed problem is a missing root, not G4.
-    expect(() => assertOpenCodeConfigWriteAllowed({ mode: "managed", g4Verified: true })).toThrow(
-      OpenCodeConfigWriteDisabledError,
-    );
-  });
-
-  it("reports the same refusal the throwing gate raises", () => {
+  it("reports the same refusal through the helper", () => {
     expect(openCodeConfigWriteRefusal({ mode: "managed" })).toBe("managed_root_not_owned");
-    expect(openCodeConfigWriteRefusal({ mode: "adopted" })).toBe("adopted_g4_unproven");
-    expect(openCodeConfigWriteRefusal({ mode: "adopted", g4Verified: true })).toBeNull();
   });
 });
 

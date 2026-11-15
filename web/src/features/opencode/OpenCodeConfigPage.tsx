@@ -44,7 +44,6 @@ import {
   type OpenCodePermissionRule,
 } from "./openCodeConfig";
 import { findPermissionOverride, type PermissionRuleLike } from "./permissionOverrides";
-import { openCodeCapabilitySupported } from "./runtimeStatus";
 import { useOpenCodeRuntimeStatus } from "./useOpenCodeRuntimeStatus";
 import { cn } from "@/lib/utils";
 
@@ -291,12 +290,9 @@ export function OpenCodeConfigPage() {
   >({ kind: "idle" });
   const [removingIndex, setRemovingIndex] = useState<number | null>(null);
 
-  // The service this page edits. An adopted service may not serve the
-  // configuration route (B7 optional capability); the snapshot decides that,
-  // and the read below is skipped when it positively reports the route absent.
-  const runtime = useOpenCodeRuntimeStatus();
-  const configUnavailable =
-    runtime.status?.mode === "adopted" && !openCodeCapabilitySupported(runtime.status, "config");
+  // The service this page edits (managed-only runtime).
+  useOpenCodeRuntimeStatus();
+  const configUnavailable = false;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -317,7 +313,7 @@ export function OpenCodeConfigPage() {
     // asynchronous), that first read is superseded by the effect below.
     if (configUnavailable) return;
     void load();
-  }, [configUnavailable, load]);
+  }, [load]);
 
   // The notice replaces a failed read rather than joining it: when the service
   // has no configuration route, "could not read" is noise about a request the
@@ -327,7 +323,7 @@ export function OpenCodeConfigPage() {
     setSnapshot(null);
     setLoadError(null);
     setLoading(false);
-  }, [configUnavailable]);
+  }, []);
 
   const rules = useMemo(() => toPermissionRules(snapshot?.permissions ?? null), [snapshot]);
   /**
@@ -463,7 +459,7 @@ export function OpenCodeConfigPage() {
         </Button>
       }
     >
-      {configUnavailable && <SettingsError>{openCodeConfigCopy.unavailable.adopted}</SettingsError>}
+      {configUnavailable && <SettingsError>{openCodeConfigCopy.unavailable.managed}</SettingsError>}
       {loadError && <SettingsError>{loadError}</SettingsError>}
 
       {!snapshot && loading && (

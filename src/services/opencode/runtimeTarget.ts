@@ -1,6 +1,4 @@
-import type { OpenCodeServiceCapabilities } from "./compatibility";
 import { DEFAULT_PROFILE_ID } from "./serviceProfile";
-import { hasExplicitServerConfig } from "./registration";
 import {
   captureOpenCodeRequestContext,
   createManagedFallbackTransport,
@@ -16,66 +14,27 @@ import { openCodeServerManager } from "./serverManager";
 /**
  * The one resolver for "which service does this server-wide call talk to?".
  *
- * Session, history and configuration calls are conversation-scoped and resolve
- * through `serviceAccess.ts`, which refuses a conversation bound to a service
- * that is not installed. The server-wide surfaces — the model/agent catalogue,
- * the command feed, the configuration page and the browser proxy — belong to
- * whichever service the runtime is bound to, and this is where that binding is
- * read.
- *
- * ## Why a transport, not a URL plus headers
- *
- * The credential belongs to exactly one origin (§1.9.3). Returning a bare
- * `baseUrl` and letting each caller pair it with `getOpenCodeAuthHeaders()` is
- * how an adopted conversation could end up sending TBAi's managed password to
- * somebody else's service. {@link OpenCodeRuntimeTarget.transport} carries the
- * credential for the installed target and enforces that origin, so a caller
- * cannot separate the two. That is also why no raw header record is returned
- * beside it: `baseUrl` and the credential travel only inside one transport.
- *
- * `transport` is REQUIRED. The one legacy case — a managed start that returned
- * without publishing a target (a test double or an old manager) — still gets a
- * real transport, built from the managed credential by
- * {@link createManagedFallbackTransport}. Production publishes before
- * `ensureBaseUrl()` resolves, so that fallback is a compatibility path, not a
- * normal one.
- *
- * ## What this does NOT do
- *
- * It never adopts, probes or starts an ADOPTED service: an unresolved target
- * with a running adopted service simply means the startup attempt has not run
- * yet. {@link describeOpenCodeRuntime} never starts anything either, so the
- * status surface cannot spawn a managed child as a side effect.
+ * TBAi owns exactly one managed OpenCode runtime. Server-wide surfaces resolve to
+ * the installed managed target or start the managed child on demand.
  */
 
 /** The service current server-wide calls must use. Immutable. */
 export interface OpenCodeRuntimeTarget {
-  readonly mode: "managed" | "adopted";
+  readonly mode: "managed";
   /** Unique target identity when installed. */
   readonly targetId?: number;
   /** Connection-state revision of the resolved target snapshot. */
   readonly targetRevision: number;
   /** Canonical, slash-free origin. */
   readonly baseUrl: string;
-  /**
-   * The captured, origin-bound transport. Required, so a caller can never
-   * separate the origin from the credential that belongs to it.
-   */
+  /** The captured, origin-bound transport. */
   readonly transport: OpenCodeTransport;
-  /** What adoption proved about an adopted service (B7); null when not assessed. */
-  readonly capabilities: OpenCodeServiceCapabilities | null;
+  /** Managed-only runtime has no adopted capability snapshot. */
+  readonly capabilities: null;
   readonly profileId?: string;
 }
 
-/**
- * The target identity the browser may use to detect runtime-target transitions.
- *
- * `backendInstanceId` identifies the backend process instance that produced the
- * identity, so a legitimate post-restart revision reset can be distinguished from
- * a stale/out-of-order publication. `targetRevision` is the connection-state
- * revision within that backend instance. `targetId` identifies an installed target
- * instance when one exists.
- */
+/** Target identity for runtime-target transition detection. */
 export interface OpenCodeRuntimeTargetIdentity {
   readonly backendInstanceId: string;
   readonly targetRevision: number;
@@ -85,40 +44,28 @@ export interface OpenCodeRuntimeTargetIdentity {
 /** What the UI may learn about the runtime: a mode, never a credential. */
 export type OpenCodeRuntimeStatus =
   | Readonly<{ mode: "unresolved" } & OpenCodeRuntimeTargetIdentity>
-  | Readonly<{ mode: "managed" } & OpenCodeRuntimeTargetIdentity>
-  | Readonly<
-      {
-        mode: "adopted";
-        capabilities: OpenCodeServiceCapabilities | null;
-      } & OpenCodeRuntimeTargetIdentity
-    >;
+  | Readonly<{ mode: "managed" } & OpenCodeRuntimeTargetIdentity>;
 
 export interface OpenCodeRuntimeTargetOptions {
   /** Test seam; production starts the managed child through the manager. */
   readonly ensureManaged?: () => Promise<string>;
 }
 
-/** Projects an installed target into the resolver's shape. */
-function captureInstalled(target: OpenCodeTarget & { mode: "managed" | "adopted" }) {
+function captureInstalled(target: OpenCodeTarget & { mode: "managed" }) {
   const context = captureOpenCodeRequestContext();
   return Object.freeze<OpenCodeRuntimeTarget>({
-    mode: target.mode,
+    mode: "managed",
     targetId: target.targetId,
     targetRevision: context.revision,
     baseUrl: context.baseUrl,
     transport: context.transport,
-    capabilities: target.mode === "adopted" ? target.capabilities : null,
+    capabilities: null,
     profileId: target.profileId ?? context.profileId,
   });
 }
 
 /**
- * Resolves the service server-wide calls must use.
- *
- * When nothing is installed this starts the managed child, exactly as the
- * pre-adoption call sites did. Startup attempts adoption first (`startup.ts`),
- * so by the time a request arrives an eligible adopted service is already
- * installed and this never starts a managed child beside it.
+ * Resolves the managed service server-wide calls must use.
  *
  * @throws {OpenCodeNotReadyError} after shutdown.
  */
@@ -127,22 +74,14 @@ export async function resolveOpenCodeRuntimeTarget(
 ): Promise<OpenCodeRuntimeTarget> {
   if (readShutdownState().shutdownStarted) throw new OpenCodeNotReadyError();
   const installed = readConnectionState().target;
-  if (installed.mode !== "unresolved") return captureInstalled(installed);
-
-  if (hasExplicitServerConfig(process.env)) {
-    throw new OpenCodeNotReadyError(
-      "Configured explicit OpenCode server is not available; managed fallback is disabled when explicit server is specified",
-    );
-  }
+  if (installed.mode === "managed") return captureInstalled(installed);
 
   const ensureManaged = options.ensureManaged ?? (() => openCodeServerManager.ensureBaseUrl());
   const baseUrl = await ensureManaged();
 
-  // The managed start publishes a target before it resolves. Re-read rather
-  // than assume, so an adopted target installed concurrently still wins.
   const publishedState = readConnectionState();
   const published = publishedState.target;
-  if (published.mode !== "unresolved") return captureInstalled(published);
+  if (published.mode === "managed") return captureInstalled(published);
 
   return Object.freeze<OpenCodeRuntimeTarget>({
     mode: "managed",
@@ -156,12 +95,6 @@ export async function resolveOpenCodeRuntimeTarget(
 
 /**
  * Describes the runtime for the browser, without starting or probing anything.
- *
- * The status a page may render is deliberately small: a mode, target identity
- * (backend instance/revision/id) for invalidation, and for an adopted service the
- * capability snapshot that decides which optional surfaces to hide. The origin,
- * the password, the registration path and the probe result body never leave the
- * backend.
  */
 export function describeOpenCodeRuntime(): OpenCodeRuntimeStatus {
   const state = readConnectionState();
@@ -171,17 +104,8 @@ export function describeOpenCodeRuntime(): OpenCodeRuntimeStatus {
     return { mode: "unresolved", backendInstanceId, targetRevision, targetId: null };
   }
   const target = state.target;
-  if (target.mode === "unresolved") {
-    return { mode: "unresolved", backendInstanceId, targetRevision, targetId: null };
-  }
   if (target.mode === "managed") {
     return { mode: "managed", backendInstanceId, targetRevision, targetId: target.targetId };
   }
-  return {
-    mode: "adopted",
-    capabilities: target.capabilities,
-    backendInstanceId,
-    targetRevision,
-    targetId: target.targetId,
-  };
+  return { mode: "unresolved", backendInstanceId, targetRevision, targetId: null };
 }

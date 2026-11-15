@@ -29,7 +29,7 @@ export type OpenCodeCommandFeed = Awaited<
 >;
 
 /**
- * Reads the command feed from the active server (managed or adopted, D1/H5).
+ * Reads the command feed from the active managed server.
  *
  * No directory is passed, for the same reason the model and agent catalogues
  * are read without one: the command feed is the install's own set, and it has

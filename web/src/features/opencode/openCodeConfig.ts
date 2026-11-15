@@ -46,7 +46,7 @@ export interface OpenCodePermissionRow {
 }
 
 /** Why the backend refuses a configuration write, when it does. */
-export type OpenCodeConfigWriteRefusalReason = "adopted_g4_unproven" | "managed_root_not_owned";
+export type OpenCodeConfigWriteRefusalReason = "managed_root_not_owned";
 
 /** The server's answer for `GET /api/opencode/config`. */
 export interface OpenCodeConfigSnapshot {
@@ -161,10 +161,7 @@ export async function fetchOpenCodeConfig(): Promise<OpenCodeConfigSnapshot> {
     permissions: Array.isArray(record.permissions) ? record.permissions : null,
     editable: record.editable === true,
     writeDisabledReason:
-      record.writeDisabledReason === "adopted_g4_unproven" ||
-      record.writeDisabledReason === "managed_root_not_owned"
-        ? record.writeDisabledReason
-        : null,
+      record.writeDisabledReason === "managed_root_not_owned" ? record.writeDisabledReason : null,
   };
 }
 

@@ -52,7 +52,7 @@ import {
   assertOpenCodeConfigWriteAllowed,
   openCodeConfigWriteRefusal,
 } from "../services/opencode/configWritePolicy";
-import { readConnectionState } from "../services/opencode/connectionState";
+
 import { OpenCodeRedirectRefusedError, type OpenCodeTransport } from "../services/opencode/http";
 import {
   describeOpenCodeRuntime,
@@ -116,7 +116,7 @@ function openCodeError(
     // use. The message names service kinds, never a credential or session id.
     return {
       message: err.message,
-      status: err.refusal === "adopted_unavailable" ? 503 : 409,
+      status: err.refusal === "unresolved" ? 503 : 409,
     };
   }
   if (err instanceof OpenCodeSessionAlreadyImportedError) {
@@ -298,10 +298,8 @@ const permissionEffectSchema = z.object({
 /**
  * The service-wide target for configuration reads and writes.
  *
- * It is the runtime's installed target, not "the managed server": an adopted
- * service owns its own document, and reading it with TBAi's managed password
- * would be both wrong and unauthorized. Writes remain refused by
- * {@link applyPermissionChange}'s G4 gate.
+ * Managed-only runtime: reads go to the installed managed target. Writes remain
+ * refused because the managed child has no TBAi-owned config root.
  */
 async function configServerTarget(): Promise<{
   baseUrl: string;
@@ -322,9 +320,7 @@ async function configServerTarget(): Promise<{
  * below cannot offer editing on a runtime whose write would be refused.
  */
 function configWriteRefusalForRuntime(): OpenCodeConfigWriteRefusalReason | null {
-  return openCodeConfigWriteRefusal({
-    mode: readConnectionState().target.mode === "adopted" ? "adopted" : "managed",
-  });
+  return openCodeConfigWriteRefusal({ mode: "managed" });
 }
 
 /**
@@ -349,9 +345,7 @@ async function applyPermissionChange(
   transform: (current: unknown) => unknown,
   signal: AbortSignal,
 ): Promise<Response | { readonly path: string; readonly changed: boolean }> {
-  assertOpenCodeConfigWriteAllowed({
-    mode: readConnectionState().target.mode === "adopted" ? "adopted" : "managed",
-  });
+  assertOpenCodeConfigWriteAllowed({ mode: "managed" });
   const target = await configServerTarget();
   const document = await readOpenCodeConfigDocument(target, { signal });
   if (document.malformed) {
@@ -548,13 +542,11 @@ app.get("/commands", async (c) => {
 });
 
 /**
- * Which kind of OpenCode service backs Code mode (D1/H5), and what an adopted
- * one proved about itself (B7).
+ * Which OpenCode runtime backs Code mode.
  *
- * This is a read of the installed target, never a probe: asking the browser
- * for status must not start a managed process or contact an adopted one. The
- * payload is deliberately small — the origin, the password, the registration
- * path and the probe bodies stay in the backend (§4.2).
+ * Managed-only runtime: this is a read of the installed managed target, never a
+ * probe. The payload is deliberately small — credentials and origins stay in the
+ * backend.
  */
 app.get("/status", (c) => c.json(describeOpenCodeRuntime()));
 
@@ -562,9 +554,9 @@ app.get("/status", (c) => c.json(describeOpenCodeRuntime()));
  * Runtime target lifecycle notifications for active frontend consumers.
  *
  * Emits the current target identity on connect and again whenever the installed
- * OpenCode target/revision changes (install, clear, replace, managed/adopted
- * transitions, adopted loss/restore, shutdown/unresolved). This is a TBAi
- * runtime signal, not the upstream OpenCode event stream proxied below.
+ * managed OpenCode target/revision changes (install, clear, replace,
+ * shutdown/unresolved). This is a TBAi runtime signal, not the upstream OpenCode
+ * event stream proxied below.
  */
 app.get("/runtime/events", (c) => {
   const encoder = new TextEncoder();
@@ -654,10 +646,9 @@ app.get("/runtime/events", (c) => {
 
 /**
  * Live capability discovery for the unified new-chat picker. Returns the agents
- * and models the ACTIVE OpenCode service exposes (managed or adopted, D1/H5).
- * Starts the managed server on first call when nothing is installed, and
- * queries its discovery endpoints. No input is accepted — discovery is
- * server-driven, so there is nothing to Zod-validate.
+ * and models the active managed OpenCode service exposes. Starts the managed
+ * server on first call when nothing is installed. No input is accepted —
+ * discovery is server-driven, so there is nothing to Zod-validate.
  */
 app.get("/capabilities", async (c) => {
   try {

@@ -89,34 +89,24 @@ export class OpenCodeConfigPathError extends Error {
 }
 
 /** Which connection owns the configuration being written. */
-export type OpenCodeConfigWriteMode = "managed" | "adopted";
+export type OpenCodeConfigWriteMode = "managed";
 
 /** The inputs that decide whether a write is permitted. */
 export interface OpenCodeConfigWriteDecisionInput {
   readonly mode: OpenCodeConfigWriteMode;
-  /**
-   * The enablement switch for an ADOPTED write. Passed by nobody today; it is
-   * the one place a future, proven G4 implementation turns that capability on.
-   * It does not affect the managed answer, which has no root to contain it.
-   */
+  /** Compatibility field; managed writes remain refused. */
   readonly g4Verified?: boolean;
 }
 
 /**
  * The refusal a write of this mode would raise, or `null` when it may proceed.
  *
- * One function answers both the throwing gate and the read projection, so the
- * `editable` the page renders and the refusal the writer raises cannot drift
- * apart.
+ * Managed runtime writes remain refused: the child inherits the user's config
+ * environment, so there is no TBAi-owned root to contain a write.
  */
 export function openCodeConfigWriteRefusal(
-  input: OpenCodeConfigWriteDecisionInput,
+  _input: OpenCodeConfigWriteDecisionInput,
 ): OpenCodeConfigWriteRefusalReason | null {
-  if (input.mode === "adopted") {
-    return input.g4Verified === true ? null : "adopted_g4_unproven";
-  }
-  // The managed child inherits the user's config environment, so there is no
-  // TBAi-owned root to contain a write (see the module header).
   return "managed_root_not_owned";
 }
 

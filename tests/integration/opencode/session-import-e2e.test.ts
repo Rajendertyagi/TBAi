@@ -14,7 +14,6 @@ import {
   OpenCodeImportedSessionMissingError,
 } from "@/services/opencode/errors";
 import {
-  installAdoptedTarget,
   installManagedTarget,
   resetConnectionStateForTests,
 } from "@/services/opencode/connectionState.ts";
@@ -195,46 +194,6 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
       expect(conv!.opencodeServiceOwner).toBe("local");
       expect(conv!.opencodeImported).toBe(true);
       expect(conv!.opencodeDirectory).toBe("D:/Projects/ManagedApp");
-    });
-
-    it("Scenario 2: Discovers and imports a session from an adopted OpenCode service", async () => {
-      resetConnectionStateForTests();
-      installAdoptedTarget({ origin: mockBaseUrl, password: "adopted-password" });
-
-      const testSessionId = `ses_adopted_${Date.now()}`;
-      mockSessions = [
-        {
-          id: testSessionId,
-          title: "Adopted Remote Session",
-          directory: "/remote/linux/workspace",
-          time: { created: Date.now() - 30000, updated: Date.now() - 500 },
-        },
-      ];
-
-      const listReq = new Request("http://localhost/api/opencode/importable");
-      const listRes = await testApp.fetch(listReq);
-      expect(listRes.status).toBe(200);
-      const listBody = (await listRes.json()) as any;
-      const candidate = listBody.sessions.find((s: any) => s.sessionId === testSessionId);
-      expect(candidate).toBeDefined();
-
-      const importReq = new Request("http://localhost/api/opencode/import", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionId: testSessionId,
-          sourceRef: candidate.sourceRef,
-        }),
-      });
-      const importRes = await testApp.fetch(importReq);
-      expect(importRes.status).toBe(201);
-      const importBody = (await importRes.json()) as any;
-
-      const conv = await conversationService.get(importBody.conversationId);
-      expect(conv).toBeDefined();
-      expect(conv!.opencodeServiceOwner).toBe("local");
-      expect(conv!.opencodeImported).toBe(true);
-      expect(conv!.opencodeDirectory).toBe("/remote/linux/workspace");
     });
 
     it("Scenario 3: Opens an imported conversation and verifies native history loads through proxy", async () => {
@@ -605,9 +564,9 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
       expect(res.directory).toBe("D:/Projects/RenamedFolder");
     });
 
-    it("Scenario 13: Treats adopted-service directories strictly as opaque strings without OS manipulation", async () => {
+    it("Scenario 13: Treats imported session directories as opaque strings without OS manipulation", async () => {
       resetConnectionStateForTests();
-      installAdoptedTarget({ origin: mockBaseUrl, password: "adopted-password" });
+      installManagedTarget({ baseUrl: mockBaseUrl, password: "test-password" });
 
       const opaqueRemotePath = "/var/containers/backend/data/work tree with spaces";
 
@@ -615,7 +574,7 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
       mockSessions = [
         {
           id: testSessionId,
-          title: "Opaque Linux Path Session",
+          title: "Opaque Path Session",
           directory: opaqueRemotePath,
           time: { created: 1000, updated: 2000 },
         },
@@ -641,7 +600,7 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
       const importBody = (await importRes.json()) as any;
 
       const conv = await conversationService.get(importBody.conversationId);
-      expect(conv!.opencodeDirectory).toBe(opaqueRemotePath); // Kept 100% opaque, not converted to Windows path
+      expect(conv!.opencodeDirectory).toBe(opaqueRemotePath);
     });
   });
 

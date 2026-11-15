@@ -49,7 +49,7 @@ export interface ImportOpenCodeSessionInput {
 }
 
 export interface SourceRefPayload {
-  readonly mode: "managed" | "adopted";
+  readonly mode: "managed";
   readonly targetId?: number;
   readonly origin: string;
 }
@@ -62,11 +62,7 @@ export function decodeSourceRef(ref: string): SourceRefPayload | null {
   try {
     const raw = Buffer.from(ref, "base64url").toString("utf8");
     const parsed = JSON.parse(raw);
-    if (
-      parsed &&
-      (parsed.mode === "managed" || parsed.mode === "adopted") &&
-      typeof parsed.origin === "string"
-    ) {
+    if (parsed && parsed.mode === "managed" && typeof parsed.origin === "string") {
       return parsed as SourceRefPayload;
     }
     return null;

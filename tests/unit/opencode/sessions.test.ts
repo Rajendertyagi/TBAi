@@ -242,9 +242,7 @@ const { OpenCodeSessionPersistError, OpenCodeSessionIntentError } = await import
   "@/services/opencode/sessions.ts"
 );
 const { OpenCodeHistoryBoundaryError } = await import("@/services/opencode/historyBoundary.ts");
-const { installAdoptedTarget, resetConnectionStateForTests } = await import(
-  "@/services/opencode/connectionState.ts"
-);
+const { resetConnectionStateForTests } = await import("@/services/opencode/connectionState.ts");
 const { logger } = await import("@/lib/logger.ts");
 
 /** Counts managed-start requests, so "no managed work" is observable. */
@@ -1395,96 +1393,16 @@ describe("terminateSessionForConversationDeletion — entry-snapshot guard", () 
 });
 
 /**
- * H3/B3 — a conversation's history belongs to exactly one service.
- *
- * The persisted `opencode_service_owner` key is what makes that true across a
- * restart: session ids have the same shape on every service, so the id alone
- * cannot say which history it addresses. These cases pin the two halves that
- * matter:
- *
- *  - the seam ADDRESSES the owning service (its origin, its transport, and no
- *    managed start), and
- *  - it REFUSES rather than substituting the other service, leaving the row,
- *    the journal and the remote state untouched.
+ * Managed-only runtime: legacy external-bound conversations fail closed and
+ * never reach the managed service.
  */
-describe("ensureOpenCodeSession — H3/B3 service ownership", () => {
-  const ADOPTED_ORIGIN = "http://127.0.0.1:51234";
-  const OTHER_ADOPTED_ORIGIN = "http://127.0.0.1:51235";
-  const ADOPTED_OWNER = `remote:${ADOPTED_ORIGIN}`;
-  /** Synthetic only: never the owner's real service password. */
-  const SYNTHETIC_PASSWORD = "synthetic-adopted-password";
-
-  /** Installs an adopted service as the active target. */
-  function installAdopted(origin: string = ADOPTED_ORIGIN): void {
-    installAdoptedTarget({ origin, password: SYNTHETIC_PASSWORD, profileId: `explicit:${origin}` });
-  }
-
-  function adoptedBound(extra: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-      engine: "opencode",
-      opencodeSessionId: LIVE_ID,
-      opencodeServiceOwner: ADOPTED_OWNER,
-      ...extra,
-    };
-  }
-
-  it("creates on the adopted service and writes the pointer and owner in ONE update", async () => {
+describe("ensureOpenCodeSession — legacy external-bound conversations", () => {
+  it("refuses a legacy remote-bound conversation without probing or starting managed runtime", async () => {
     conversation = {
       engine: "opencode",
-      opencodeSessionId: null,
-      opencodeServiceOwner: null,
-      opencodeModel: null,
-      opencodeAgent: null,
-      opencodeVariant: null,
+      opencodeSessionId: LIVE_ID,
+      opencodeServiceOwner: "remote:http://127.0.0.1:51234",
     };
-    installAdopted();
-
-    const binding = await ensureOpenCodeSession("conv-1");
-
-    expect(binding.reusedExistingSession).toBe(false);
-    expect(createArgs).toHaveLength(1);
-    // One update carries both halves: a binding can never exist without the
-    // key that says whose history it addresses.
-    expect(updates).toEqual([
-      {
-        id: "conv-1",
-        patch: { opencodeSessionId: createdId(), opencodeServiceOwner: ADOPTED_OWNER },
-      },
-    ]);
-    // The durable pre-create handle names the service that owns it, so a
-    // reconciler knows which service must be asked about it later.
-    expect(intentRecords.map((record) => record.serviceOwner)).toEqual([ADOPTED_OWNER]);
-    // Nothing about this operation reached the managed manager.
-    expect(ensureBaseUrlCalls).toBe(0);
-    // Every client — the session client AND the catalogue reads behind the
-    // default-model lookup — addressed the adopted origin, with a transport.
-    expect(clients.length).toBeGreaterThan(0);
-    expect(clients.every((client) => client.baseUrl === ADOPTED_ORIGIN)).toBe(true);
-    expect(clients.every((client) => client.hasTransport)).toBe(true);
-    expect(binding.directory).toBe(SERVER_RECORDED_DIRECTORY);
-  });
-
-  it("resumes an adopted-bound session on its own service without creating", async () => {
-    conversation = adoptedBound();
-    installAdopted();
-
-    const binding = await ensureOpenCodeSession("conv-1");
-
-    expect(binding).toEqual({
-      sessionId: LIVE_ID,
-      directory: null,
-      reusedExistingSession: true,
-      recoveredFromStaleSession: false,
-    });
-    expect(calls).toEqual([`get:${LIVE_ID}`]);
-    expect(createArgs).toHaveLength(0);
-    expect(updates).toEqual([]);
-    expect(ensureBaseUrlCalls).toBe(0);
-    expect(clients.every((client) => client.baseUrl === ADOPTED_ORIGIN)).toBe(true);
-  });
-
-  it("refuses — rather than substituting managed — when the adopted service is not installed", async () => {
-    conversation = adoptedBound();
 
     const error = await ensureOpenCodeSession("conv-1").catch((cause) => cause);
 
@@ -1492,103 +1410,13 @@ describe("ensureOpenCodeSession — H3/B3 service ownership", () => {
     expect((error as InstanceType<typeof OpenCodeHistoryBoundaryError>).refusal).toBe(
       "adopted_unavailable",
     );
-    // Refused BEFORE anything was addressed: no client, no session call, no
-    // row change, and above all no managed start for history TBAi does not own.
+    expect((error as Error).message).toContain(
+      "The original external OpenCode service for this conversation is unavailable. TBAi now supports its managed OpenCode runtime only.",
+    );
     expect(clients).toEqual([]);
     expect(calls).toEqual([]);
     expect(updates).toEqual([]);
     expect(intentRecords).toEqual([]);
     expect(ensureBaseUrlCalls).toBe(0);
-  });
-
-  it("refuses a legacy managed binding while an adopted service is installed", async () => {
-    // No owner key + a pointer = a legacy managed binding (adoption postdates it).
-    conversation = { engine: "opencode", opencodeSessionId: LIVE_ID };
-    installAdopted(OTHER_ADOPTED_ORIGIN);
-
-    const error = await ensureOpenCodeSession("conv-1").catch((cause) => cause);
-
-    expect(error).toBeInstanceOf(OpenCodeHistoryBoundaryError);
-    expect((error as InstanceType<typeof OpenCodeHistoryBoundaryError>).refusal).toBe(
-      "cross_service",
-    );
-    expect(clients).toEqual([]);
-    expect(calls).toEqual([]);
-    expect(updates).toEqual([]);
-    expect(ensureBaseUrlCalls).toBe(0);
-  });
-
-  it("refuses when the adopted binding names a different origin than the installed one", async () => {
-    conversation = adoptedBound();
-    installAdopted(OTHER_ADOPTED_ORIGIN);
-
-    const error = await ensureOpenCodeSession("conv-1").catch((cause) => cause);
-
-    expect(error).toBeInstanceOf(OpenCodeHistoryBoundaryError);
-    expect((error as InstanceType<typeof OpenCodeHistoryBoundaryError>).refusal).toBe(
-      "cross_service",
-    );
-    expect(calls).toEqual([]);
-    expect(updates).toEqual([]);
-    expect(clients).toEqual([]);
-  });
-
-  it("tags an unresolved create with the adopted owner it belongs to", async () => {
-    conversation = {
-      engine: "opencode",
-      opencodeSessionId: null,
-      opencodeServiceOwner: null,
-      opencodeModel: null,
-    };
-    installAdopted();
-    // The pointer write fails, and the verification read fails too, so the
-    // seam cannot say whether the row was bound: it records the unresolved
-    // state instead of deleting a possibly-valid session.
-    updateImpl = async () => {
-      throw new Error("database is locked");
-    };
-    verifyFailsAfterEntryRead = async () => {
-      throw new Error("read failed");
-    };
-
-    const error = await ensureOpenCodeSession("conv-1").catch((cause) => cause);
-
-    expect(error).toBeInstanceOf(OpenCodeSessionPersistError);
-    expect((error as InstanceType<typeof OpenCodeSessionPersistError>).cleanup).toBe(
-      "verification_unknown",
-    );
-    expect(orphanRecords.map((record) => record.serviceOwner)).toEqual([ADOPTED_OWNER]);
-    expect(ensureBaseUrlCalls).toBe(0);
-  });
-
-  it("refuses a deletion termination whose adopted service is absent and touches nothing", async () => {
-    conversation = adoptedBound();
-
-    const result = await terminateOpenCodeSession("conv-1");
-
-    expect(result).toEqual({ terminated: false, reason: "unreachable" });
-    expect(calls).toEqual([]);
-    expect(updates).toEqual([]);
-    expect(settledSessions).toEqual([]);
-    expect(ensureBaseUrlCalls).toBe(0);
-  });
-
-  it("terminates a deletion session on the adopted service it belongs to", async () => {
-    conversation = adoptedBound();
-    installAdopted();
-    removeImpl = async () => {
-      throw sessionNotFound(LIVE_ID);
-    };
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result).toEqual({ outcome: "removed", error: undefined });
-    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
-    expect(ensureBaseUrlCalls).toBe(0);
-    expect(clients.every((client) => client.baseUrl === ADOPTED_ORIGIN)).toBe(true);
   });
 });

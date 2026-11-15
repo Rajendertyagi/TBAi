@@ -42,7 +42,7 @@ export interface OpenCodeDefaultModel {
 }
 
 export interface OpenCodeCapabilitiesTarget extends OpenCodeRuntimeTargetIdentity {
-  readonly mode: "managed" | "adopted" | "unresolved";
+  readonly mode: "managed" | "unresolved";
 }
 
 export interface OpenCodeCapabilities {
@@ -121,7 +121,7 @@ function normalizeTarget(target: unknown): OpenCodeCapabilitiesTarget | null {
   const targetId = Reflect.get(target, "targetId");
   const mode = Reflect.get(target, "mode");
   if (typeof targetRevision !== "number" || !Number.isFinite(targetRevision)) return null;
-  if (mode !== "managed" && mode !== "adopted" && mode !== "unresolved") return null;
+  if (mode !== "managed" && mode !== "unresolved") return null;
   return {
     backendInstanceId: typeof backendInstanceId === "string" ? backendInstanceId : "",
     targetRevision: Math.max(0, Math.floor(targetRevision)),
