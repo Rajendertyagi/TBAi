@@ -1408,7 +1408,7 @@ describe("ensureOpenCodeSession — legacy external-bound conversations", () => 
 
     expect(error).toBeInstanceOf(OpenCodeHistoryBoundaryError);
     expect((error as InstanceType<typeof OpenCodeHistoryBoundaryError>).refusal).toBe(
-      "adopted_unavailable",
+      "external_unavailable",
     );
     expect((error as Error).message).toContain(
       "The original external OpenCode service for this conversation is unavailable. TBAi now supports its managed OpenCode runtime only.",

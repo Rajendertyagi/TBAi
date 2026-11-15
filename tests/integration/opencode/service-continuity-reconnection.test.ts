@@ -44,7 +44,7 @@ describe("managed-only OpenCode service continuity", () => {
     }
 
     expect(caught).toBeInstanceOf(OpenCodeHistoryBoundaryError);
-    expect((caught as OpenCodeHistoryBoundaryError).refusal).toBe("adopted_unavailable");
+    expect((caught as OpenCodeHistoryBoundaryError).refusal).toBe("external_unavailable");
     expect((caught as Error).message).toBe(
       "The original external OpenCode service for this conversation is unavailable. TBAi now supports its managed OpenCode runtime only.",
     );

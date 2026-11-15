@@ -59,7 +59,7 @@ export async function resolveOpenCodeServiceAccess(
   const recorded = readConversationHistoryOwner(conversation);
   if (recorded?.kind === "remote") {
     throw new OpenCodeHistoryBoundaryError(
-      "adopted_unavailable",
+      "external_unavailable",
       conversation.id,
       EXTERNAL_UNAVAILABLE_MESSAGE,
     );
@@ -81,14 +81,4 @@ export async function resolveOpenCodeServiceAccess(
     baseUrl,
     transport: createManagedFallbackTransport(baseUrl),
   });
-}
-
-/**
- * Compatibility alias: managed-only runtime has no lost-adopted recovery path.
- * External-bound conversations still fail closed.
- */
-export async function resolveOpenCodeServiceAccessAllowLost(
-  conversation: Pick<Conversation, "id" | "opencodeSessionId" | "opencodeServiceOwner">,
-): Promise<OpenCodeServiceAccess> {
-  return resolveOpenCodeServiceAccess(conversation);
 }

@@ -32,7 +32,7 @@ export const REMOTE_OWNER_PREFIX = "remote:";
 
 export type HistoryBoundaryRefusal =
   | "cross_service"
-  | "adopted_unavailable"
+  | "external_unavailable"
   | "unreadable"
   | "unresolved";
 

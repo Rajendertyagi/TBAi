@@ -8,7 +8,6 @@ import {
 } from "@/services/opencode/connectionState.ts";
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
 import {
-  isOpenCodeRevalidationRunning,
   resetOpenCodeRuntimeStartupForTests,
   startOpenCodeRuntime,
 } from "@/services/opencode/startup.ts";
@@ -41,7 +40,6 @@ describe("managed-only startup", () => {
     expect(outcome).toEqual({ status: "managed", reason: "managed_only", baseUrl: MANAGED_URL });
     expect(starts).toBe(1);
     expect(readConnectionState().target).toMatchObject({ mode: "managed", baseUrl: MANAGED_URL });
-    expect(isOpenCodeRevalidationRunning()).toBe(false);
   });
 
   it("reports managed start failure without installing a target", async () => {

@@ -15,7 +15,7 @@ import { openCodeServerManager } from "./serverManager";
  */
 
 /** Compatibility reason type retained for existing callers/tests. */
-export type OpenCodeStartupFallbackReason = "managed_only" | "adoption_failed";
+export type OpenCodeStartupFallbackReason = "managed_only";
 
 /** How one startup attempt concluded. */
 export type OpenCodeStartupOutcome =
@@ -45,11 +45,6 @@ export interface OpenCodeStartupOptions {
   readonly homeDir?: string;
   /** Test seam; production starts the managed child through the manager. */
   readonly startManaged?: () => Promise<string>;
-}
-
-export interface OpenCodeRevalidationOptions {
-  /** Ignored in managed-only runtime (kept for compatibility). */
-  readonly revalidate?: () => Promise<unknown>;
 }
 
 let startupRun: Promise<OpenCodeStartupOutcome> | null = null;
@@ -134,21 +129,8 @@ async function runStartup(options: OpenCodeStartupOptions): Promise<OpenCodeStar
   }
 }
 
-/** Compatibility no-op: managed-only runtime has no adopted revalidation loop. */
-export function startOpenCodeRevalidation(
-  _config: OpenCodeConfig = OPENCODE_CONFIG,
-  _options: OpenCodeRevalidationOptions = {},
-): void {
-  // No-op: external/adopted runtime revalidation removed.
-}
-
-/** Compatibility no-op: managed-only runtime has no adopted revalidation loop. */
+/** Compatibility no-op: managed-only runtime has no revalidation loop. */
 export function stopOpenCodeRevalidation(): boolean {
-  return false;
-}
-
-/** Compatibility no-op: managed-only runtime has no adopted revalidation loop. */
-export function isOpenCodeRevalidationRunning(): boolean {
   return false;
 }
 

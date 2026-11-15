@@ -10,6 +10,7 @@ import { conversationService } from "../storage";
 import { opencodeOrphanService } from "../storage/opencodeSessionOrphans";
 import { resolveConversationWorkspace } from "../workspace";
 import { resolveOpenCodeServiceAccess } from "./serviceAccess";
+import { OpenCodeHistoryBoundaryError } from "./historyBoundary";
 import { serializeHistoryOwner } from "./historyBoundary";
 import { isCompatibleServiceOwner } from "./historyBoundary";
 import { resolveOpenCodeModelRef } from "./capabilities";
@@ -1347,6 +1348,9 @@ export async function getOpenCodeSessionActivity(
     // function — not in the return value and not in a log line.
     return active[sessionId]?.type === "running" ? "running" : "not-running";
   } catch (error) {
+    if (error instanceof OpenCodeHistoryBoundaryError) {
+      throw error;
+    }
     logger.warn("opencode", "opencode.session_activity_failed", {
       conversationId,
       sessionId,
@@ -1421,6 +1425,9 @@ export async function terminateOpenCodeSession(
     }
     lazyCapabilityRegistry.recordCapability("session.delete", true);
   } catch (err) {
+    if (err instanceof OpenCodeHistoryBoundaryError) {
+      throw err;
+    }
     logger.warn("opencode", "opencode.session_terminate_failed", {
       conversationId,
       ...classifyError(toOpenCodeError(err)),

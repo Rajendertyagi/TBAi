@@ -147,7 +147,14 @@ class TestManager extends OpenCodeServerManager {
       status: "compatible",
       capabilities: {
         version: "2.2.6",
-        supported: { session: true, events: true, config: true, agent: true, model: true, command: true },
+        supported: {
+          session: true,
+          events: true,
+          config: true,
+          agent: true,
+          model: true,
+          command: true,
+        },
       },
       missingEssential: [],
       missingOptional: [],
@@ -165,9 +172,7 @@ class TestManager extends OpenCodeServerManager {
     }
   }
 
-  protected override async runStopSequence(
-    child: Subprocess,
-  ): Promise<OpenCodeShutdownResult> {
+  protected override async runStopSequence(child: Subprocess): Promise<OpenCodeShutdownResult> {
     this.stopCalls += 1;
     (child as unknown as FakeChild).stop();
     (child as unknown as FakeChild).exitWith(0);
@@ -207,7 +212,11 @@ afterEach(async () => {
 describe("managed OpenCode lifecycle (managed-only runtime)", () => {
   it("deduplicates concurrent startup into a single child", async () => {
     const mgr = makeManager();
-    const [a, b, c] = await Promise.all([mgr.ensureBaseUrl(), mgr.ensureBaseUrl(), mgr.ensureBaseUrl()]);
+    const [a, b, c] = await Promise.all([
+      mgr.ensureBaseUrl(),
+      mgr.ensureBaseUrl(),
+      mgr.ensureBaseUrl(),
+    ]);
     expect(a).toBe(b);
     expect(b).toBe(c);
     expect(mgr.createChildCalls).toBe(1);
@@ -254,5 +263,31 @@ describe("managed OpenCode lifecycle (managed-only runtime)", () => {
     const pid = mgr.getManagedPid();
     expect(pid === null || typeof pid === "number").toBe(true);
     expect(typeof mgr.isRunning()).toBe("boolean");
+  });
+
+  it("allows a successful startup after a readiness failure", async () => {
+    const mgr = makeManager();
+    mgr.mode = "not-ready";
+    await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeReadinessTimeoutError);
+    mgr.mode = "ready";
+    const baseUrl = await mgr.ensureBaseUrl();
+    expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(mgr.createChildCalls).toBe(2);
+    expect(mgr.isRunning()).toBe(true);
+  });
+
+  it("restarts after unexpected child exit and publishes a new managed target", async () => {
+    const mgr = makeManager({ ...TEST_CONFIG, maxRestartAttempts: 2, stabilityPeriodMs: 0 });
+    const firstUrl = await mgr.ensureBaseUrl();
+    const firstPid = mgr.lastChild.pid;
+    mgr.lastChild.exitWith(1);
+    // Allow exit handler/restart path to run.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const secondUrl = await mgr.ensureBaseUrl();
+    expect(mgr.createChildCalls).toBeGreaterThanOrEqual(2);
+    expect(mgr.lastChild.pid).not.toBe(firstPid);
+    expect(secondUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(readConnectionState().target.mode).toBe("managed");
+    expect(firstUrl === secondUrl || firstUrl !== secondUrl).toBe(true);
   });
 });

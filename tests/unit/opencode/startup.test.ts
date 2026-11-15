@@ -6,9 +6,7 @@ import {
 } from "@/services/opencode/connectionState.ts";
 import { getOpenCodeAuthPassword } from "@/services/opencode/runtime.ts";
 import {
-  isOpenCodeRevalidationRunning,
   resetOpenCodeRuntimeStartupForTests,
-  startOpenCodeRevalidation,
   startOpenCodeRuntime,
   stopOpenCodeRevalidation,
 } from "@/services/opencode/startup.ts";
@@ -134,9 +132,7 @@ describe("startOpenCodeRuntime — managed-only", () => {
 });
 
 describe("revalidation compatibility no-ops", () => {
-  it("does not start or run a revalidation loop", () => {
-    startOpenCodeRevalidation();
-    expect(isOpenCodeRevalidationRunning()).toBe(false);
+  it("stop remains a compatibility no-op", () => {
     expect(stopOpenCodeRevalidation()).toBe(false);
   });
 });

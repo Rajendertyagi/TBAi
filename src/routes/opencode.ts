@@ -113,10 +113,13 @@ function openCodeError(
   }
   if (err instanceof OpenCodeHistoryBoundaryError) {
     // The conversation's session is owned by a service that is not the one in
-    // use. The message names service kinds, never a credential or session id.
+    // use, or the original external service is unavailable in managed-only
+    // runtime. The message names service kinds, never a credential or session id.
+    const status =
+      err.refusal === "unresolved" || err.refusal === "external_unavailable" ? 503 : 409;
     return {
       message: err.message,
-      status: err.refusal === "unresolved" ? 503 : 409,
+      status,
     };
   }
   if (err instanceof OpenCodeSessionAlreadyImportedError) {

@@ -8,10 +8,7 @@ import {
 import { LOCAL_OWNER, OpenCodeHistoryBoundaryError } from "@/services/opencode/historyBoundary.ts";
 import { OpenCodeOriginMismatchError } from "@/services/opencode/http.ts";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
-import {
-  resolveOpenCodeServiceAccess,
-  resolveOpenCodeServiceAccessAllowLost,
-} from "@/services/opencode/serviceAccess.ts";
+import { resolveOpenCodeServiceAccess } from "@/services/opencode/serviceAccess.ts";
 
 type ManagerSeam = { ensureBaseUrl: () => Promise<string> };
 const manager = openCodeServerManager as unknown as ManagerSeam;
@@ -57,7 +54,7 @@ describe("resolveOpenCodeServiceAccess — managed-only runtime", () => {
     }
 
     expect(caught).toBeInstanceOf(OpenCodeHistoryBoundaryError);
-    expect((caught as OpenCodeHistoryBoundaryError).refusal).toBe("adopted_unavailable");
+    expect((caught as OpenCodeHistoryBoundaryError).refusal).toBe("external_unavailable");
     expect((caught as Error).message).toBe(EXTERNAL_UNAVAILABLE);
     expect(ensureBaseUrlCalls).toBe(0);
   });
@@ -153,9 +150,9 @@ describe("resolveOpenCodeServiceAccess — managed-only runtime", () => {
     expect(ensureBaseUrlCalls).toBe(0);
   });
 
-  it("keeps allow-lost compatibility alias fail-closed for legacy external-bound conversations", async () => {
+  it("still fails closed for legacy external-bound conversations through the same access path", async () => {
     await expect(
-      resolveOpenCodeServiceAccessAllowLost({
+      resolveOpenCodeServiceAccess({
         id: "conv-remote",
         opencodeSessionId: "ses_remote",
         opencodeServiceOwner: `remote:${REMOTE_A}`,
