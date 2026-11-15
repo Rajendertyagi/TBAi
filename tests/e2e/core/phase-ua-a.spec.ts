@@ -319,3 +319,84 @@ test("(d) a bogus /code/<nope> id closes the tab, lands on draft, engine=opencod
   const opencodePill = engineGroup.getByRole("button", { name: /opencode/i });
   await expect(opencodePill).toHaveAttribute("aria-pressed", "true");
 });
+
+// ---------------------------------------------------------------------------
+// (e) a bogus /chat/<nope> id lands on the draft with engine=direct preserved
+// ---------------------------------------------------------------------------
+test("(e) a bogus /chat/<nope> id closes the tab, lands on draft, engine=direct preserved", async ({
+  page,
+}) => {
+  const bogusId = `definitely-not-real-${Math.random().toString(36).slice(2, 10)}`;
+
+  await page.goto(`${BASE}#/chat/${bogusId}`);
+
+  await expect(page).toHaveURL(/#\/chat\/new/, { timeout: 20000 });
+
+  const engineGroup = page.getByRole("group", { name: "Engine" });
+  await expect(engineGroup).toBeVisible({ timeout: 10000 });
+  const directPill = engineGroup.getByRole("button", { name: /direct/i });
+  await expect(directPill).toHaveAttribute("aria-pressed", "true");
+  const opencodePill = engineGroup.getByRole("button", { name: /opencode/i });
+  await expect(opencodePill).toHaveAttribute("aria-pressed", "false");
+});
+
+// ---------------------------------------------------------------------------
+// (f) a genuinely fresh draft initializes with Direct defaults
+// ---------------------------------------------------------------------------
+test("(f) a genuinely fresh draft initializes with Direct defaults", async ({ page }) => {
+  await page.goto(`${BASE}#/chat/new`);
+  await waitShell(page);
+
+  const engineGroup = page.getByRole("group", { name: "Engine" });
+  await expect(engineGroup).toBeVisible({ timeout: 10000 });
+  await expect(engineGroup.getByRole("button", { name: /direct/i })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(engineGroup.getByRole("button", { name: /opencode/i })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// (g) missing Code conversation with a surviving tab navigates to that tab
+// ---------------------------------------------------------------------------
+test("(g) a bogus /code/<nope> with a surviving shared tab navigates to the surviving tab", async ({
+  page,
+}) => {
+  let convId: string | null = null;
+  try {
+    const conv = await createConversation(page, {
+      title: `ua-a survivor ${Math.random().toString(36).slice(2, 8)}`,
+      workspaceMode: "simple",
+      engine: "direct",
+    });
+    convId = conv.id;
+
+    // Make it a shared tab so it remains a surviving visible tab after route changes.
+    const prefsRes = await page.request.get("/api/preferences");
+    expect(prefsRes.ok()).toBeTruthy();
+    const prefs = (await prefsRes.json()) as { revision: number };
+    const openRes = await page.request.post("/api/preferences/tabs/open", {
+      data: { baseRevision: prefs.revision, conversationId: convId, kind: "chat" },
+    });
+    expect(openRes.ok()).toBeTruthy();
+
+    // Open the real conversation so it becomes the active/surviving tab.
+    await page.goto(`${BASE}#/chat/${convId}`);
+    await expect(page).toHaveURL(convUrl(convId, "direct"), { timeout: 20000 });
+    await waitShell(page);
+
+    // Navigate to a bogus Code conversation; recovery should go to the surviving tab.
+    const bogusId = `definitely-not-real-${Math.random().toString(36).slice(2, 10)}`;
+    await page.goto(`${BASE}#/code/${bogusId}`);
+
+    await expect(page).toHaveURL(convUrl(convId, "direct"), { timeout: 20000 });
+    await expect(page).not.toHaveURL(/#\/chat\/new/);
+  } finally {
+    if (convId) {
+      await deleteConversation(page, convId);
+    }
+  }
+});
