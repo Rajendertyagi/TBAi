@@ -71,6 +71,7 @@ export const REQUIRED_SUITES = [
   "opencode-ownership-runtime",
   "opencode-retry-restart",
   "opencode-retry-runtime",
+  "opencode-restart-reconstruction-p0",
   "opencode-runtime-auth",
   "opencode-session-idempotency-runtime",
   "opencode-stub-provider-spike",

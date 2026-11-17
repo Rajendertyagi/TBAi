@@ -42,6 +42,11 @@ import {
   stopOrphanReconciliation,
 } from "./services/opencode/orphanReconciler";
 import { startOpenCodeRuntime, stopOpenCodeRevalidation } from "./services/opencode/startup";
+import {
+  drainOpenCodeRecovery,
+  startOpenCodeRecovery,
+  stopOpenCodeRecovery,
+} from "./services/opencode/recovery";
 import { resolveConfiguredPort, writePortFile } from "./services/server-port";
 import {
   bindBootPort,
@@ -195,6 +200,11 @@ export async function startServer(port = resolveConfiguredPort().port) {
     // clears rows that are provably bound, and remote probes wait for a pass
     // that runs while Code mode already has the server up.
     startOrphanReconciliation({ deps: openCodeOrphanReconcilerDeps });
+
+    // Managed restart recovery subscribes BEFORE the managed runtime starts so
+    // the boot target publication is observed. Fire-and-forget; the service
+    // catches its own async failures and never starts the managed server.
+    startOpenCodeRecovery();
 
     // Adopt-first runtime selection (H5/B2): one attempt runs during boot and
     // is deliberately not awaited — probing a candidate is bounded network work
@@ -366,6 +376,17 @@ export async function rollbackPartialStartup(): Promise<StartupRollbackResult> {
     timedOut = true;
   }
 
+  // Recovery must stop and drain BEFORE the managed OpenCode server goes away
+  // and before SQLite closes: an in-flight pass must not probe a dead child or
+  // write after close.
+  try {
+    stopOpenCodeRecovery();
+    await drainOpenCodeRecovery();
+  } catch (err) {
+    logger.warn("opencode", "shutdown_recovery_failed", { ...normalizeError(err) });
+    timedOut = true;
+  }
+
   // OpenCode child: shutdown() returns early when never started.
   try {
     stopOpenCodeRevalidation();
@@ -514,6 +535,18 @@ async function runShutdown(
     await drainOrphanReconciliation();
   } catch (err) {
     logger.warn("opencode", "shutdown_orphan_reconcile_failed", { ...normalizeError(err) });
+    shutdownFailed = true;
+  }
+
+  // Stop and drain recovery before the managed OpenCode server is shut down and
+  // before SQLite closes, so no pass probes a dead child or writes after close.
+  try {
+    if (stopOpenCodeRecovery()) {
+      logger.info("opencode", "opencode.recovery_stopped", { signal: "shutdown" });
+    }
+    await drainOpenCodeRecovery();
+  } catch (err) {
+    logger.warn("opencode", "shutdown_recovery_failed", { ...normalizeError(err) });
     shutdownFailed = true;
   }
 

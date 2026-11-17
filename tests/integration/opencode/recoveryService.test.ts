@@ -1,0 +1,254 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import type { OpenCodeClient } from "@/services/opencode/client";
+import type { OpenCodeRuntimeTargetChange } from "@/services/opencode/connectionState";
+import {
+  drainOpenCodeRecovery,
+  getOpenCodeRecoveryState,
+  startOpenCodeRecovery,
+  stopOpenCodeRecovery,
+  type RecoveryDeps,
+} from "@/services/opencode/recovery";
+
+/** A minimal fake client recording the calls the service makes. */
+function fakeClient(
+  overrides: {
+    messages?: unknown[];
+    inbox?: unknown[];
+    promptError?: { status: number };
+    syntheticError?: { status: number };
+  } = {},
+) {
+  const calls: string[] = [];
+  const client = {
+    message: {
+      list: async () => ({
+        data: overrides.messages ?? [],
+        cursor: { previous: null, next: null },
+      }),
+    },
+    session: {
+      inbox: {
+        list: async () => overrides.inbox ?? [],
+        cancel: async () => {
+          calls.push("cancel");
+        },
+      },
+      prompt: async () => {
+        calls.push("prompt");
+        if (overrides.promptError) throw overrides.promptError;
+      },
+      synthetic: async () => {
+        calls.push("synthetic");
+        if (overrides.syntheticError) throw overrides.syntheticError;
+      },
+    },
+  } as unknown as OpenCodeClient;
+  return { client, calls };
+}
+
+function managedChange(targetId = 1): OpenCodeRuntimeTargetChange {
+  return {
+    backendInstanceId: "inst-1",
+    targetRevision: 1,
+    targetId,
+    mode: "managed",
+  };
+}
+
+/** Emit a managed target change and make it the current snapshot. */
+function emitManaged(
+  listeners: Array<(c: OpenCodeRuntimeTargetChange) => void>,
+  state: { snapshot: OpenCodeRuntimeTargetChange },
+  targetId = 1,
+): void {
+  const change = managedChange(targetId);
+  state.snapshot = change;
+  listeners[0]!(change);
+}
+
+function makeDeps(overrides: Partial<RecoveryDeps> & { client?: OpenCodeClient } = {}): {
+  deps: RecoveryDeps;
+  listeners: Array<(c: OpenCodeRuntimeTargetChange) => void>;
+  state: { shutdown: boolean; installed: boolean; snapshot: OpenCodeRuntimeTargetChange };
+} {
+  const listeners: Array<(c: OpenCodeRuntimeTargetChange) => void> = [];
+  const state = {
+    shutdown: false,
+    installed: true,
+    // Start unresolved so the late-subscriber snapshot does not trigger a pass;
+    // tests that want the boot pass emit a managed change explicitly.
+    snapshot: {
+      backendInstanceId: "inst-1",
+      targetRevision: 0,
+      targetId: null,
+      mode: "unresolved" as const,
+    },
+  };
+  const client = overrides.client ?? fakeClient().client;
+  const deps: RecoveryDeps = {
+    subscribe: (listener) => {
+      listeners.push(listener);
+      return () => {
+        const i = listeners.indexOf(listener);
+        if (i >= 0) listeners.splice(i, 1);
+      };
+    },
+    snapshot: () => state.snapshot,
+    isShutdown: () => state.shutdown,
+    isManagedInstalled: () => state.installed,
+    listCandidates: async () => [
+      {
+        id: "conv-1",
+        opencodeSessionId: "ses-1",
+        opencodeDirectory: null,
+        opencodeServiceOwner: null,
+      },
+    ],
+    makeClient: async () => client,
+    sleep: async () => undefined,
+    now: Date.now,
+    graceMs: {
+      shutdownInterruption: 0,
+      incompleteAssistant: 0,
+      pendingInput: 0,
+      projectedUser: 0,
+    },
+    ...overrides,
+  };
+  return { deps, listeners, state };
+}
+
+afterEach(() => {
+  stopOpenCodeRecovery();
+});
+
+describe("recovery service lifecycle", () => {
+  it("subscribes and handles an already-installed target via snapshot", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+    });
+    const { deps, listeners, state } = makeDeps({ client });
+    state.snapshot = managedChange(1); // already-installed target at subscribe time
+    expect(startOpenCodeRecovery(deps).started).toBe(true);
+    expect(listeners.length).toBe(1);
+    await drainOpenCodeRecovery();
+    expect(calls).toContain("prompt");
+  });
+
+  it("is idempotent on a second start", () => {
+    const { deps, listeners } = makeDeps();
+    expect(startOpenCodeRecovery(deps).started).toBe(true);
+    expect(startOpenCodeRecovery(deps).started).toBe(false);
+    expect(listeners.length).toBe(1);
+  });
+
+  it("deduplicates by backend instance + target id", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+    });
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls.filter((c) => c === "prompt").length).toBe(1);
+  });
+
+  it("ignores unresolved target changes", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+    });
+    const { deps, listeners } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    listeners[0]!({
+      backendInstanceId: "inst-1",
+      targetRevision: 2,
+      targetId: null,
+      mode: "unresolved",
+    });
+    await drainOpenCodeRecovery();
+    expect(calls.length).toBe(0);
+  });
+
+  it("does not act when shutdown has started", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+    });
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    state.shutdown = true;
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls.length).toBe(0);
+  });
+
+  it("does not act when the target is no longer installed", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+    });
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    state.installed = false;
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls.length).toBe(0);
+  });
+
+  it("retries transient failures up to 3 total calls, then stops", async () => {
+    let attempts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user", time: { created: 1 } }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => {
+          attempts += 1;
+          throw { status: 503 };
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempts).toBe(3);
+  });
+
+  it("does not retry a 409 conflict", async () => {
+    let attempts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user", time: { created: 1 } }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => {
+          attempts += 1;
+          throw { status: 409 };
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempts).toBe(1);
+  });
+
+  it("stop clears state and unsubscribes", () => {
+    const { deps, listeners } = makeDeps();
+    startOpenCodeRecovery(deps);
+    expect(stopOpenCodeRecovery()).toBe(true);
+    expect(listeners.length).toBe(0);
+    expect(getOpenCodeRecoveryState().started).toBe(false);
+  });
+});

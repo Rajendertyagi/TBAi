@@ -316,6 +316,40 @@ export const conversationService = {
     return row ? mapConversation(row) : null;
   },
 
+  /**
+   * Enumerate conversations eligible for managed OpenCode restart recovery:
+   * OpenCode-engine rows with a non-null bound session id. Read-only and
+   * unbounded by the sidebar's paging so a recovery pass sees every candidate.
+   */
+  async listOpenCodeRecoveryCandidates(): Promise<
+    Array<{
+      id: string;
+      opencodeSessionId: string;
+      opencodeDirectory: string | null;
+      opencodeServiceOwner: string | null;
+    }>
+  > {
+    const rows = db
+      .query<
+        {
+          id: string;
+          opencode_session_id: string;
+          opencode_directory: string | null;
+          opencode_service_owner: string | null;
+        },
+        SQLQueryBindings[]
+      >(
+        "SELECT id, opencode_session_id, opencode_directory, opencode_service_owner FROM conversations WHERE engine = 'opencode' AND opencode_session_id IS NOT NULL AND opencode_session_id != ''",
+      )
+      .all();
+    return rows.map((row) => ({
+      id: row.id,
+      opencodeSessionId: row.opencode_session_id,
+      opencodeDirectory: row.opencode_directory ?? null,
+      opencodeServiceOwner: row.opencode_service_owner ?? null,
+    }));
+  },
+
   async list(options: ConversationListOptions = {}): Promise<ConversationListResult> {
     const {
       status,
