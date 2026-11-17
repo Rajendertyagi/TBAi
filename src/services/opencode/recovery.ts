@@ -121,9 +121,11 @@ const productionDeps: RecoveryDeps = {
         busy: typeof info.time?.busy === "number",
         idle: typeof info.time?.idle === "number",
       };
-    } catch {
-      // A failed probe (including timeout) is not evidence of shutdown; fall
-      // back to no signal rather than guessing.
+    } catch (error) {
+      // A timeout means durable state is unproven — propagate so the candidate
+      // is skipped this pass. Other probe failures are not evidence of shutdown
+      // and fall back to no signal rather than guessing.
+      if (error instanceof RecoveryTimeoutError) throw error;
       return { busy: false, idle: false };
     }
   },
@@ -183,11 +185,21 @@ function combineSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   return controller.signal;
 }
 
+/** A per-call timeout fired (distinct from a lifecycle abort). */
+class RecoveryTimeoutError extends Error {
+  constructor() {
+    super("recovery call timed out");
+    this.name = "RecoveryTimeoutError";
+  }
+}
+
 /**
  * Enforce a real per-call timeout. The work receives a signal that aborts on
  * either the lifecycle signal (shutdown / target replacement) or the timeout.
- * A timeout is reported to the caller as an abort so it can be classified as a
- * transient failure and retried within the shared budget.
+ * A timeout throws {@link RecoveryTimeoutError}; a lifecycle abort propagates
+ * the original error. Callers decide the policy: resume operations retry a
+ * timeout as transient within the shared budget, while read operations skip
+ * the candidate for this pass (no retry) because durable state is unproven.
  */
 async function withTimeout<T>(
   work: (signal: AbortSignal) => Promise<T>,
@@ -195,10 +207,17 @@ async function withTimeout<T>(
   ms: number,
 ): Promise<T> {
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), ms);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    timeout.abort();
+  }, ms);
   const combined = combineSignals(outer, timeout.signal);
   try {
     return await work(combined);
+  } catch (error) {
+    if (timedOut && !outer.aborted) throw new RecoveryTimeoutError();
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -413,9 +432,10 @@ async function performAction(
       await withTimeout(run, signal, timeoutMs());
       return "ok";
     } catch (error) {
+      // Resume operations retry a timeout as transient within the shared budget.
+      if (error instanceof RecoveryTimeoutError) return "transient";
       if (isAbort(error)) {
-        // A lifecycle abort (shutdown / target replacement) must propagate; a
-        // timeout abort is a transient failure that may be retried.
+        // A lifecycle abort (shutdown / target replacement) must propagate.
         if (signal.aborted) throw error;
         return "transient";
       }
@@ -576,6 +596,18 @@ async function recoverCandidate(
     }
 
     await actWithGrace(change, candidate, client, signal, action);
+  } catch (error) {
+    if (error instanceof RecoveryTimeoutError) {
+      // A read timeout means durable state could not be established. Skip this
+      // candidate for the pass (no retry here); a later target publication may
+      // retry. Never auto-resume on unproven state.
+      logger.info("opencode", "opencode.recovery.read_timeout", {
+        targetId: change.targetId,
+        sessionId: candidate.id,
+      });
+      return;
+    }
+    throw error;
   } finally {
     sessionControllers.delete(key);
   }

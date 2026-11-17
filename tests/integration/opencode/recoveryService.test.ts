@@ -551,21 +551,25 @@ describe("recovery retry/timeout/grace/target regressions", () => {
     expect(prompts).toBe(1); // prompt still got its reserved call
   });
 
-  // B: per-call timeout is enforced and retried as transient.
-  it("enforces the per-call timeout and retries a never-resolving call", async () => {
+  // B: per-call timeout is enforced — assert the request signal actually
+  // aborted and the pass settled within a bounded time (not via the drain's
+  // separate 10s timeout). Read timeouts skip the candidate: no retry, no
+  // resume action on unproven state.
+  it("aborts a never-resolving read at the per-call timeout and skips the candidate", async () => {
     let listCalls = 0;
+    let observedSignal: AbortSignal | undefined;
+    let prompted = false;
     const client = {
       message: {
         list: async (_input: unknown, init?: { signal?: AbortSignal }) => {
           listCalls += 1;
+          observedSignal = init?.signal;
           // Never resolves on its own; only the timeout signal can end it.
           return await new Promise<never>((_resolve, reject) => {
             init?.signal?.addEventListener(
               "abort",
               () => reject(new DOMException("aborted", "AbortError")),
-              {
-                once: true,
-              },
+              { once: true },
             );
           });
         },
@@ -573,7 +577,50 @@ describe("recovery retry/timeout/grace/target regressions", () => {
       session: {
         get: async () => ({ time: { busy: false, idle: false } }),
         inbox: { list: async () => [], cancel: async () => undefined },
-        prompt: async () => undefined,
+        prompt: async () => {
+          prompted = true;
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client, perCallTimeoutMs: 5 });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    const started = Date.now();
+    await drainOpenCodeRecovery();
+    const elapsed = Date.now() - started;
+    // The request's signal was actually aborted by the timeout.
+    expect(listCalls).toBe(1);
+    expect(observedSignal?.aborted).toBe(true);
+    // Settled well within the drain's 10s bound — the 5ms timeout fired.
+    expect(elapsed).toBeLessThan(2_000);
+    // Read timeout skips the candidate: no resume action on unproven state.
+    expect(prompted).toBe(false);
+  });
+
+  it("retries a resume-operation timeout as transient within the 3-call budget", async () => {
+    let promptCalls = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async (_input: unknown, init?: { signal?: AbortSignal }) => {
+          promptCalls += 1;
+          // Never resolves on its own; the per-call timeout ends each attempt.
+          return await new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          });
+        },
         synthetic: async () => undefined,
       },
     } as unknown as OpenCodeClient;
@@ -581,8 +628,8 @@ describe("recovery retry/timeout/grace/target regressions", () => {
     startOpenCodeRecovery(deps);
     emitManaged(listeners, state);
     await drainOpenCodeRecovery();
-    // The scan is retried within its own loop; the pass must not hang forever.
-    expect(listCalls).toBeGreaterThanOrEqual(1);
+    // Resume timeouts are transient and retried up to the 3-call maximum.
+    expect(promptCalls).toBe(3);
   });
 
   // C: grace is recalculated after reclassification.

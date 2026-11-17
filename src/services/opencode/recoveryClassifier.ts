@@ -256,6 +256,29 @@ export function classifyRecovery(input: ClassifyInput): RecoveryAction {
       };
     }
 
+    // A pending user with a DIFFERENT id is newer intent than the projected
+    // user (it is still in the inbox, so it has not been delivered yet).
+    // Conservative rule: re-submit THAT user by its own id and delivery mode —
+    // never wake the older projected request, and never borrow the new user's
+    // delivery mode for the old id.
+    if (pendingUser && pendingUser.id !== lastInput.id) {
+      if (pendingSynthetic && !syntheticWins(pendingUser, pendingSynthetic, inbox)) {
+        return {
+          kind: "cancel-and-resubmit-user",
+          cancelId: pendingSynthetic.id,
+          userId: pendingUser.id,
+          delivery: pendingUser.delivery,
+          shutdownInterruption,
+        };
+      }
+      return {
+        kind: "resubmit-user",
+        id: pendingUser.id,
+        delivery: pendingUser.delivery,
+        shutdownInterruption,
+      };
+    }
+
     // A pending synthetic with a newer projected user: conservative user-wins.
     if (pendingSynthetic) {
       return {
@@ -282,11 +305,13 @@ export function classifyRecovery(input: ClassifyInput): RecoveryAction {
       return { kind: "indeterminate", reason: "completed_assistant_no_idle" };
     }
 
-    // No assistant after the user: crash before assistant creation.
+    // No assistant after the user: crash before assistant creation. No pending
+    // user exists here (same-id and different-id cases were handled above), so
+    // the projected user's own delivery defaults to steer.
     return {
       kind: "resubmit-user",
       id: lastInput.id,
-      delivery: pendingUser?.delivery ?? "steer",
+      delivery: "steer",
       shutdownInterruption,
     };
   }

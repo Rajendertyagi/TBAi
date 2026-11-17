@@ -324,4 +324,48 @@ describe("classifyRecovery — decision table", () => {
     expect(action.kind).toBe("resubmit-user");
     if (action.kind === "resubmit-user") expect(action.shutdownInterruption).toBe(false);
   });
+
+  // Issue A: projected user followed by a DIFFERENT pending user must wake the
+  // newer pending user, never the old projected one, and never borrow delivery.
+  it("projected user + different pending steer user → resubmit the pending user by its own id/delivery", () => {
+    const action = classifyRecovery({
+      messages: [msg("u-old", "user")],
+      inbox: [inbox("u-new", "user", "steer")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u-new");
+      expect(action.delivery).toBe("steer");
+    }
+  });
+
+  it("projected user + different pending queue user → resubmit the pending user with queue delivery", () => {
+    const action = classifyRecovery({
+      messages: [msg("u-old", "user")],
+      inbox: [inbox("u-new", "user", "queue")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u-new");
+      expect(action.delivery).toBe("queue");
+    }
+  });
+
+  it("projected user + different pending user + pending synthetic → cancel synthetic, resubmit pending user", () => {
+    const action = classifyRecovery({
+      messages: [msg("u-old", "user")],
+      inbox: [
+        inbox("s-pending", "synthetic", "steer", { metadata: { notice: RECOVERY_NOTICE } }),
+        inbox("u-new", "user", "steer"),
+      ],
+      truncated: false,
+    });
+    expect(action.kind).toBe("cancel-and-resubmit-user");
+    if (action.kind === "cancel-and-resubmit-user") {
+      expect(action.cancelId).toBe("s-pending");
+      expect(action.userId).toBe("u-new");
+    }
+  });
 });
