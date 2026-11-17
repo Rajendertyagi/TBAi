@@ -1,10 +1,9 @@
 # TBAi OpenCode Restart Recovery — Plan (revised after idle-signal review, 2026-11-17)
 
 **Status: IMPLEMENTED — production implementation authorized and completed (2026-11-17).**
-**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; first
-correctness-fix commit `0a37700` (pushed); second correction pass `27dee28` (pushed). A third focused
-pass (projected-user vs different-pending-user precedence, real timeout assertions, explicit read-vs-
-resume timeout policy) is applied on top and **uncommitted at this revision**.
+**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; correctness
+passes `0a37700`, `27dee28`, and `3636bb5` (all pushed). A fourth focused pass (retry-exhaustion outcome
+handling) is applied on top and **uncommitted at this revision**.
 **Pinned runtime:** OpenCode / `@opencode/client` 2.2.6 (binary `D:\Coding\OpenCode\opencode.exe`, v2.2.6).
 **Scope:** one backend-owned recovery service under `src/services/opencode/`, config in
 `src/config/opencode-recovery.ts`, wiring in `src/server.ts`, and read-only candidate enumeration in
@@ -760,14 +759,13 @@ unchanged by this revision.
 ## 17. Implementation status and verification (2026-11-17)
 
 **IMPLEMENTED.** The owner authorized implementation; the feature was implemented, committed
-(`2ef39c5`), and pushed to `origin/review/managed-opencode-hardening-2026-11-15`. The first correctness-fix
-pass (stable synthetic id, pending-input-after-idle, projected-synthetic vs pending-user, ownership
-filtering, presence-based shutdown grace, shared retry budget) was committed as `0a37700` and pushed.
-The second correction pass (retry-budget reservation for cancel, real per-call timeout enforcement, grace
-recalculation after reclassification, cancellation on managed-to-managed replacement) was committed as
-`27dee28` and pushed. A third focused pass (projected-user vs different-pending-user precedence, real
-timeout assertions, explicit read-vs-resume timeout policy) is applied on top and remains **uncommitted**
-pending separate authorization.
+(`2ef39c5`), and pushed to `origin/review/managed-opencode-hardening-2026-11-15`. Correctness passes
+`0a37700` (stable synthetic id, pending-input-after-idle, projected-synthetic vs pending-user, ownership
+filtering, presence-based shutdown grace, shared retry budget), `27dee28` (cancel budget reservation,
+per-call timeout enforcement, grace recalculation, managed-target replacement cancellation), and
+`3636bb5` (projected-user vs different-pending-user precedence, real timeout assertions, explicit
+read-vs-resume timeout policy) were all pushed. A fourth focused pass (retry-exhaustion outcome handling)
+is applied on top and remains **uncommitted** pending separate authorization.
 
 ### Implemented modules
 - `src/config/opencode-recovery.ts` — all recovery constants.
@@ -791,7 +789,7 @@ pending separate authorization.
 - **Managed-target replacement:** `onTargetChange()` aborts in-flight work for any other target when a
   new managed target is published directly, without relying on an intervening unresolved state.
 
-### Third correction pass (uncommitted)
+### Third correction pass (commit `3636bb5`, pushed)
 - **Projected user vs different pending user:** a pending user whose id differs from the projected user
   is newer intent; the classifier re-submits THAT user by its own id and delivery mode (steer or queue),
   never the older projected request and never borrowing the new user's delivery mode for the old id.
@@ -802,15 +800,29 @@ pending separate authorization.
   signal was actually aborted and that the pass settled within a bounded time (not via the drain's 10 s
   bound), plus a separate test asserts resume timeouts retry up to 3 calls.
 
+### Fourth correction pass (uncommitted) — retry-exhaustion outcomes
+- **Defect:** `runStep()` returned `"transient"` when all retry attempts were exhausted, but `terminal()`
+  did not treat it as terminal. A failed cancellation therefore proceeded to the prompt, and exhausted
+  prompt/synthetic retries could still be reported as `"recovered"`.
+- **Fix:** `runStep()` now returns a distinct `StepResult` that never leaks `"transient"`. An exhausted
+  retry sequence (all attempts transient, or no budget left) becomes the explicit terminal `"exhausted"`
+  outcome. `failureOutcome()` maps it to `"failed"`. Cancellation proceeds to the prompt **only** after
+  `session.inbox.cancel()` actually succeeds; prompt and synthetic return `"recovered"` **only** when the
+  underlying call succeeds. 404 / 409 / permanent errors keep their existing non-success outcomes. The
+  shared 3-call budget and reserved prompt call are unchanged; the synthetic id is still minted once and
+  reused on every attempt.
+- **Test seam:** `getOpenCodeRecoveryState().lastOutcome` records the final `performAction` outcome for
+  test-only inspection (no internal functions exposed).
+
 ### Verification actually run (exact results)
 - `bun run typecheck` → exit 0; `bun run lint` → exit 0; `bun run format:check` → exit 0;
   `bun run test:locations` → exit 0.
-- Targeted recovery tests (`recoveryClassifier` + `recoveryService`) → **49 pass / 0 fail** (includes
-  regressions for the second and third correction passes).
+- Targeted recovery tests (`recoveryClassifier` + `recoveryService`) → **54 pass / 0 fail** (includes
+  regressions for the second, third and fourth correction passes).
 - P0 reconstruction test (real v2.2.6 binary, unchanged) → **7 pass / 0 fail**, 26 expects.
 - `bun run test:opencode-runtime` → **10/10 required suites passed**.
 - `bun run build` → exit 0.
-- `bun run verify` → exit 0; **5965 pass / 88 skip / 0 fail** (unit+integration), 802 DOM pass,
+- `bun run verify` → exit 0; **5970 pass / 88 skip / 0 fail** (unit+integration), 802 DOM pass,
   shutdown/rollback/lifecycle pass, quarantine OK.
 - `bun run test:e2e opencode/opencode-v2-code-route.spec.ts` → 1 passed.
 

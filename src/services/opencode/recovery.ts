@@ -160,6 +160,9 @@ const sessionControllers = new Map<string, AbortController>();
 /** In-flight pass promises, drained on shutdown. */
 const inflight = new Set<Promise<void>>();
 
+/** Last performAction outcome, recorded for test-only inspection. */
+let lastOutcome: string | null = null;
+
 function targetKey(change: OpenCodeRuntimeTargetChange): string {
   return `${change.backendInstanceId}:${change.targetId}`;
 }
@@ -405,6 +408,14 @@ function targetStillValid(change: OpenCodeRuntimeTargetChange): boolean {
 type CallResult = "ok" | "conflict" | "absent" | "permanent" | "transient" | "budget";
 
 /**
+ * The result of one logical step after its retry loop. `"transient"` and
+ * `"budget"` never escape `runStep`: an exhausted retry sequence becomes the
+ * explicit terminal `"exhausted"` outcome, so a failed step can never be
+ * mistaken for success or silently allow the next step to proceed.
+ */
+type StepResult = "ok" | "conflict" | "absent" | "permanent" | "exhausted";
+
+/**
  * Perform one resume action with a SHARED HTTP budget across every call the
  * action makes (cancel + prompt, or synthetic). A cancel and its prompt are
  * separate calls; both count against `maxHttpCalls`. A synthetic's id is
@@ -454,26 +465,38 @@ async function performAction(
    * `reserveCalls` guarantees that many calls remain for later steps — the
    * cancel step reserves one for the prompt so a successful cancellation can
    * never leave the user input unwoken because cancellation used the budget.
+   * When all attempts are exhausted (transient failures or no budget left),
+   * this returns the explicit terminal `"exhausted"` — never `"transient"`.
    */
   const runStep = async (
     run: (callSignal: AbortSignal) => Promise<unknown>,
     reserveCalls = 0,
-  ): Promise<CallResult> => {
-    let result: CallResult = "budget";
+  ): Promise<StepResult> => {
     const maxAttempts = Math.max(1, cfg.maxHttpCalls - reserveCalls);
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (attempt > 0) {
         const backoff = cfg.backoffMs[attempt - 1] ?? cfg.backoffMs[cfg.backoffMs.length - 1]!;
         await deps.sleep(backoff, signal);
       }
-      result = await call(run);
-      if (result !== "transient") return result;
+      const result = await call(run);
+      if (
+        result === "ok" ||
+        result === "conflict" ||
+        result === "absent" ||
+        result === "permanent"
+      ) {
+        return result;
+      }
+      // "transient" → retry; "budget" → no calls left, stop immediately.
+      if (result === "budget") return "exhausted";
     }
-    return result;
+    return "exhausted";
   };
 
-  const terminal = (result: CallResult): result is "conflict" | "absent" | "permanent" | "budget" =>
-    result === "conflict" || result === "absent" || result === "permanent" || result === "budget";
+  /** Map a non-ok step result to the action outcome. Exhaustion is a failure. */
+  const failureOutcome = (
+    result: Exclude<StepResult, "ok">,
+  ): "conflict" | "absent" | "permanent" | "failed" => (result === "exhausted" ? "failed" : result);
 
   if (action.kind === "resubmit-user" || action.kind === "cancel-and-resubmit-user") {
     const cancelId = action.kind === "cancel-and-resubmit-user" ? action.cancelId : undefined;
@@ -488,9 +511,10 @@ async function performAction(
           client.session.inbox.cancel({ sessionID, inboxID: cancelId }, { signal: callSignal }),
         1,
       );
-      if (terminal(cancelResult)) {
-        return cancelResult === "budget" ? "failed" : cancelResult;
-      }
+      // Proceed to the prompt ONLY after cancellation actually succeeded. An
+      // exhausted/failed cancellation stops the action — never wake the user
+      // as though a stale synthetic had been cancelled.
+      if (cancelResult !== "ok") return failureOutcome(cancelResult);
     }
     const promptResult = await runStep((callSignal) =>
       client.session.prompt(
@@ -504,9 +528,8 @@ async function performAction(
         { signal: callSignal },
       ),
     );
-    if (terminal(promptResult)) {
-      return promptResult === "budget" ? "failed" : promptResult;
-    }
+    // "recovered" only when session.prompt actually succeeded.
+    if (promptResult !== "ok") return failureOutcome(promptResult);
     return "recovered";
   }
 
@@ -533,9 +556,9 @@ async function performAction(
       { signal: callSignal },
     ),
   );
-  if (terminal(syntheticResult)) {
-    return syntheticResult === "budget" ? "failed" : syntheticResult;
-  }
+  // "recovered" only when session.synthetic actually succeeded; the same
+  // stable id was reused on every attempt.
+  if (syntheticResult !== "ok") return failureOutcome(syntheticResult);
   return "recovered";
 }
 
@@ -681,6 +704,7 @@ async function actWithGrace(
   }
 
   const outcome = await performAction(client, candidate, action, signal);
+  lastOutcome = outcome;
   logger.info("opencode", "opencode.recovery.attempt", {
     targetId: change.targetId,
     sessionId: candidate.id,
@@ -788,6 +812,7 @@ export function stopOpenCodeRecovery(): boolean {
   unsubscribe = null;
   cancelForTarget(null);
   processedTargets.clear();
+  lastOutcome = null;
   return true;
 }
 
@@ -808,10 +833,12 @@ export function getOpenCodeRecoveryState(): {
   started: boolean;
   processedTargets: number;
   inFlight: number;
+  lastOutcome: string | null;
 } {
   return {
     started,
     processedTargets: processedTargets.size,
     inFlight: sessionControllers.size,
+    lastOutcome,
   };
 }

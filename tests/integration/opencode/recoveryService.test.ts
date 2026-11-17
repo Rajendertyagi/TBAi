@@ -720,3 +720,167 @@ describe("recovery retry/timeout/grace/target regressions", () => {
     expect(aborted).toBe(true);
   });
 });
+
+describe("recovery retry-exhaustion outcomes", () => {
+  // A: cancellation exhausts its retries → prompt never called, not recovered.
+  it("failed cancellation stops the action and never wakes the user prompt", async () => {
+    let cancels = 0;
+    let prompts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: {
+          list: async () => [
+            {
+              id: "s-pending",
+              type: "synthetic",
+              delivery: "steer",
+              payload: { metadata: { notice: "opencode-restart" } },
+            },
+            { id: "u1", type: "user", delivery: "steer" },
+          ],
+          cancel: async () => {
+            cancels += 1;
+            throw { status: 503 }; // transient on every attempt
+          },
+        },
+        prompt: async () => {
+          prompts += 1;
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    // Cancel reserves one call for the prompt: max 2 cancel attempts (3 - 1).
+    expect(cancels).toBe(2);
+    expect(prompts).toBe(0); // failed cancel never proceeds to prompt
+    expect(getOpenCodeRecoveryState().lastOutcome).not.toBe("recovered");
+  });
+
+  // B: prompt exhausts its retries → failed, never recovered.
+  it("prompt retry exhaustion reports failed, never recovered", async () => {
+    let prompts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => {
+          prompts += 1;
+          throw { status: 503 }; // transient on every attempt
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(prompts).toBe(3); // full 3-call budget
+    expect(getOpenCodeRecoveryState().lastOutcome).toBe("failed");
+  });
+
+  // C: synthetic exhausts its retries → failed, same id on every call.
+  it("synthetic retry exhaustion reports failed and reuses one stable id", async () => {
+    const ids: Array<string | null | undefined> = [];
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "s1", type: "synthetic", metadata: { notice: "opencode-restart" } }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async (input: { id?: string | null }) => {
+          ids.push(input.id);
+          throw { status: 503 }; // transient on every attempt
+        },
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(ids.length).toBe(3); // full 3-call budget
+    expect(new Set(ids).size).toBe(1); // same stable id on every attempt
+    expect(ids[0]).toBe("s1");
+    expect(getOpenCodeRecoveryState().lastOutcome).toBe("failed");
+  });
+
+  // D: successful operations remain successful.
+  it("successful cancel then successful prompt reports recovered", async () => {
+    let prompts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: {
+          list: async () => [
+            {
+              id: "s-pending",
+              type: "synthetic",
+              delivery: "steer",
+              payload: { metadata: { notice: "opencode-restart" } },
+            },
+            { id: "u1", type: "user", delivery: "steer" },
+          ],
+          cancel: async () => undefined,
+        },
+        prompt: async () => {
+          prompts += 1;
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(prompts).toBe(1);
+    expect(getOpenCodeRecoveryState().lastOutcome).toBe("recovered");
+  });
+
+  it("successful synthetic reconciliation reports recovered", async () => {
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "s1", type: "synthetic", metadata: { notice: "opencode-restart" } }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(getOpenCodeRecoveryState().lastOutcome).toBe("recovered");
+  });
+});
