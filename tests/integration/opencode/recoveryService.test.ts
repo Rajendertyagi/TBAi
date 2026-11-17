@@ -3,6 +3,7 @@ import type { OpenCodeClient } from "@/services/opencode/client";
 import type { OpenCodeRuntimeTargetChange } from "@/services/opencode/connectionState";
 import {
   drainOpenCodeRecovery,
+  filterRecoveryCandidatesByOwner,
   getOpenCodeRecoveryState,
   startOpenCodeRecovery,
   stopOpenCodeRecovery,
@@ -107,6 +108,9 @@ function makeDeps(overrides: Partial<RecoveryDeps> & { client?: OpenCodeClient }
     makeClient: async () => client,
     sleep: async () => undefined,
     now: Date.now,
+    newId: () => "msg_generated_stable",
+    readSessionSignal: async () => ({ busy: false, idle: false }),
+    waitGrace: async () => undefined,
     graceMs: {
       shutdownInterruption: 0,
       incompleteAssistant: 0,
@@ -250,5 +254,256 @@ describe("recovery service lifecycle", () => {
     expect(stopOpenCodeRecovery()).toBe(true);
     expect(listeners.length).toBe(0);
     expect(getOpenCodeRecoveryState().started).toBe(false);
+  });
+});
+
+describe("recovery correctness fixes", () => {
+  // Defect 1: one stable id across retries; a lost first response must not
+  // create a second synthetic.
+  it("reuses one stable synthetic id across retries after a lost response", async () => {
+    const ids: Array<string | null | undefined> = [];
+    let calls = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "s1", type: "synthetic", metadata: { notice: "opencode-restart" } }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async (input: { id?: string | null }) => {
+          ids.push(input.id);
+          calls += 1;
+          // First call is accepted by the server but the response is lost.
+          if (calls === 1) throw new Error("network: response lost");
+        },
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls).toBe(2);
+    expect(ids[0]).toBe("s1");
+    expect(ids[1]).toBe("s1"); // same id on retry — no second synthetic
+  });
+
+  it("mints one id before the first attempt when no prior synthetic exists", async () => {
+    const ids: Array<string | null | undefined> = [];
+    let calls = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [
+            { id: "a1", type: "assistant" },
+            { id: "u1", type: "user" },
+          ],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async (input: { id?: string | null }) => {
+          ids.push(input.id);
+          calls += 1;
+          if (calls === 1) throw new Error("network: response lost");
+        },
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls).toBe(2);
+    expect(ids[0]).toBe("msg_generated_stable");
+    expect(ids[1]).toBe("msg_generated_stable");
+  });
+
+  // Defect 6: cancel + prompt share the 3-call budget.
+  it("successful cancel followed by transient prompt failure stays within 3 total calls", async () => {
+    let cancels = 0;
+    let prompts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: {
+          list: async () => [
+            {
+              id: "s-pending",
+              type: "synthetic",
+              delivery: "steer",
+              payload: { metadata: { notice: "opencode-restart" } },
+            },
+            { id: "u1", type: "user", delivery: "steer" },
+          ],
+          cancel: async () => {
+            cancels += 1;
+          },
+        },
+        prompt: async () => {
+          prompts += 1;
+          if (prompts === 1) throw { status: 503 }; // transient on first prompt
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(cancels).toBe(1); // cancel succeeded once, never retried
+    expect(prompts).toBe(2); // first prompt failed transient, second succeeded
+    expect(cancels + prompts).toBeLessThanOrEqual(3);
+  });
+
+  // Defect 5: the 60s shutdown grace is reachable via a presence-based signal.
+  it("uses the 60s shutdown grace when busy present and idle absent", async () => {
+    const graceWaits: number[] = [];
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: 123, idle: undefined } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({
+      client,
+      readSessionSignal: async () => ({ busy: true, idle: false }),
+      waitGrace: async (ms) => {
+        graceWaits.push(ms);
+      },
+      graceMs: {
+        shutdownInterruption: 60_000,
+        incompleteAssistant: 30_000,
+        pendingInput: 5_000,
+        projectedUser: 5_000,
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(graceWaits).toContain(60_000);
+  });
+
+  it("does not use shutdown grace when busy and idle are both present", async () => {
+    const graceWaits: number[] = [];
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: 123, idle: 456 } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({
+      client,
+      readSessionSignal: async () => ({ busy: true, idle: true }),
+      waitGrace: async (ms) => {
+        graceWaits.push(ms);
+      },
+      graceMs: {
+        shutdownInterruption: 60_000,
+        incompleteAssistant: 30_000,
+        pendingInput: 5_000,
+        projectedUser: 5_000,
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(graceWaits).not.toContain(60_000);
+    expect(graceWaits).toContain(5_000); // projected-user grace
+  });
+
+  // Defect 4: ownership filtering.
+  it("filters candidates by history ownership (local, legacy managed, remote, unreadable)", () => {
+    const candidates = [
+      { id: "local", opencodeSessionId: "s1", opencodeDirectory: null, opencodeServiceOwner: null },
+      {
+        id: "legacy-managed",
+        opencodeSessionId: "s2",
+        opencodeDirectory: null,
+        opencodeServiceOwner: "managed",
+      },
+      {
+        id: "legacy-adopted-loopback",
+        opencodeSessionId: "s3",
+        opencodeDirectory: null,
+        opencodeServiceOwner: "adopted:http://127.0.0.1:1234",
+      },
+      {
+        id: "remote",
+        opencodeSessionId: "s4",
+        opencodeDirectory: null,
+        opencodeServiceOwner: "remote:http://example.com:4000",
+      },
+      {
+        id: "unreadable",
+        opencodeSessionId: "s5",
+        opencodeDirectory: null,
+        opencodeServiceOwner: "not-a-valid-owner",
+      },
+    ];
+    const kept = filterRecoveryCandidatesByOwner(candidates);
+    expect(kept.map((c) => c.id)).toEqual(["local", "legacy-managed", "legacy-adopted-loopback"]);
+  });
+
+  it("never sends a remote-owned candidate to the managed client", async () => {
+    let prompted = false;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => {
+          prompted = true;
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({
+      client,
+      listCandidates: async () => [
+        {
+          id: "remote",
+          opencodeSessionId: "s4",
+          opencodeDirectory: null,
+          opencodeServiceOwner: "remote:http://example.com:4000",
+        },
+      ],
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(prompted).toBe(false);
   });
 });

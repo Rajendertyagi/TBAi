@@ -42,6 +42,43 @@ describe("classifyRecovery — decision table", () => {
     expect(action.kind).toBe("none");
   });
 
+  // Defect 2: pending input after idle / empty history must not be skipped.
+  it("pending user after idle with no projected input → resubmit by original id and delivery", () => {
+    const action = classifyRecovery({
+      messages: [msg("u0", "user"), msg("i1", "idle")],
+      inbox: [inbox("u-pending", "user", "queue")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u-pending");
+      expect(action.delivery).toBe("queue");
+    }
+  });
+
+  it("empty history with pending user → resubmit by original id and delivery", () => {
+    const action = classifyRecovery({
+      messages: [],
+      inbox: [inbox("u-pending", "user", "steer")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u-pending");
+      expect(action.delivery).toBe("steer");
+    }
+  });
+
+  it("empty history with pending synthetic → repost its id", () => {
+    const action = classifyRecovery({
+      messages: [],
+      inbox: [inbox("s-pending", "synthetic", "steer", { metadata: { notice: RECOVERY_NOTICE } })],
+      truncated: false,
+    });
+    expect(action.kind).toBe("repost-synthetic");
+    if (action.kind === "repost-synthetic") expect(action.id).toBe("s-pending");
+  });
+
   it("truncated scan → indeterminate, no auto-resume", () => {
     const action = classifyRecovery({
       messages: [msg("u1", "user")],
@@ -222,5 +259,69 @@ describe("classifyRecovery — decision table", () => {
     // user-wins fallback still cancels the pending synthetic, but never claims
     // a deterministic promotion order.
     expect(action.kind).toBe("cancel-and-resubmit-user");
+  });
+
+  // Defect 3: projected synthetic vs pending user — user-wins, never cancel a
+  // projected synthetic, never bypass the pending user.
+  it("projected TBAi recovery synthetic + newer pending user → resubmit user, no cancel of projected", () => {
+    const action = classifyRecovery({
+      messages: [msg("s-proj", "synthetic", { metadata: { notice: RECOVERY_NOTICE } })],
+      inbox: [inbox("u-new", "user", "steer")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") expect(action.id).toBe("u-new");
+  });
+
+  it("projected native continuation synthetic + newer pending user → resubmit user, no cancel of projected", () => {
+    const action = classifyRecovery({
+      messages: [msg("s-native", "synthetic", { text: "continue" })],
+      inbox: [inbox("u-new", "user", "queue")],
+      truncated: false,
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u-new");
+      expect(action.delivery).toBe("queue");
+    }
+  });
+
+  it("projected synthetic + pending user with a separate pending synthetic → cancel only the pending one", () => {
+    const action = classifyRecovery({
+      messages: [msg("s-proj", "synthetic", { metadata: { notice: RECOVERY_NOTICE } })],
+      inbox: [
+        inbox("s-pending", "synthetic", "steer", { metadata: { notice: RECOVERY_NOTICE } }),
+        inbox("u-new", "user", "steer"),
+      ],
+      truncated: false,
+    });
+    expect(action.kind).toBe("cancel-and-resubmit-user");
+    if (action.kind === "cancel-and-resubmit-user") {
+      expect(action.cancelId).toBe("s-pending"); // never "s-proj"
+      expect(action.userId).toBe("u-new");
+    }
+  });
+
+  // Defect 5: shutdown grace is presence-based, never a timestamp comparison.
+  it("busy present + idle absent → shutdownInterruption marker on the action", () => {
+    const action = classifyRecovery({
+      messages: [msg("u1", "user")],
+      inbox: [],
+      truncated: false,
+      sessionSignal: { busy: true, idle: false },
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") expect(action.shutdownInterruption).toBe(true);
+  });
+
+  it("busy + idle both present → no shutdownInterruption (no timestamp inference)", () => {
+    const action = classifyRecovery({
+      messages: [msg("u1", "user")],
+      inbox: [],
+      truncated: false,
+      sessionSignal: { busy: true, idle: true },
+    });
+    expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") expect(action.shutdownInterruption).toBe(false);
   });
 });

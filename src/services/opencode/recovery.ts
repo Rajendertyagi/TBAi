@@ -14,10 +14,17 @@
  * only protects synchronous exceptions.
  */
 
+import { randomUUID } from "node:crypto";
 import { OPENCODE_RECOVERY_CONFIG, RECOVERY_NOTICE } from "../../config/opencode-recovery";
 import { logger, normalizeError } from "../../lib/logger";
 import { conversationService } from "../storage";
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
+import {
+  LOCAL_OWNER,
+  readConversationHistoryOwner,
+  sameHistoryOwner,
+  type OpenCodeHistoryOwner,
+} from "./historyBoundary";
 import {
   readConnectionState,
   readRuntimeTargetChange,
@@ -51,6 +58,16 @@ export interface RecoveryDeps {
   readonly makeClient: (baseUrl: string, directory: string | null) => Promise<OpenCodeClient>;
   readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   readonly now: () => number;
+  /** Mint one stable `msg_` id per recovery-synthetic lineage. */
+  readonly newId: () => string;
+  /** Durable session-projection presence flags (never a timestamp comparison). */
+  readonly readSessionSignal: (
+    client: OpenCodeClient,
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<{ busy: boolean; idle: boolean }>;
+  /** Grace wait: resolves on timeout OR abort (never rejects). Test seam. */
+  readonly waitGrace: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Test seam: override grace durations (e.g. all zero) to avoid real waits. */
   readonly graceMs?: {
     readonly shutdownInterruption: number;
@@ -90,6 +107,35 @@ const productionDeps: RecoveryDeps = {
       signal.addEventListener("abort", onAbort, { once: true });
     }),
   now: Date.now,
+  newId: () => `msg_${randomUUID()}`,
+  readSessionSignal: async (client, sessionId, signal) => {
+    try {
+      const info = await client.session.get({ sessionID: sessionId }, { signal });
+      return {
+        busy: typeof info.time?.busy === "number",
+        idle: typeof info.time?.idle === "number",
+      };
+    } catch {
+      // A failed probe is not evidence of shutdown; fall back to no signal.
+      return { busy: false, idle: false };
+    }
+  },
+  waitGrace: (ms, signal) =>
+    new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }),
 };
 
 let deps: RecoveryDeps = productionDeps;
@@ -102,9 +148,6 @@ const processedTargets = new Set<string>();
 /** One controller per (targetId, sessionId) so a session has at most one in-flight recovery. */
 const sessionControllers = new Map<string, AbortController>();
 
-/** Grace timers, cancelled on target replacement or shutdown. */
-const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
 /** In-flight pass promises, drained on shutdown. */
 const inflight = new Set<Promise<void>>();
 
@@ -116,11 +159,41 @@ function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+function lastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (predicate(items[i]!)) return i;
+  }
+  return -1;
+}
+
+/**
+ * Filter recovery candidates through the existing OpenCode history ownership
+ * rules. Only conversations whose recorded owner is compatible with the active
+ * managed (local) owner may be sent to the managed client. Remote-owned,
+ * incompatible, and unreadable owner records are skipped — never probed.
+ */
+export function filterRecoveryCandidatesByOwner(
+  candidates: readonly RecoveryCandidate[],
+  activeOwner: OpenCodeHistoryOwner = LOCAL_OWNER,
+): RecoveryCandidate[] {
+  return candidates.filter((candidate) => {
+    try {
+      const owner = readConversationHistoryOwner(candidate);
+      return owner !== null && sameHistoryOwner(owner, activeOwner);
+    } catch {
+      // Unreadable owner record → fail closed, never send to managed client.
+      return false;
+    }
+  });
+}
+
 /** Map an action to its state-specific grace duration. */
-function graceFor(action: RecoveryAction, sessionBusyNoIdle: boolean): number {
+function graceFor(action: RecoveryAction): number {
   const g = deps.graceMs ?? OPENCODE_RECOVERY_CONFIG.graceMs;
   if (action.kind === "indeterminate" || action.kind === "none") return 0;
-  if (sessionBusyNoIdle) return g.shutdownInterruption;
+  // Presence-based shutdown signal (busy set, idle absent) — never a timestamp
+  // comparison. This is the only path to the longer shutdown grace.
+  if (action.shutdownInterruption) return g.shutdownInterruption;
   if (action.kind === "repost-synthetic" && action.reuseFromHistory) return g.incompleteAssistant;
   if (action.kind === "resubmit-user") return g.projectedUser;
   return g.pendingInput;
@@ -252,7 +325,15 @@ function targetStillValid(change: OpenCodeRuntimeTargetChange): boolean {
   );
 }
 
-/** Perform one resume action with bounded retries. Returns a short outcome label. */
+type CallResult = "ok" | "conflict" | "absent" | "permanent" | "transient" | "budget";
+
+/**
+ * Perform one resume action with a SHARED HTTP budget across every call the
+ * action makes (cancel + prompt, or synthetic). A cancel and its prompt are
+ * separate calls; both count against `maxHttpCalls`. A synthetic's id is
+ * minted ONCE before the first attempt and reused on every retry, so a lost
+ * response can never create a second synthetic.
+ */
 async function performAction(
   client: OpenCodeClient,
   candidate: RecoveryCandidate,
@@ -261,44 +342,17 @@ async function performAction(
 ): Promise<"recovered" | "conflict" | "absent" | "permanent" | "failed"> {
   const cfg = OPENCODE_RECOVERY_CONFIG;
   const sessionID = candidate.opencodeSessionId;
+  let callsUsed = 0;
 
-  const attempt = async (): Promise<"ok" | "conflict" | "absent" | "permanent" | "transient"> => {
+  // Mint one stable id for the whole synthetic lineage before any attempt.
+  const stableSyntheticId =
+    action.kind === "repost-synthetic" ? (action.id ?? deps.newId()) : undefined;
+
+  const call = async (run: () => Promise<unknown>): Promise<CallResult> => {
+    if (callsUsed >= cfg.maxHttpCalls) return "budget";
+    callsUsed += 1;
     try {
-      if (action.kind === "resubmit-user" || action.kind === "cancel-and-resubmit-user") {
-        if (action.kind === "cancel-and-resubmit-user") {
-          await client.session.inbox.cancel({ sessionID, inboxID: action.cancelId }, { signal });
-        }
-        const userId = action.kind === "resubmit-user" ? action.id : action.userId;
-        await client.session.prompt(
-          {
-            sessionID,
-            id: userId,
-            text: "Continue from where you left off without repeating completed work.",
-            delivery: action.delivery,
-            resume: true,
-          },
-          { signal },
-        );
-      } else if (action.kind === "repost-synthetic") {
-        const metadata = (action.metadata ?? { notice: RECOVERY_NOTICE }) as Record<
-          string,
-          string | number | boolean | null
-        >;
-        await client.session.synthetic(
-          {
-            sessionID,
-            id: action.id,
-            text:
-              action.text ??
-              "The server restarted while you were working. Continue from where you left off.",
-            description: action.description,
-            metadata,
-            delivery: "steer",
-            resume: true,
-          },
-          { signal },
-        );
-      }
+      await run();
       return "ok";
     } catch (error) {
       if (isAbort(error)) throw error;
@@ -307,24 +361,85 @@ async function performAction(
       if (status === 404) return "absent";
       if (status === 408 || status === 429 || (status !== undefined && status >= 500))
         return "transient";
-      if (status !== undefined && status >= 400 && status < 500) return "permanent"; // permanent 4xx: stop
+      if (status !== undefined && status >= 400 && status < 500) return "permanent";
       return "transient"; // network failure / timeout
     }
   };
 
-  for (let call = 0; call < cfg.maxHttpCalls; call += 1) {
-    if (call > 0) {
-      const backoff = cfg.backoffMs[call - 1] ?? cfg.backoffMs[cfg.backoffMs.length - 1]!;
-      await deps.sleep(backoff, signal);
+  /** Retry one logical step on transient failures within the shared budget. */
+  const runStep = async (run: () => Promise<unknown>): Promise<CallResult> => {
+    let result: CallResult = "budget";
+    for (let attempt = 0; attempt < cfg.maxHttpCalls; attempt += 1) {
+      if (attempt > 0) {
+        const backoff = cfg.backoffMs[attempt - 1] ?? cfg.backoffMs[cfg.backoffMs.length - 1]!;
+        await deps.sleep(backoff, signal);
+      }
+      result = await call(run);
+      if (result !== "transient") return result;
     }
-    const result = await attempt();
-    if (result === "ok") return "recovered";
-    if (result === "conflict") return "conflict";
-    if (result === "absent") return "absent";
-    if (result === "permanent") return "permanent";
-    // transient → retry within the cap
+    return result;
+  };
+
+  const terminal = (result: CallResult): result is "conflict" | "absent" | "permanent" | "budget" =>
+    result === "conflict" || result === "absent" || result === "permanent" || result === "budget";
+
+  if (action.kind === "resubmit-user" || action.kind === "cancel-and-resubmit-user") {
+    const cancelId = action.kind === "cancel-and-resubmit-user" ? action.cancelId : undefined;
+    const userId = action.kind === "resubmit-user" ? action.id : action.userId;
+    const delivery = action.delivery;
+    if (cancelId !== undefined) {
+      const cancelResult = await runStep(() =>
+        client.session.inbox.cancel({ sessionID, inboxID: cancelId }, { signal }),
+      );
+      if (terminal(cancelResult)) {
+        return cancelResult === "budget" ? "failed" : cancelResult;
+      }
+    }
+    const promptResult = await runStep(() =>
+      client.session.prompt(
+        {
+          sessionID,
+          id: userId,
+          text: "Continue from where you left off without repeating completed work.",
+          delivery,
+          resume: true,
+        },
+        { signal },
+      ),
+    );
+    if (terminal(promptResult)) {
+      return promptResult === "budget" ? "failed" : promptResult;
+    }
+    return "recovered";
   }
-  return "failed";
+
+  // repost-synthetic: one stable id on every attempt.
+  if (action.kind !== "repost-synthetic") return "failed";
+  const metadata = (action.metadata ?? { notice: RECOVERY_NOTICE }) as Record<
+    string,
+    string | number | boolean | null
+  >;
+  const syntheticText =
+    action.text ?? "The server restarted while you were working. Continue from where you left off.";
+  const syntheticDescription = action.description;
+  const syntheticResult = await runStep(() =>
+    client.session.synthetic(
+      {
+        sessionID,
+        id: stableSyntheticId,
+        text: syntheticText,
+        description: syntheticDescription,
+        metadata,
+        delivery: "steer",
+        resume: true,
+      },
+      { signal },
+    ),
+  );
+  if (terminal(syntheticResult)) {
+    return syntheticResult === "budget" ? "failed" : syntheticResult;
+  }
+  return "recovered";
 }
 
 /** Recover one candidate for one target. */
@@ -345,7 +460,10 @@ async function recoverCandidate(
     const inbox = await readInbox(client, candidate.opencodeSessionId, signal);
     if (!targetStillValid(change)) return;
 
-    const action = classifyRecovery({ messages, inbox, truncated });
+    const sessionSignal = await deps.readSessionSignal(client, candidate.opencodeSessionId, signal);
+    if (!targetStillValid(change)) return;
+
+    const action = classifyRecovery({ messages, inbox, truncated, sessionSignal });
     if (action.kind === "none" || action.kind === "indeterminate") {
       logger.info("opencode", "opencode.recovery.skip", {
         targetId: change.targetId,
@@ -355,11 +473,21 @@ async function recoverCandidate(
       return;
     }
 
-    // Reuse a recovery synthetic id from durable history when requested.
+    // Reuse a recovery synthetic id from durable history ONLY when it belongs
+    // to the current unfinished lineage — i.e. it appears AFTER the latest
+    // user intent. A marker from an older, already-superseded lineage must not
+    // be reused.
     if (action.kind === "repost-synthetic" && action.reuseFromHistory) {
+      const lastUserIdx = lastIndex(messages, (m) => m.type === "user");
       const prior = [...messages]
+        .map((m, i) => ({ m, i }))
         .reverse()
-        .find((m) => m.type === "synthetic" && m.metadata?.notice === RECOVERY_NOTICE);
+        .find(
+          ({ m, i }) =>
+            m.type === "synthetic" &&
+            m.metadata?.notice === RECOVERY_NOTICE &&
+            (lastUserIdx < 0 || i > lastUserIdx),
+        )?.m;
       if (prior) {
         return await actWithGrace(change, candidate, client, signal, {
           ...action,
@@ -370,8 +498,7 @@ async function recoverCandidate(
       }
     }
 
-    const busyNoIdle = false; // session projection is supporting only; grace by action kind
-    await actWithGrace(change, candidate, client, signal, action, busyNoIdle);
+    await actWithGrace(change, candidate, client, signal, action);
   } finally {
     sessionControllers.delete(key);
   }
@@ -383,27 +510,10 @@ async function actWithGrace(
   client: OpenCodeClient,
   signal: AbortSignal,
   action: RecoveryAction,
-  busyNoIdle = false,
 ): Promise<void> {
-  const grace = graceFor(action, busyNoIdle);
+  const grace = graceFor(action);
   if (grace > 0) {
-    const timerKey = `${change.targetId}:${candidate.id}`;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        graceTimers.delete(timerKey);
-        resolve();
-      }, grace);
-      graceTimers.set(timerKey, timer);
-      signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          graceTimers.delete(timerKey);
-          resolve();
-        },
-        { once: true },
-      );
-    });
+    await deps.waitGrace(grace, signal);
   }
   if (!targetStillValid(change) || signal.aborted) return;
 
@@ -412,7 +522,13 @@ async function actWithGrace(
   if (!targetStillValid(change) || signal.aborted) return;
   const recheckInbox = await readInbox(client, candidate.opencodeSessionId, signal);
   if (!targetStillValid(change) || signal.aborted) return;
-  const finalAction = classifyRecovery({ ...recheck, inbox: recheckInbox });
+  const recheckSignal = await deps.readSessionSignal(client, candidate.opencodeSessionId, signal);
+  if (!targetStillValid(change) || signal.aborted) return;
+  const finalAction = classifyRecovery({
+    ...recheck,
+    inbox: recheckInbox,
+    sessionSignal: recheckSignal,
+  });
   if (finalAction.kind === "none" || finalAction.kind === "indeterminate") {
     logger.info("opencode", "opencode.recovery.cancelled_at_grace", {
       targetId: change.targetId,
@@ -436,7 +552,10 @@ async function runPass(change: OpenCodeRuntimeTargetChange): Promise<void> {
   if (!targetStillValid(change) || !deps.isManagedInstalled()) return;
   const startedAt = deps.now();
   try {
-    const candidates = await deps.listCandidates();
+    const listed = await deps.listCandidates();
+    // Fail closed: never send a remote-owned, incompatible, or unreadable
+    // conversation to the managed client.
+    const candidates = filterRecoveryCandidatesByOwner(listed);
     const budget = candidates.slice(0, OPENCODE_RECOVERY_CONFIG.maxCandidatesPerPass);
     // Concurrency is bounded by a simple sequential loop; the cap keeps boot cheap.
     for (const candidate of budget) {
@@ -486,16 +605,10 @@ function onTargetChange(change: OpenCodeRuntimeTargetChange): void {
   }
 }
 
-/** Cancel grace timers and in-flight work for one target (or all when null). */
+/** Cancel grace waits and in-flight work for one target (or all when null). */
 function cancelForTarget(targetId: number | null): void {
   for (const [key, controller] of sessionControllers) {
     if (targetId === null || key.startsWith(`${targetId}:`)) controller.abort();
-  }
-  for (const [key, timer] of graceTimers) {
-    if (targetId === null || key.startsWith(`${targetId}:`)) {
-      clearTimeout(timer);
-      graceTimers.delete(key);
-    }
   }
 }
 
@@ -541,12 +654,10 @@ export function getOpenCodeRecoveryState(): {
   started: boolean;
   processedTargets: number;
   inFlight: number;
-  graceTimers: number;
 } {
   return {
     started,
     processedTargets: processedTargets.size,
     inFlight: sessionControllers.size,
-    graceTimers: graceTimers.size,
   };
 }

@@ -1,10 +1,11 @@
 # TBAi OpenCode Restart Recovery — Plan (revised after idle-signal review, 2026-11-17)
 
-**Status: PLAN ONLY — production implementation not authorized.**
-**Branch:** `review/managed-opencode-hardening-2026-11-15` · **HEAD:** `80813d85baa70b1bdd20f8899953bb82b4f874c8`
+**Status: IMPLEMENTED — production implementation authorized and completed (2026-11-17).**
+**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; correctness fixes applied on top (uncommitted at this revision).
 **Pinned runtime:** OpenCode / `@opencode/client` 2.2.6 (binary `D:\Coding\OpenCode\opencode.exe`, v2.2.6).
-**Authorized edit scope for this revision:** this file only. No production source, schema, migration,
-launch configuration, protected path, commit, push, merge, or branch change.
+**Scope:** one backend-owned recovery service under `src/services/opencode/`, config in
+`src/config/opencode-recovery.ts`, wiring in `src/server.ts`, and read-only candidate enumeration in
+`src/services/storage/conversations.ts`. No schema, migration, dependency, launch-config, or protected-path change.
 
 > **Why this revision exists.** Independent review found that the prior plan omitted the projected
 > `idle` message — a durable, ordered turn-boundary marker that survives restart even though plain
@@ -753,10 +754,49 @@ unchanged by this revision.
 
 ---
 
-## 17. Authorization status
+## 17. Implementation status and verification (2026-11-17)
 
-**PLAN ONLY — production implementation not authorized.** This revision edited only this document.
-No production source, schema, migration, launch configuration, protected path, commit, push, merge, or
-branch change was made. The §7.5 intent-revision record is a proposal only and requires separate owner
-approval. Production implementation requires explicit authorization after independent review of this
-revised plan.
+**IMPLEMENTED.** The owner authorized implementation; the feature was implemented, committed
+(`2ef39c5`), and pushed to `origin/review/managed-opencode-hardening-2026-11-15`. A subsequent
+correctness-fix pass (stable synthetic id, pending-input-after-idle, projected-synthetic vs pending-user,
+ownership filtering, presence-based shutdown grace, shared retry budget) is applied on top and remains
+uncommitted pending separate authorization.
+
+### Implemented modules
+- `src/config/opencode-recovery.ts` — all recovery constants.
+- `src/services/opencode/recoveryClassifier.ts` — pure decision-table classifier.
+- `src/services/opencode/recovery.ts` — subscription, dedup, newest-first scan, grace, bounded retries,
+  ownership filtering, cancellation/draining.
+- `src/services/storage/conversations.ts` — read-only `listOpenCodeRecoveryCandidates()`.
+- `src/server.ts` — start before `startOpenCodeRuntime()`; stop/drain in rollback and normal shutdown
+  before OpenCode/DB teardown.
+- `scripts/run-opencode-runtime-suites.ts` — P0 suite classified as required (registry drift guard).
+
+### Verification actually run (exact results)
+- `bun run typecheck` → exit 0; `bun run lint` → exit 0; `bun run format:check` → exit 0;
+  `bun run test:locations` → exit 0.
+- Targeted recovery tests (`recoveryClassifier` + `recoveryService`) → **41 pass / 0 fail**.
+- P0 reconstruction test (real v2.2.6 binary, unchanged) → **7 pass / 0 fail**, 26 expects.
+- `bun run test:opencode-runtime` → **10/10 required suites passed**.
+- `bun run build` → exit 0.
+- `bun run verify` → exit 0; **5957 pass / 88 skip / 0 fail** (unit+integration), 802 DOM pass,
+  shutdown/rollback/lifecycle pass, quarantine OK.
+- `bun run test:e2e opencode/opencode-v2-code-route.spec.ts` → 1 passed.
+
+### Known pre-existing failure (not a regression)
+- Dedicated managed-restart E2E (`opencode-managed-restart-recovery.spec.ts`) via the isolated external-server
+  runner → **1 failed**: `timeout waiting for distinct assistant response persisted in OpenCode session
+  history`. This is the pre-existing transcript-completeness defect documented in `docs/opencode-context.md`
+  (persisted 2.2.6 message-list contains only the user prompt, no distinct assistant response). The spec is
+  a protected path and was not modified; this failure is unrelated to the recovery fixes.
+
+### Remaining risks
+- Cross-state ordering (§7.5) uses the conservative fallback; the intent-revision record is unapproved.
+- Native synthetic ambiguity falls back to no-auto-resume.
+- Shutdown grace is presence-based (`busy` set, `idle` absent), never a timestamp comparison; a session
+  with both markers present uses the shorter state-specific grace.
+- Cross-process collision and best-effort (not exactly-once) semantics remain accepted (§15).
+- `verify:full`/Semgrep remains environment-blocked (pre-existing).
+
+No schema, migration, dependency, launch-config, protected-path, commit, push, merge, or branch change was
+made in this correctness-fix pass. The §7.5 intent-revision record remains a proposal only.
