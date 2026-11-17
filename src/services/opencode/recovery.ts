@@ -68,6 +68,8 @@ export interface RecoveryDeps {
   ) => Promise<{ busy: boolean; idle: boolean }>;
   /** Grace wait: resolves on timeout OR abort (never rejects). Test seam. */
   readonly waitGrace: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Test seam: override the per-call timeout (defaults to config). */
+  readonly perCallTimeoutMs?: number;
   /** Test seam: override grace durations (e.g. all zero) to avoid real waits. */
   readonly graceMs?: {
     readonly shutdownInterruption: number;
@@ -110,13 +112,18 @@ const productionDeps: RecoveryDeps = {
   newId: () => `msg_${randomUUID()}`,
   readSessionSignal: async (client, sessionId, signal) => {
     try {
-      const info = await client.session.get({ sessionID: sessionId }, { signal });
+      const info = await withTimeout(
+        (callSignal) => client.session.get({ sessionID: sessionId }, { signal: callSignal }),
+        signal,
+        OPENCODE_RECOVERY_CONFIG.perCallTimeoutMs,
+      );
       return {
         busy: typeof info.time?.busy === "number",
         idle: typeof info.time?.idle === "number",
       };
     } catch {
-      // A failed probe is not evidence of shutdown; fall back to no signal.
+      // A failed probe (including timeout) is not evidence of shutdown; fall
+      // back to no signal rather than guessing.
       return { busy: false, idle: false };
     }
   },
@@ -157,6 +164,48 @@ function targetKey(change: OpenCodeRuntimeTargetChange): string {
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** Combine two abort signals: either one aborts the returned signal. */
+function combineSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const controller = new AbortController();
+  if (a.aborted || b.aborted) {
+    controller.abort();
+    return controller.signal;
+  }
+  const onAbort = () => {
+    a.removeEventListener("abort", onAbort);
+    b.removeEventListener("abort", onAbort);
+    controller.abort();
+  };
+  a.addEventListener("abort", onAbort, { once: true });
+  b.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
+}
+
+/**
+ * Enforce a real per-call timeout. The work receives a signal that aborts on
+ * either the lifecycle signal (shutdown / target replacement) or the timeout.
+ * A timeout is reported to the caller as an abort so it can be classified as a
+ * transient failure and retried within the shared budget.
+ */
+async function withTimeout<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  outer: AbortSignal,
+  ms: number,
+): Promise<T> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), ms);
+  const combined = combineSignals(outer, timeout.signal);
+  try {
+    return await work(combined);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function timeoutMs(): number {
+  return deps.perCallTimeoutMs ?? OPENCODE_RECOVERY_CONFIG.perCallTimeoutMs;
 }
 
 function lastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -274,9 +323,14 @@ async function scanHistory(
   let truncated = false;
 
   for (let page = 0; page < cfg.maxPages; page += 1) {
-    const response = await client.message.list(
-      { sessionID: sessionId, order, limit: cfg.pageSize, cursor },
-      { signal },
+    const response = await withTimeout(
+      (callSignal) =>
+        client.message.list(
+          { sessionID: sessionId, order, limit: cfg.pageSize, cursor },
+          { signal: callSignal },
+        ),
+      signal,
+      timeoutMs(),
     );
     for (const raw of response.data) {
       const message = toTimelineMessage(raw as never);
@@ -308,7 +362,11 @@ async function readInbox(
   sessionId: string,
   signal: AbortSignal,
 ): Promise<InboxEntry[]> {
-  const items = await client.session.inbox.list({ sessionID: sessionId }, { signal });
+  const items = await withTimeout(
+    (callSignal) => client.session.inbox.list({ sessionID: sessionId }, { signal: callSignal }),
+    signal,
+    timeoutMs(),
+  );
   return items
     .map((item) => toInboxEntry(item as never))
     .filter((item): item is InboxEntry => item !== null);
@@ -348,14 +406,19 @@ async function performAction(
   const stableSyntheticId =
     action.kind === "repost-synthetic" ? (action.id ?? deps.newId()) : undefined;
 
-  const call = async (run: () => Promise<unknown>): Promise<CallResult> => {
+  const call = async (run: (callSignal: AbortSignal) => Promise<unknown>): Promise<CallResult> => {
     if (callsUsed >= cfg.maxHttpCalls) return "budget";
     callsUsed += 1;
     try {
-      await run();
+      await withTimeout(run, signal, timeoutMs());
       return "ok";
     } catch (error) {
-      if (isAbort(error)) throw error;
+      if (isAbort(error)) {
+        // A lifecycle abort (shutdown / target replacement) must propagate; a
+        // timeout abort is a transient failure that may be retried.
+        if (signal.aborted) throw error;
+        return "transient";
+      }
       const status = (error as { status?: number })?.status;
       if (status === 409) return "conflict";
       if (status === 404) return "absent";
@@ -366,10 +429,19 @@ async function performAction(
     }
   };
 
-  /** Retry one logical step on transient failures within the shared budget. */
-  const runStep = async (run: () => Promise<unknown>): Promise<CallResult> => {
+  /**
+   * Retry one logical step on transient failures within the shared budget.
+   * `reserveCalls` guarantees that many calls remain for later steps — the
+   * cancel step reserves one for the prompt so a successful cancellation can
+   * never leave the user input unwoken because cancellation used the budget.
+   */
+  const runStep = async (
+    run: (callSignal: AbortSignal) => Promise<unknown>,
+    reserveCalls = 0,
+  ): Promise<CallResult> => {
     let result: CallResult = "budget";
-    for (let attempt = 0; attempt < cfg.maxHttpCalls; attempt += 1) {
+    const maxAttempts = Math.max(1, cfg.maxHttpCalls - reserveCalls);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (attempt > 0) {
         const backoff = cfg.backoffMs[attempt - 1] ?? cfg.backoffMs[cfg.backoffMs.length - 1]!;
         await deps.sleep(backoff, signal);
@@ -388,14 +460,19 @@ async function performAction(
     const userId = action.kind === "resubmit-user" ? action.id : action.userId;
     const delivery = action.delivery;
     if (cancelId !== undefined) {
-      const cancelResult = await runStep(() =>
-        client.session.inbox.cancel({ sessionID, inboxID: cancelId }, { signal }),
+      // Reserve one call for the prompt: cancellation may use at most
+      // maxHttpCalls - 1 attempts, so a successful cancel always leaves a call
+      // to wake the user input.
+      const cancelResult = await runStep(
+        (callSignal) =>
+          client.session.inbox.cancel({ sessionID, inboxID: cancelId }, { signal: callSignal }),
+        1,
       );
       if (terminal(cancelResult)) {
         return cancelResult === "budget" ? "failed" : cancelResult;
       }
     }
-    const promptResult = await runStep(() =>
+    const promptResult = await runStep((callSignal) =>
       client.session.prompt(
         {
           sessionID,
@@ -404,7 +481,7 @@ async function performAction(
           delivery,
           resume: true,
         },
-        { signal },
+        { signal: callSignal },
       ),
     );
     if (terminal(promptResult)) {
@@ -422,7 +499,7 @@ async function performAction(
   const syntheticText =
     action.text ?? "The server restarted while you were working. Continue from where you left off.";
   const syntheticDescription = action.description;
-  const syntheticResult = await runStep(() =>
+  const syntheticResult = await runStep((callSignal) =>
     client.session.synthetic(
       {
         sessionID,
@@ -433,7 +510,7 @@ async function performAction(
         delivery: "steer",
         resume: true,
       },
-      { signal },
+      { signal: callSignal },
     ),
   );
   if (terminal(syntheticResult)) {
@@ -504,45 +581,78 @@ async function recoverCandidate(
   }
 }
 
+/** Bound grace re-evaluation so a rapidly changing session cannot loop forever. */
+const MAX_GRACE_CYCLES = 3;
+
 async function actWithGrace(
   change: OpenCodeRuntimeTargetChange,
   candidate: RecoveryCandidate,
   client: OpenCodeClient,
   signal: AbortSignal,
-  action: RecoveryAction,
+  initialAction: RecoveryAction,
 ): Promise<void> {
-  const grace = graceFor(action);
-  if (grace > 0) {
-    await deps.waitGrace(grace, signal);
-  }
-  if (!targetStillValid(change) || signal.aborted) return;
+  let action = initialAction;
+  let waited = 0;
+  let stable = false;
 
-  // Re-check history and inbox at grace expiry before acting.
-  const recheck = await scanHistory(client, candidate.opencodeSessionId, signal);
-  if (!targetStillValid(change) || signal.aborted) return;
-  const recheckInbox = await readInbox(client, candidate.opencodeSessionId, signal);
-  if (!targetStillValid(change) || signal.aborted) return;
-  const recheckSignal = await deps.readSessionSignal(client, candidate.opencodeSessionId, signal);
-  if (!targetStillValid(change) || signal.aborted) return;
-  const finalAction = classifyRecovery({
-    ...recheck,
-    inbox: recheckInbox,
-    sessionSignal: recheckSignal,
-  });
-  if (finalAction.kind === "none" || finalAction.kind === "indeterminate") {
-    logger.info("opencode", "opencode.recovery.cancelled_at_grace", {
+  for (let cycle = 0; cycle < MAX_GRACE_CYCLES; cycle += 1) {
+    // Wait for the grace the CURRENT classification requires. If a previous
+    // cycle already waited for a shorter grace, only wait the difference.
+    const required = graceFor(action);
+    if (required > waited) {
+      await deps.waitGrace(required - waited, signal);
+      waited = required;
+    }
+    if (!targetStillValid(change) || signal.aborted) return;
+
+    // Re-check history, inbox and session at grace expiry before acting.
+    const recheck = await scanHistory(client, candidate.opencodeSessionId, signal);
+    if (!targetStillValid(change) || signal.aborted) return;
+    const recheckInbox = await readInbox(client, candidate.opencodeSessionId, signal);
+    if (!targetStillValid(change) || signal.aborted) return;
+    const recheckSignal = await deps.readSessionSignal(client, candidate.opencodeSessionId, signal);
+    if (!targetStillValid(change) || signal.aborted) return;
+    const next = classifyRecovery({
+      ...recheck,
+      inbox: recheckInbox,
+      sessionSignal: recheckSignal,
+    });
+    if (next.kind === "none" || next.kind === "indeterminate") {
+      logger.info("opencode", "opencode.recovery.cancelled_at_grace", {
+        targetId: change.targetId,
+        sessionId: candidate.id,
+        reason: next.reason,
+      });
+      return;
+    }
+
+    // If the reclassified state needs a LONGER grace than we have waited, the
+    // new state (e.g. an incomplete assistant that just appeared) has not had
+    // its required settle window — loop and wait the remainder before acting.
+    if (graceFor(next) > waited) {
+      action = next;
+      continue;
+    }
+    action = next;
+    stable = true;
+    break;
+  }
+
+  if (!stable) {
+    // State kept escalating past the cycle bound: fail conservative rather
+    // than act on a grace we never fully honoured.
+    logger.info("opencode", "opencode.recovery.grace_unstable", {
       targetId: change.targetId,
       sessionId: candidate.id,
-      reason: finalAction.reason,
     });
     return;
   }
 
-  const outcome = await performAction(client, candidate, finalAction, signal);
+  const outcome = await performAction(client, candidate, action, signal);
   logger.info("opencode", "opencode.recovery.attempt", {
     targetId: change.targetId,
     sessionId: candidate.id,
-    action: finalAction.kind,
+    action: action.kind,
     outcome,
   });
 }
@@ -583,6 +693,10 @@ function onTargetChange(change: OpenCodeRuntimeTargetChange): void {
       cancelForTarget(change.targetId);
       return;
     }
+    // A new managed target can be published directly (installManagedTarget does
+    // not require an intervening unresolved state). Abort work belonging to any
+    // other target so an obsolete target's recovery cannot act on the new one.
+    cancelOtherTargets(change.targetId);
     const key = targetKey(change);
     if (processedTargets.has(key)) return;
     processedTargets.add(key);
@@ -609,6 +723,14 @@ function onTargetChange(change: OpenCodeRuntimeTargetChange): void {
 function cancelForTarget(targetId: number | null): void {
   for (const [key, controller] of sessionControllers) {
     if (targetId === null || key.startsWith(`${targetId}:`)) controller.abort();
+  }
+}
+
+/** Cancel in-flight work for every target EXCEPT the one being kept. */
+function cancelOtherTargets(keepTargetId: number): void {
+  const prefix = `${keepTargetId}:`;
+  for (const [key, controller] of sessionControllers) {
+    if (!key.startsWith(prefix)) controller.abort();
   }
 }
 

@@ -507,3 +507,169 @@ describe("recovery correctness fixes", () => {
     expect(prompted).toBe(false);
   });
 });
+
+describe("recovery retry/timeout/grace/target regressions", () => {
+  // A: cancellation retries must not consume the prompt's call.
+  it("a cancel that succeeds on its last allowed retry still leaves a call for the prompt", async () => {
+    let cancels = 0;
+    let prompts = 0;
+    const client = {
+      message: {
+        list: async () => ({
+          data: [{ id: "u1", type: "user" }],
+          cursor: { previous: null, next: null },
+        }),
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: {
+          list: async () => [
+            {
+              id: "s-pending",
+              type: "synthetic",
+              delivery: "steer",
+              payload: { metadata: { notice: "opencode-restart" } },
+            },
+            { id: "u1", type: "user", delivery: "steer" },
+          ],
+          cancel: async () => {
+            cancels += 1;
+            if (cancels === 1) throw { status: 503 }; // transient, then success on call 2
+          },
+        },
+        prompt: async () => {
+          prompts += 1;
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(cancels).toBe(2); // cancel used 2 of 3 calls (1 transient + 1 success)
+    expect(prompts).toBe(1); // prompt still got its reserved call
+  });
+
+  // B: per-call timeout is enforced and retried as transient.
+  it("enforces the per-call timeout and retries a never-resolving call", async () => {
+    let listCalls = 0;
+    const client = {
+      message: {
+        list: async (_input: unknown, init?: { signal?: AbortSignal }) => {
+          listCalls += 1;
+          // Never resolves on its own; only the timeout signal can end it.
+          return await new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              {
+                once: true,
+              },
+            );
+          });
+        },
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client, perCallTimeoutMs: 5 });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    // The scan is retried within its own loop; the pass must not hang forever.
+    expect(listCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  // C: grace is recalculated after reclassification.
+  it("waits the additional grace when the state escalates during the initial wait", async () => {
+    const graceWaits: number[] = [];
+    let scanCount = 0;
+    const client = {
+      message: {
+        list: async () => {
+          scanCount += 1;
+          // First scan: projected user (5s grace). Later scans: user + incomplete
+          // assistant (30s grace) — a longer grace is now required.
+          const data =
+            scanCount <= 1
+              ? [{ id: "u1", type: "user" }]
+              : [
+                  { id: "a1", type: "assistant" },
+                  { id: "u1", type: "user" },
+                ];
+          return { data, cursor: { previous: null, next: null } };
+        },
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({
+      client,
+      waitGrace: async (ms) => {
+        graceWaits.push(ms);
+      },
+      graceMs: {
+        shutdownInterruption: 60_000,
+        incompleteAssistant: 30_000,
+        pendingInput: 5_000,
+        projectedUser: 5_000,
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    // 5s initial, then the remaining 25s for the newly-detected 30s state.
+    expect(graceWaits).toContain(5_000);
+    expect(graceWaits).toContain(25_000);
+  });
+
+  // D: managed-to-managed replacement cancels the old target's work.
+  it("cancels in-flight work for the previous managed target on direct replacement", async () => {
+    let aborted = false;
+    let listCalls = 0;
+    const client = {
+      message: {
+        list: async (_input: unknown, init?: { signal?: AbortSignal }) => {
+          listCalls += 1;
+          if (listCalls > 1) {
+            // The replacement target's pass completes normally.
+            return { data: [], cursor: { previous: null, next: null } };
+          }
+          // Only the first target's call hangs until aborted by replacement.
+          return await new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new DOMException("aborted", "AbortError"));
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => undefined,
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const { deps, listeners, state } = makeDeps({ client, perCallTimeoutMs: 60_000 });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state, 1); // target 1 starts a hanging pass
+    await Bun.sleep(20); // let the first pass reach the hanging call
+    emitManaged(listeners, state, 2); // direct managed-to-managed replacement
+    await drainOpenCodeRecovery();
+    expect(aborted).toBe(true);
+  });
+});

@@ -1,7 +1,10 @@
 # TBAi OpenCode Restart Recovery — Plan (revised after idle-signal review, 2026-11-17)
 
 **Status: IMPLEMENTED — production implementation authorized and completed (2026-11-17).**
-**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; correctness fixes applied on top (uncommitted at this revision).
+**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; first
+correctness-fix commit `0a37700` (pushed); a second targeted correction pass (retry-budget reservation,
+per-call timeout enforcement, grace recalculation, managed-target replacement cancellation) is applied
+on top and **uncommitted at this revision**.
 **Pinned runtime:** OpenCode / `@opencode/client` 2.2.6 (binary `D:\Coding\OpenCode\opencode.exe`, v2.2.6).
 **Scope:** one backend-owned recovery service under `src/services/opencode/`, config in
 `src/config/opencode-recovery.ts`, wiring in `src/server.ts`, and read-only candidate enumeration in
@@ -757,10 +760,12 @@ unchanged by this revision.
 ## 17. Implementation status and verification (2026-11-17)
 
 **IMPLEMENTED.** The owner authorized implementation; the feature was implemented, committed
-(`2ef39c5`), and pushed to `origin/review/managed-opencode-hardening-2026-11-15`. A subsequent
-correctness-fix pass (stable synthetic id, pending-input-after-idle, projected-synthetic vs pending-user,
-ownership filtering, presence-based shutdown grace, shared retry budget) is applied on top and remains
-uncommitted pending separate authorization.
+(`2ef39c5`), and pushed to `origin/review/managed-opencode-hardening-2026-11-15`. The first correctness-fix
+pass (stable synthetic id, pending-input-after-idle, projected-synthetic vs pending-user, ownership
+filtering, presence-based shutdown grace, shared retry budget) was committed as `0a37700` and pushed.
+A second targeted correction pass (retry-budget reservation for cancel, real per-call timeout enforcement,
+grace recalculation after reclassification, cancellation on managed-to-managed replacement) is applied on
+top and remains **uncommitted** pending separate authorization.
 
 ### Implemented modules
 - `src/config/opencode-recovery.ts` — all recovery constants.
@@ -772,10 +777,23 @@ uncommitted pending separate authorization.
   before OpenCode/DB teardown.
 - `scripts/run-opencode-runtime-suites.ts` — P0 suite classified as required (registry drift guard).
 
+### Second correction pass (uncommitted)
+- **Cancel budget reservation:** `runStep(run, reserveCalls)` reserves one call for the prompt, so a
+  cancellation that succeeds on its last allowed retry still leaves a call to wake the user input.
+- **Per-call timeout enforcement:** `withTimeout()` wraps every client call (message list, inbox list,
+  session get, and resume actions) with a real abort after `perCallTimeoutMs` (15 s), combined with the
+  lifecycle signal. A timeout is classified as transient and retried within the shared budget.
+- **Grace recalculation:** `actWithGrace()` re-evaluates the required grace after each reclassification
+  and waits any additional period (bounded to 3 cycles) before acting; a state that keeps escalating is
+  skipped conservatively.
+- **Managed-target replacement:** `onTargetChange()` aborts in-flight work for any other target when a
+  new managed target is published directly, without relying on an intervening unresolved state.
+
 ### Verification actually run (exact results)
 - `bun run typecheck` → exit 0; `bun run lint` → exit 0; `bun run format:check` → exit 0;
   `bun run test:locations` → exit 0.
-- Targeted recovery tests (`recoveryClassifier` + `recoveryService`) → **41 pass / 0 fail**.
+- Targeted recovery tests (`recoveryClassifier` + `recoveryService`) → **45 pass / 0 fail** (includes
+  four new regressions for the second correction pass).
 - P0 reconstruction test (real v2.2.6 binary, unchanged) → **7 pass / 0 fail**, 26 expects.
 - `bun run test:opencode-runtime` → **10/10 required suites passed**.
 - `bun run build` → exit 0.
@@ -783,12 +801,20 @@ uncommitted pending separate authorization.
   shutdown/rollback/lifecycle pass, quarantine OK.
 - `bun run test:e2e opencode/opencode-v2-code-route.spec.ts` → 1 passed.
 
-### Known pre-existing failure (not a regression)
-- Dedicated managed-restart E2E (`opencode-managed-restart-recovery.spec.ts`) via the isolated external-server
-  runner → **1 failed**: `timeout waiting for distinct assistant response persisted in OpenCode session
-  history`. This is the pre-existing transcript-completeness defect documented in `docs/opencode-context.md`
-  (persisted 2.2.6 message-list contains only the user prompt, no distinct assistant response). The spec is
-  a protected path and was not modified; this failure is unrelated to the recovery fixes.
+### Dedicated managed-restart E2E — baseline comparison (not a regression)
+The unchanged spec `opencode-managed-restart-recovery.spec.ts` (a protected path, not modified) was run
+via the isolated external-server runner against three states, each in its own isolated temp root:
+- Parent commit `2ef39c5` (detached worktree): **1 failed** — `expect(page).toHaveURL(/#\/chat\/new$/)`
+  received `/#/code` (navigation assertion in the `openCodeDraft` helper).
+- Corrected commit `0a37700` (detached worktree): **1 failed** — the same `toHaveURL` navigation error.
+- Working tree (`0a37700` + uncommitted second-pass fixes): **1 failed** — `timeout waiting for distinct
+  assistant response persisted in OpenCode session history`.
+
+The spec fails at **all three states**, so the failure is **pre-existing and not a regression** from either
+recovery commit. The differing failure modes (navigation vs transcript) indicate the spec is flaky in this
+environment. The transcript-completeness defect itself is documented in `docs/opencode-context.md`
+(lines 190–197 and 250: persisted 2.2.6 message-list contains only the user prompt `msg_pending_*`, no
+distinct assistant response). The spec is a protected path and was not modified.
 
 ### Remaining risks
 - Cross-state ordering (§7.5) uses the conservative fallback; the intent-revision record is unapproved.
@@ -799,4 +825,6 @@ uncommitted pending separate authorization.
 - `verify:full`/Semgrep remains environment-blocked (pre-existing).
 
 No schema, migration, dependency, launch-config, protected-path, commit, push, merge, or branch change was
-made in this correctness-fix pass. The §7.5 intent-revision record remains a proposal only.
+made in this second correction pass. The §7.5 intent-revision record remains a proposal only. The two
+temporary detached worktrees used for the E2E baseline comparison live outside the repository under
+`D:\Coding\OpenCode\user\tmp\opencode\` and do not affect the working tree.
