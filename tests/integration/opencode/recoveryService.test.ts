@@ -984,7 +984,10 @@ describe("recovery candidate failure isolation", () => {
     expect(prompted).toEqual(["conv-2", "conv-3"]);
   });
 
-  it("a lifecycle abort stops the pass without starting later candidates", async () => {
+  it("a candidate-level AbortError is a candidate failure, not a lifecycle cancellation", async () => {
+    // An AbortError alone does not prove shutdown or target replacement. With
+    // no lifecycle change, the pass must treat it as this candidate's failure
+    // and still process the remaining candidates.
     const attempted: string[] = [];
     const prompted: string[] = [];
     const { deps, listeners, state } = makeDeps({
@@ -1015,8 +1018,8 @@ describe("recovery candidate failure isolation", () => {
     startOpenCodeRecovery(deps);
     emitManaged(listeners, state);
     await drainOpenCodeRecovery();
-    expect(attempted).toEqual(["conv-1"]);
-    expect(prompted).toEqual([]);
+    expect(attempted).toEqual(["conv-1", "conv-2", "conv-3"]);
+    expect(prompted).toEqual(["conv-2", "conv-3"]);
   });
 
   it("shutdown after a candidate failure prevents later candidates from starting", async () => {

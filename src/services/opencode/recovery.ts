@@ -727,17 +727,19 @@ async function runPass(change: OpenCodeRuntimeTargetChange): Promise<void> {
     for (const candidate of budget) {
       if (!targetStillValid(change)) break;
       if (deps.now() - startedAt > OPENCODE_RECOVERY_CONFIG.passBudgetMs) break;
-      // Isolate each candidate: one candidate's unexpected failure must not end
-      // the pass and starve the remaining candidates. A lifecycle abort is the
-      // exception — it means the target was replaced or the backend is shutting
-      // down, so stop the pass rather than start work for an obsolete target.
+      // Isolate each candidate: one candidate's failure must not end the pass
+      // and starve the remaining candidates. Stop only for a GENUINE lifecycle
+      // cancellation — shutdown (service stopped) or target replacement (the
+      // installed target no longer matches). An AbortError alone is not proof
+      // of either: a client can abort its own request, so treat that as this
+      // candidate's failure and continue.
       try {
         // Each session is directory-scoped: build a client with that session's
         // directory so the x-opencode-directory header addresses the right one.
         const client = await deps.makeClient("", candidate.opencodeDirectory);
         await recoverCandidate(change, candidate, client);
       } catch (error) {
-        if (isAbort(error)) break;
+        if (!started || !targetStillValid(change)) break;
         logger.warn("opencode", "opencode.recovery.candidate_failed", {
           targetId: change.targetId,
           sessionId: candidate.id,
