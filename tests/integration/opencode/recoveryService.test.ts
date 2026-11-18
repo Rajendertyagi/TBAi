@@ -884,3 +884,211 @@ describe("recovery retry-exhaustion outcomes", () => {
     expect(getOpenCodeRecoveryState().lastOutcome).toBe("recovered");
   });
 });
+
+describe("recovery candidate failure isolation", () => {
+  const candidates = ["conv-1", "conv-2", "conv-3"].map((id) => ({
+    id,
+    opencodeSessionId: `ses-${id}`,
+    opencodeDirectory: id,
+    opencodeServiceOwner: null,
+  }));
+
+  /** A per-candidate client: normal, throwing an unexpected scan error, or hanging until abort. */
+  function clientFor(
+    id: string,
+    onPrompt: () => void,
+    mode: "normal" | "throw" | "hang" = "normal",
+  ): OpenCodeClient {
+    return {
+      message: {
+        list: async (_input: unknown, init?: { signal?: AbortSignal }) => {
+          if (mode === "throw") throw new Error(`unexpected scan failure for ${id}`);
+          if (mode === "hang") {
+            return await new Promise<never>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => reject(new DOMException("aborted", "AbortError")),
+                { once: true },
+              );
+            });
+          }
+          return {
+            data: [{ id: `u-${id}`, type: "user", time: { created: 1 } }],
+            cursor: { previous: null, next: null },
+          };
+        },
+      },
+      session: {
+        get: async () => ({ time: { busy: false, idle: false } }),
+        inbox: { list: async () => [], cancel: async () => undefined },
+        prompt: async () => {
+          onPrompt();
+        },
+        synthetic: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+  }
+
+  it("isolates an unexpected candidate error so later candidates are still processed", async () => {
+    const attempted: string[] = [];
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) => {
+        const id = directory ?? "null";
+        attempted.push(id);
+        return clientFor(id, () => prompted.push(id), id === "conv-1" ? "throw" : "normal");
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempted).toEqual(["conv-1", "conv-2", "conv-3"]);
+    expect(prompted).toEqual(["conv-2", "conv-3"]);
+  });
+
+  it("isolates a client-creation failure so later candidates are still processed", async () => {
+    const attempted: string[] = [];
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) => {
+        const id = directory ?? "null";
+        attempted.push(id);
+        if (id === "conv-1") throw new Error("client creation failed");
+        return clientFor(id, () => prompted.push(id));
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempted).toEqual(["conv-1", "conv-2", "conv-3"]);
+    expect(prompted).toEqual(["conv-2", "conv-3"]);
+  });
+
+  it("a read timeout on one candidate still processes later candidates", async () => {
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) =>
+        clientFor(
+          directory ?? "null",
+          () => prompted.push(directory ?? "null"),
+          directory === "conv-1" ? "hang" : "normal",
+        ),
+      perCallTimeoutMs: 5,
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(prompted).toEqual(["conv-2", "conv-3"]);
+  });
+
+  it("a lifecycle abort stops the pass without starting later candidates", async () => {
+    const attempted: string[] = [];
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) => {
+        const id = directory ?? "null";
+        attempted.push(id);
+        if (id === "conv-1") {
+          return {
+            message: {
+              list: async () => {
+                throw new DOMException("aborted", "AbortError");
+              },
+            },
+            session: {
+              get: async () => ({ time: { busy: false, idle: false } }),
+              inbox: { list: async () => [], cancel: async () => undefined },
+              prompt: async () => {
+                prompted.push(id);
+              },
+              synthetic: async () => undefined,
+            },
+          } as unknown as OpenCodeClient;
+        }
+        return clientFor(id, () => prompted.push(id));
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempted).toEqual(["conv-1"]);
+    expect(prompted).toEqual([]);
+  });
+
+  it("shutdown after a candidate failure prevents later candidates from starting", async () => {
+    const attempted: string[] = [];
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) => {
+        const id = directory ?? "null";
+        attempted.push(id);
+        if (id === "conv-1") {
+          state.shutdown = true; // backend begins shutting down as the candidate fails
+          throw new Error("unexpected scan failure during shutdown");
+        }
+        return clientFor(id, () => prompted.push(id));
+      },
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(attempted).toEqual(["conv-1"]);
+    expect(prompted).toEqual([]);
+  });
+
+  it("shutdown during an in-flight candidate aborts it and starts no later candidates", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const attempted: string[] = [];
+    const prompted: string[] = [];
+    const { deps, listeners, state } = makeDeps({
+      listCandidates: async () => candidates,
+      makeClient: async (_baseUrl, directory) => {
+        const id = directory ?? "null";
+        attempted.push(id);
+        return {
+          message: {
+            list: async (_input: unknown, init?: { signal?: AbortSignal }) => {
+              if (id !== "conv-1") {
+                return {
+                  data: [{ id: `u-${id}`, type: "user", time: { created: 1 } }],
+                  cursor: { previous: null, next: null },
+                };
+              }
+              observedSignal = init?.signal;
+              return await new Promise<never>((_resolve, reject) => {
+                init?.signal?.addEventListener(
+                  "abort",
+                  () => reject(new DOMException("aborted", "AbortError")),
+                  { once: true },
+                );
+              });
+            },
+          },
+          session: {
+            get: async () => ({ time: { busy: false, idle: false } }),
+            inbox: { list: async () => [], cancel: async () => undefined },
+            prompt: async () => {
+              prompted.push(id);
+            },
+            synthetic: async () => undefined,
+          },
+        } as unknown as OpenCodeClient;
+      },
+      perCallTimeoutMs: 60_000,
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    for (let i = 0; i < 100 && observedSignal === undefined; i += 1) await Bun.sleep(1);
+    expect(observedSignal).toBeDefined();
+    stopOpenCodeRecovery();
+    await drainOpenCodeRecovery();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(attempted).toEqual(["conv-1"]);
+    expect(prompted).toEqual([]);
+  });
+});
