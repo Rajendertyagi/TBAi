@@ -5,6 +5,7 @@ import { registry } from "./config/providers";
 import { credentialStore } from "./services/credentials";
 import { mcpManager } from "./services/mcp/manager";
 import { openCodeServerManager } from "./services/opencode/serverManager";
+import { beginShutdown } from "./services/opencode/connectionState";
 import { chatRuns } from "./services/chat-runs";
 import {
   recoverEssential,
@@ -556,6 +557,11 @@ async function runShutdown(
     if (stopOpenCodeRevalidation()) {
       logger.info("opencode", "opencode.revalidation_stopped", { signal: "shutdown" });
     }
+    // Run the canonical shutdown contract: set the latch, advance the epoch,
+    // clear the shared target to unresolved, and stop owned children through
+    // the registered provider. manager.shutdown() below then performs the
+    // remaining registration/lease cleanup; child stops are idempotent.
+    await beginShutdown();
     await openCodeServerManager.shutdown();
   } catch (err) {
     logger.warn("opencode", "shutdown_opencode_failed", { ...normalizeError(err) });

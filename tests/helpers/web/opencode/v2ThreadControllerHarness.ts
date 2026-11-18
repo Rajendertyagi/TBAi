@@ -167,6 +167,9 @@ export type GenerationOptions = {
    * live events are held before the read's boundary exists.
    */
   readonly sessionGet?: () => Promise<SessionInfo>;
+  /** Optional failure injection for model/agent selection during sendMessage. */
+  readonly switchModel?: () => Promise<void>;
+  readonly switchAgent?: () => Promise<void>;
   /**
    * The list and history readers receive the CONNECTION signal, exactly as the
    * real client passes it: `v2Client.ts` runs every one of these through
@@ -392,8 +395,12 @@ export function createGeneration(
     serverInfo: async () => SERVER_INFO,
     sessionGet: async () =>
       options.sessionGet ? options.sessionGet() : (options.session ?? SESSION),
-    switchAgent: async () => undefined,
-    switchModel: async () => undefined,
+    switchAgent: async () => {
+      await options.switchAgent?.();
+    },
+    switchModel: async () => {
+      await options.switchModel?.();
+    },
     prompt: async (input) => {
       promptInputs.push(input);
       return promptHandler(input, lifecycleSignal);

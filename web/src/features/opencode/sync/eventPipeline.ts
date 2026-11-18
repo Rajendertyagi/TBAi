@@ -298,8 +298,9 @@ export interface EventPipelineHost {
    *
    * The pipeline owns the buffer, so it owns the fact that the buffer could
    * not hold everything. The controller owns what that MEANS: it logs it, counts
-   * it, and fails the attempt's readiness - because a transcript that lost
-   * events has not been reconciled, and saying otherwise would be a lie.
+   * it, and the reconciliation path fails the attempt's readiness when it
+   * detects the loss - because a transcript that lost events has not been
+   * reconciled, and saying otherwise would be a lie.
    *
    * @param dropped - How many events were dropped.
    * @param retained - How many the buffer still holds.
@@ -682,13 +683,13 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     // 1. a warning names the loss, so the log shows the transcript is
     //    incomplete;
     // 2. the dropped count reaches the domain state, as a diagnostic - so
-    //    the state itself can say "some events were lost";
-    // 3. the attempt's readiness is failed, because a transcript that silently
-    //    lost events is NOT a successful reconciliation, and claiming it was
-    //    would be a lie the reader would act on.
+    //    the state itself can say "some events were lost".
     //
-    // The events themselves are not recovered: they are gone, and the only
-    // honest repair is a fresh read, which the failed readiness triggers.
+    // Readiness is failed by the reconciliation path when it detects the loss,
+    // not here: a transcript that silently lost events is NOT a successful
+    // reconciliation, and claiming it was would be a lie the reader would act
+    // on. The events themselves are not recovered: they are gone, and the only
+    // honest repair is a fresh read, which that failed readiness triggers.
     if (eventBuffer.length > OPENCODE_V2_EVENT_BUFFER_LIMIT) {
       const dropped = eventBuffer.length - OPENCODE_V2_EVENT_BUFFER_LIMIT;
       eventBuffer = eventBuffer.slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);

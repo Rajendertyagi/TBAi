@@ -18,7 +18,9 @@ import {
   resolveManagedServicePid,
   spawnSuspendedIntoJob,
   terminateProcessById,
+  closeNativeHandle,
   type ManagedProcessJob,
+  type NativeHandle,
 } from "../process-ownership";
 import {
   createOpenCodeListeningDiscovery,
@@ -474,6 +476,16 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   /** Every child this manager owns until its exit is observed. */
   private readonly liveChildren = new Set<Subprocess>();
   private readonly managedJobs = new Map<Subprocess, ManagedProcessJob>();
+  /** Native handles owned per managed child; closed exactly once on cleanup. */
+  private readonly managedHandles = new Map<
+    Subprocess,
+    {
+      process: NativeHandle;
+      thread: NativeHandle;
+      stdout: NativeHandle;
+      stderr: NativeHandle;
+    }
+  >();
   private readonly servicePids = new Map<Subprocess, number>();
   /** One durable obligation per child whose cleanup could not initiate. */
   private readonly pendingCleanup = new Map<Subprocess, PendingCleanup>();
@@ -711,9 +723,12 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     } as unknown as Subprocess;
 
     this.managedJobs.set(child, result.job);
-    // store handles for cleanup
-    (child as any).__procHandle = result.processHandle;
-    (child as any).__threadHandle = result.threadHandle;
+    this.managedHandles.set(child, {
+      process: result.processHandle,
+      thread: result.threadHandle,
+      stdout: result.stdoutHandle,
+      stderr: result.stderrHandle,
+    });
     return child;
   }
 
@@ -824,7 +839,10 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.publishedRegistration = null;
+      // Identity-safe: a restart may have published a newer registration while
+      // this removal's async I/O was in flight. Only clear the reference we
+      // actually removed, never a newer one.
+      if (this.publishedRegistration === owned) this.publishedRegistration = null;
     }
     return removed;
   }
@@ -926,6 +944,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
         }
         job.close();
         this.managedJobs.delete(child);
+        this.closeManagedHandles(child);
         try {
           terminateProcessById(servicePid);
         } catch {
@@ -1144,6 +1163,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       }
       this.managedJobs.delete(child);
     }
+    this.closeManagedHandles(child);
     this.servicePids.delete(child);
     // A confirmed exit satisfies every obligation for that child.
     this.pendingCleanup.delete(child);
@@ -1372,7 +1392,22 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     return { ok: false, reason: "termination_unconfirmed", pid: child.pid };
   }
 
+  /** Close all native handles owned for a child, exactly once (map.delete). */
+  private closeManagedHandles(child: Subprocess): void {
+    const handles = this.managedHandles.get(child);
+    if (handles === undefined) return;
+    this.managedHandles.delete(child);
+    for (const h of [handles.process, handles.thread, handles.stdout, handles.stderr]) {
+      try {
+        closeNativeHandle(h);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+
   private async cleanupManagedJob(child: Subprocess): Promise<void> {
+    this.closeManagedHandles(child);
     const job = this.managedJobs.get(child);
     if (job === undefined) return;
     try {

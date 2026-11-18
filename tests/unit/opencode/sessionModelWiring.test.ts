@@ -16,7 +16,10 @@ import * as realOpenCodeClient from "@/services/opencode/client.ts";
  */
 
 /** Every `switchModel` call, and every `session.create` body. */
-let switches: Array<{ sessionID: string; model: { id: string; providerID: string } }>;
+let switches: Array<{
+  sessionID: string;
+  model: { id: string; providerID: string; variant?: string };
+}>;
 let creates: Array<Record<string, unknown>>;
 /** The model the stubbed server reports for an adopted session. */
 let boundModel: { id: string } | null;
@@ -90,7 +93,7 @@ function install() {
         },
         switchModel: async (input: {
           sessionID: string;
-          model: { id: string; providerID: string };
+          model: { id: string; providerID: string; variant?: string };
         }) => {
           switches.push(input);
         },
@@ -131,6 +134,22 @@ describe("the adopt seam — a bound session with no model", () => {
     storedConversation = { ...storedConversation, opencodeModel: "agnes/agnes-3.0-flash" };
     await ensureOpenCodeSession("conv-1");
     expect(switches[0].model).toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
+  });
+
+  // L4: the adopt/repair path must preserve the stored thinking level just as
+  // the create path bakes it into params.model.variant.
+  it("carries the stored variant on the adopt repair path", async () => {
+    storedConversation = {
+      ...storedConversation,
+      opencodeModel: "agnes/agnes-3.0-flash",
+      opencodeVariant: "high",
+    };
+    await ensureOpenCodeSession("conv-1");
+    expect(switches[0].model).toEqual({
+      id: "agnes-3.0-flash",
+      providerID: "agnes",
+      variant: "high",
+    });
   });
 
   it("is left completely alone when it already has a model", async () => {

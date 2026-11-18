@@ -176,3 +176,45 @@ describe("permission policy — the module stays pure", () => {
     expect(source).not.toContain("document.");
   });
 });
+
+/**
+ * M3 / §3-D: the OpenCode client is a runtime boundary. Only features/opencode
+ * may depend on it at runtime; the single allowed exception is the type-only
+ * ToolContent import in tools/opencode/adapt.ts. A value import anywhere else
+ * drags the whole client graph into surfaces (e.g. Direct Chat) that never open
+ * Code mode.
+ */
+describe("OpenCode client runtime boundary", () => {
+  it("has no value import of @opencode/client outside features/opencode", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const webSrc = path.join(REPO_ROOT, "web/src");
+    const allowedTypeOnly = path.join(REPO_ROOT, "web/src/tools/opencode/adapt.ts");
+
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        const source = stripComments(readFileSync(full, "utf8"));
+        // A value import has no `import type` qualifier. Type-only imports are
+        // erased at runtime and do not create a dependency edge. Also catch
+        // dynamic import() and value re-exports, which create the same edge.
+        const valueImport =
+          /import\s+(?!type\b)[^;]*?from\s+["']@opencode\/client["']/m.test(source) ||
+          /import\s*\(\s*["']@opencode\/client["']\s*\)/m.test(source) ||
+          /export\s+(?!type\b)[^;]*?from\s+["']@opencode\/client["']/m.test(source);
+        if (!valueImport) continue;
+        if (full === allowedTypeOnly) continue;
+        if (full.startsWith(path.join(webSrc, "features", "opencode") + path.sep)) continue;
+        offenders.push(path.relative(REPO_ROOT, full));
+      }
+    };
+    walk(webSrc);
+
+    expect(offenders).toEqual([]);
+  });
+});

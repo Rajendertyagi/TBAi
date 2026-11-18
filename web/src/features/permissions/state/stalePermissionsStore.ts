@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import { create } from "zustand";
-import { isPermissionNotFoundError } from "@opencode/client";
 
 /**
  * The canonical wording for "the server no longer holds this permission".
@@ -39,7 +38,18 @@ const PERMISSION_GONE_RE = new RegExp(PERMISSION_GONE_MESSAGE, "i");
  * a plain object would only ever yield "[object Object]".
  */
 export function isPermissionGone(error: unknown): boolean {
-  if (isPermissionNotFoundError(error)) return true;
+  // The OpenCode client's `PermissionNotFoundError` tag, checked locally so
+  // this shared store (also used by normal-chat approval) does not pull the
+  // @opencode/client runtime into the Direct Chat module graph. The tag is a
+  // pinned protocol contract, asserted by clientErrorShape.test.ts.
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    (error as { _tag?: unknown })._tag === "PermissionNotFoundError"
+  ) {
+    return true;
+  }
   const message =
     error instanceof Error
       ? error.message

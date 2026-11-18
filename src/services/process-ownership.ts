@@ -112,8 +112,16 @@ const KERNEL32_SYMBOLS = {
 type Kernel32 = Library<typeof KERNEL32_SYMBOLS>;
 
 let kernel32: Kernel32 | null = null;
+/** Test-only kernel override for deterministic failure-injection of native calls. */
+let kernelOverride: Kernel32 | null = null;
+
+/** Test seam: inject a fake kernel32 (or null to restore the real one). */
+export function setKernelForTests(override: Kernel32 | null): void {
+  kernelOverride = override;
+}
 
 function kernel(): Kernel32 {
+  if (kernelOverride) return kernelOverride;
   if (!IS_WINDOWS) throw new Error("Win32 process ownership is only available on Windows");
   kernel32 ??= dlopen("kernel32.dll", KERNEL32_SYMBOLS);
   return kernel32;
@@ -133,6 +141,11 @@ function pointerOrNull(value: Pointer | bigint | null): NativeHandle | null {
 
 function close(handle: NativeHandle): void {
   kernel().symbols.CloseHandle(handle);
+}
+
+/** Close a native handle owned by a caller (e.g. a managed child's handles). */
+export function closeNativeHandle(handle: NativeHandle): void {
+  close(handle);
 }
 
 /**
@@ -439,10 +452,48 @@ export interface SuspendedSpawnResult {
   pid: number;
   processHandle: NativeHandle;
   threadHandle: NativeHandle;
+  /** Read ends of the stdout/stderr pipes; owned by the caller after spawn. */
+  stdoutHandle: NativeHandle;
+  stderrHandle: NativeHandle;
   job: ManagedProcessJob;
   stdout: ReadableStream<Uint8Array>;
   stderr: ReadableStream<Uint8Array>;
   exited: Promise<number>;
+}
+
+/**
+ * Exactly-once handle guard. Tracks owned handles and closes each at most once
+ * via the supplied callback; `release` transfers ownership to a caller. Pure
+ * and independently testable (no native calls required).
+ */
+export function createHandleGuard(close: (h: NativeHandle) => void): {
+  add(h: NativeHandle): void;
+  closeOnce(h: NativeHandle): void;
+  release(h: NativeHandle): void;
+  closeAll(): void;
+  readonly size: number;
+} {
+  const owned = new Set<NativeHandle>();
+  return {
+    add: (h) => {
+      owned.add(h);
+    },
+    closeOnce: (h) => {
+      if (owned.delete(h)) close(h);
+    },
+    release: (h) => {
+      owned.delete(h);
+    },
+    closeAll: () => {
+      for (const h of [...owned]) {
+        owned.delete(h);
+        close(h);
+      }
+    },
+    get size() {
+      return owned.size;
+    },
+  };
 }
 
 export function spawnSuspendedIntoJob(options: {
@@ -452,192 +503,197 @@ export function spawnSuspendedIntoJob(options: {
 }): SuspendedSpawnResult {
   if (!IS_WINDOWS) throw new Error("suspended spawn is Windows-only");
   const k = kernel();
+
+  // Every native handle acquired below is registered here and closed exactly
+  // once by the finally block, unless ownership is explicitly transferred to
+  // the caller on success. This collapses all failure branches into one path.
+  const guard = createHandleGuard((h) => k.symbols.CloseHandle(h));
+  const closeOnce = (h: NativeHandle): void => guard.closeOnce(h);
+  let jobOwned = true;
+  let attrListReady = false;
+  let attrListPtr: ReturnType<typeof ptr> | null = null;
+
   // 1. per-instance job
   const job = createManagedProcessJob();
-  // 2. pipes + NUL stdin
-  // Open NUL for stdin (valid, inheritable)
-  const nulName = Buffer.from("NUL\0", "utf16le");
-  const nulSa = Buffer.alloc(24);
-  nulSa.writeUInt32LE(24, 0);
-  nulSa.writeUInt32LE(1, 16); // bInheritHandle
-  const nulHandle = k.symbols.CreateFileW(
-    ptr(nulName),
-    GENERIC_READ,
-    FILE_SHARE_READ | FILE_SHARE_WRITE,
-    ptr(nulSa),
-    OPEN_EXISTING,
-    FILE_ATTRIBUTE_NORMAL,
-    0,
-  );
-  if (nulHandle === null || nulHandle === 0n || nulHandle === BigInt("0xFFFFFFFFFFFFFFFF")) {
-    job.close();
-    throw new Error(`CreateFileW(NUL) failed (${k.symbols.GetLastError()})`);
-  }
-
-  const outR = Buffer.alloc(8);
-  const outW = Buffer.alloc(8);
-  const errR = Buffer.alloc(8);
-  const errW = Buffer.alloc(8);
-  // SECURITY_ATTRIBUTES with bInheritHandle=TRUE
-  const sa = Buffer.alloc(24);
-  sa.writeUInt32LE(24, 0);
-  // lpSecurityDescriptor = null (offset 8)
-  sa.writeUInt32LE(1, 16); // bInheritHandle at offset 16
-  if (k.symbols.CreatePipe(ptr(outR), ptr(outW), ptr(sa), 0) === 0) {
-    job.close();
-    throw new Error(`CreatePipe stdout failed (${k.symbols.GetLastError()})`);
-  }
-  if (k.symbols.CreatePipe(ptr(errR), ptr(errW), ptr(sa), 0) === 0) {
-    job.close();
-    throw new Error(`CreatePipe stderr failed (${k.symbols.GetLastError()})`);
-  }
-  const outRHandle = outR.readBigUInt64LE(0);
-  const outWHandle = outW.readBigUInt64LE(0);
-  const errRHandle = errR.readBigUInt64LE(0);
-  const errWHandle = errW.readBigUInt64LE(0);
-  // make read ends non-inheritable
-  k.symbols.SetHandleInformation(outRHandle as unknown as NativeHandle, HANDLE_FLAG_INHERIT, 0);
-  k.symbols.SetHandleInformation(errRHandle as unknown as NativeHandle, HANDLE_FLAG_INHERIT, 0);
-
-  // 3. env block
-  // env is passed via CreateProcessW environment block (inherited if empty)
-  const envEntries = `${Object.entries(options.env)
-    .map(([a, b]) => `${a}=${b}\0`)
-    .join("")}\0`;
-  const envBuf = Buffer.from(envEntries, "utf16le");
-  const cwdBuf = Buffer.from(`${options.cwd}\0`, "utf16le");
-  // STARTUPINFOEXW: STARTUPINFOW(104) + lpAttributeList(8) = 112 bytes
-  const si = Buffer.alloc(STARTUPINFOEX_SIZE);
-  si.writeUInt32LE(112, 0); // cb = sizeof(STARTUPINFOEXW)
-  si.writeUInt32LE(STARTF_USESTDHANDLES, 60); // dwFlags
-  const writeHandle = (buf: Buffer, off: number, h: NativeHandle) =>
-    buf.writeBigUInt64LE(BigInt(h as unknown as number | bigint), off);
-  writeHandle(si, 80, nulHandle as unknown as bigint); // hStdInput = NUL
-  writeHandle(si, 88, outWHandle); // hStdOutput
-  writeHandle(si, 96, errWHandle); // hStdError
-
-  // Restricted handle inheritance: NUL stdin + stdout/stderr write ends.
-  const handleList = Buffer.alloc(24); // 3 handles * 8 bytes
-  handleList.writeBigUInt64LE(BigInt(nulHandle as unknown as number | bigint), 0);
-  handleList.writeBigUInt64LE(BigInt(outWHandle as unknown as number | bigint), 8);
-  handleList.writeBigUInt64LE(BigInt(errWHandle as unknown as number | bigint), 16);
-
-  const sizeBuf = Buffer.alloc(8);
-  k.symbols.InitializeProcThreadAttributeList(0, 1, 0, ptr(sizeBuf));
-  const attrSize = Number(sizeBuf.readBigUInt64LE(0));
-  const attrList = Buffer.alloc(attrSize);
-  if (k.symbols.InitializeProcThreadAttributeList(ptr(attrList), 1, 0, ptr(sizeBuf)) === 0) {
-    k.symbols.CloseHandle(nulHandle as unknown as NativeHandle);
-    throw new Error(`InitializeProcThreadAttributeList failed (${k.symbols.GetLastError()})`);
-  }
-  if (
-    k.symbols.UpdateProcThreadAttribute(
-      ptr(attrList),
-      0,
-      PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-      ptr(handleList),
-      handleList.length,
-      0,
-      0,
-    ) === 0
-  ) {
-    k.symbols.DeleteProcThreadAttributeList(ptr(attrList));
-    k.symbols.CloseHandle(nulHandle as unknown as NativeHandle);
-    throw new Error(`UpdateProcThreadAttribute failed (${k.symbols.GetLastError()})`);
-  }
-  si.writeBigUInt64LE(BigInt(ptr(attrList) as unknown as number), 104);
-
-  const pi = Buffer.alloc(24);
-  const cmdBuf = Buffer.from(`${options.commandLine}\0`, "utf16le");
-
-  const ok = k.symbols.CreateProcessW(
-    0,
-    ptr(cmdBuf),
-    0,
-    0,
-    1, // bInheritHandles=TRUE (restricted by handle list)
-    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-    ptr(envBuf),
-    ptr(cwdBuf),
-    ptr(si),
-    ptr(pi),
-  );
-
-  k.symbols.DeleteProcThreadAttributeList(ptr(attrList));
-
-  if (ok === 0) {
-    k.symbols.DeleteProcThreadAttributeList(ptr(attrList));
-    k.symbols.CloseHandle(nulHandle as unknown as NativeHandle);
-    throw new Error(`CreateProcessW failed (${k.symbols.GetLastError()})`);
-  }
-  k.symbols.CloseHandle(nulHandle as unknown as NativeHandle); // child inherited it
-
-  const hProcess = pi.readBigUInt64LE(0);
-  const hThread = pi.readBigUInt64LE(8);
-  const pid = pi.readUInt32LE(16);
-
-  // 5. assign to job
-  const procHandle = hProcess as unknown as NativeHandle;
   try {
+    // 2. pipes + NUL stdin
+    const nulName = Buffer.from("NUL\0", "utf16le");
+    const nulSa = Buffer.alloc(24);
+    nulSa.writeUInt32LE(24, 0);
+    nulSa.writeUInt32LE(1, 16); // bInheritHandle
+    const nulHandle = k.symbols.CreateFileW(
+      ptr(nulName),
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      ptr(nulSa),
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      0,
+    );
+    if (nulHandle === null || nulHandle === 0n || nulHandle === BigInt("0xFFFFFFFFFFFFFFFF")) {
+      throw new Error(`CreateFileW(NUL) failed (${k.symbols.GetLastError()})`);
+    }
+    guard.add(nulHandle as unknown as NativeHandle);
+
+    const outR = Buffer.alloc(8);
+    const outW = Buffer.alloc(8);
+    const errR = Buffer.alloc(8);
+    const errW = Buffer.alloc(8);
+    const sa = Buffer.alloc(24);
+    sa.writeUInt32LE(24, 0);
+    sa.writeUInt32LE(1, 16); // bInheritHandle
+    if (k.symbols.CreatePipe(ptr(outR), ptr(outW), ptr(sa), 0) === 0) {
+      throw new Error(`CreatePipe stdout failed (${k.symbols.GetLastError()})`);
+    }
+    const outRHandle = outR.readBigUInt64LE(0);
+    const outWHandle = outW.readBigUInt64LE(0);
+    guard.add(outRHandle as unknown as NativeHandle);
+    guard.add(outWHandle as unknown as NativeHandle);
+    if (k.symbols.CreatePipe(ptr(errR), ptr(errW), ptr(sa), 0) === 0) {
+      throw new Error(`CreatePipe stderr failed (${k.symbols.GetLastError()})`);
+    }
+    const errRHandle = errR.readBigUInt64LE(0);
+    const errWHandle = errW.readBigUInt64LE(0);
+    guard.add(errRHandle as unknown as NativeHandle);
+    guard.add(errWHandle as unknown as NativeHandle);
+    // make read ends non-inheritable
+    k.symbols.SetHandleInformation(outRHandle as unknown as NativeHandle, HANDLE_FLAG_INHERIT, 0);
+    k.symbols.SetHandleInformation(errRHandle as unknown as NativeHandle, HANDLE_FLAG_INHERIT, 0);
+
+    // 3. env block
+    const envEntries = `${Object.entries(options.env)
+      .map(([a, b]) => `${a}=${b}\0`)
+      .join("")}\0`;
+    const envBuf = Buffer.from(envEntries, "utf16le");
+    const cwdBuf = Buffer.from(`${options.cwd}\0`, "utf16le");
+    const si = Buffer.alloc(STARTUPINFOEX_SIZE);
+    si.writeUInt32LE(112, 0); // cb = sizeof(STARTUPINFOEXW)
+    si.writeUInt32LE(STARTF_USESTDHANDLES, 60); // dwFlags
+    const writeHandle = (buf: Buffer, off: number, h: NativeHandle) =>
+      buf.writeBigUInt64LE(BigInt(h as unknown as number | bigint), off);
+    writeHandle(si, 80, nulHandle as unknown as bigint); // hStdInput = NUL
+    writeHandle(si, 88, outWHandle); // hStdOutput
+    writeHandle(si, 96, errWHandle); // hStdError
+
+    const handleList = Buffer.alloc(24); // 3 handles * 8 bytes
+    handleList.writeBigUInt64LE(BigInt(nulHandle as unknown as number | bigint), 0);
+    handleList.writeBigUInt64LE(BigInt(outWHandle as unknown as number | bigint), 8);
+    handleList.writeBigUInt64LE(BigInt(errWHandle as unknown as number | bigint), 16);
+
+    const sizeBuf = Buffer.alloc(8);
+    k.symbols.InitializeProcThreadAttributeList(0, 1, 0, ptr(sizeBuf));
+    const attrSize = Number(sizeBuf.readBigUInt64LE(0));
+    const attrList = Buffer.alloc(attrSize);
+    if (k.symbols.InitializeProcThreadAttributeList(ptr(attrList), 1, 0, ptr(sizeBuf)) === 0) {
+      throw new Error(`InitializeProcThreadAttributeList failed (${k.symbols.GetLastError()})`);
+    }
+    attrListReady = true;
+    attrListPtr = ptr(attrList);
+    if (
+      k.symbols.UpdateProcThreadAttribute(
+        ptr(attrList),
+        0,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        ptr(handleList),
+        handleList.length,
+        0,
+        0,
+      ) === 0
+    ) {
+      throw new Error(`UpdateProcThreadAttribute failed (${k.symbols.GetLastError()})`);
+    }
+    si.writeBigUInt64LE(BigInt(ptr(attrList) as unknown as number), 104);
+
+    const pi = Buffer.alloc(24);
+    const cmdBuf = Buffer.from(`${options.commandLine}\0`, "utf16le");
+    const ok = k.symbols.CreateProcessW(
+      0,
+      ptr(cmdBuf),
+      0,
+      0,
+      1, // bInheritHandles=TRUE (restricted by handle list)
+      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+      ptr(envBuf),
+      ptr(cwdBuf),
+      ptr(si),
+      ptr(pi),
+    );
+    // Delete the attribute list exactly once, immediately after CreateProcessW
+    // (the previous code deleted it twice on failure).
+    if (attrListReady && attrListPtr !== null) {
+      k.symbols.DeleteProcThreadAttributeList(attrListPtr);
+      attrListReady = false;
+    }
+    if (ok === 0) {
+      throw new Error(`CreateProcessW failed (${k.symbols.GetLastError()})`);
+    }
+    closeOnce(nulHandle as unknown as NativeHandle); // child inherited it
+
+    const hProcess = pi.readBigUInt64LE(0);
+    const hThread = pi.readBigUInt64LE(8);
+    const pid = pi.readUInt32LE(16);
+    const procHandle = hProcess as unknown as NativeHandle;
+    const threadHandle = hThread as unknown as NativeHandle;
+    guard.add(procHandle);
+    guard.add(threadHandle);
+
+    // 5. assign to job
     job.assign(pid);
-  } catch (e) {
-    // terminate, cleanup
-    k.symbols.TerminateProcess(procHandle, 1);
-    k.symbols.CloseHandle(hThread as unknown as NativeHandle);
-    k.symbols.CloseHandle(procHandle);
-    k.symbols.CloseHandle(outRHandle as unknown as NativeHandle);
-    k.symbols.CloseHandle(errRHandle as unknown as NativeHandle);
-    k.symbols.CloseHandle(nulHandle as unknown as NativeHandle);
-    job.close();
-    throw e;
-  }
-  // verify membership
-  if (!job.isInJob(pid)) {
-    k.symbols.TerminateProcess(procHandle, 1);
-    k.symbols.CloseHandle(hThread as unknown as NativeHandle);
-    k.symbols.CloseHandle(procHandle);
-    k.symbols.CloseHandle(outRHandle as unknown as NativeHandle);
-    k.symbols.CloseHandle(errRHandle as unknown as NativeHandle);
-    k.symbols.CloseHandle(nulHandle as unknown as NativeHandle);
-    job.close();
-    throw new OpenCodeProcessOwnershipError(`service pid ${pid} not in job after assignment`);
-  }
+    if (!job.isInJob(pid)) {
+      k.symbols.TerminateProcess(procHandle, 1);
+      throw new OpenCodeProcessOwnershipError(`service pid ${pid} not in job after assignment`);
+    }
 
-  // close write ends in parent
-  k.symbols.CloseHandle(outWHandle as unknown as NativeHandle);
-  k.symbols.CloseHandle(errWHandle as unknown as NativeHandle);
+    // close write ends in parent (read ends stay owned by the streams/caller)
+    closeOnce(outWHandle as unknown as NativeHandle);
+    closeOnce(errWHandle as unknown as NativeHandle);
 
-  // 6. resume
-  k.symbols.ResumeThread(hThread as unknown as NativeHandle);
+    // 6. resume
+    k.symbols.ResumeThread(threadHandle);
 
-  // 7. wrap pipes in ReadableStreams
-  const stdout = pipeToReadableStream(outRHandle as unknown as NativeHandle);
-  const stderr = pipeToReadableStream(errRHandle as unknown as NativeHandle);
+    // 7. wrap pipes in ReadableStreams
+    const stdout = pipeToReadableStream(outRHandle as unknown as NativeHandle);
+    const stderr = pipeToReadableStream(errRHandle as unknown as NativeHandle);
 
-  // exited promise
-  const exited = new Promise<number>((resolve) => {
-    const poll = () => {
-      const r = k.symbols.WaitForSingleObject(procHandle, 0);
-      if (r === 0) {
-        const codeBuf = Buffer.alloc(4);
-        k.symbols.GetExitCodeProcess(procHandle, ptr(codeBuf));
-        resolve(codeBuf.readUInt32LE(0));
-      } else {
-        setTimeout(poll, 50);
-      }
+    // exited promise
+    const exited = new Promise<number>((resolve) => {
+      const poll = () => {
+        const r = k.symbols.WaitForSingleObject(procHandle, 0);
+        if (r === 0) {
+          const codeBuf = Buffer.alloc(4);
+          k.symbols.GetExitCodeProcess(procHandle, ptr(codeBuf));
+          resolve(codeBuf.readUInt32LE(0));
+        } else {
+          setTimeout(poll, 50);
+        }
+      };
+      setTimeout(poll, 50);
+    });
+
+    // Ownership of these handles transfers to the caller / streams.
+    guard.release(procHandle);
+    guard.release(threadHandle);
+    guard.release(outRHandle as unknown as NativeHandle);
+    guard.release(errRHandle as unknown as NativeHandle);
+    jobOwned = false;
+    return {
+      pid,
+      processHandle: procHandle,
+      threadHandle,
+      stdoutHandle: outRHandle as unknown as NativeHandle,
+      stderrHandle: errRHandle as unknown as NativeHandle,
+      job,
+      stdout,
+      stderr,
+      exited,
     };
-    setTimeout(poll, 50);
-  });
-
-  return {
-    pid,
-    processHandle: procHandle,
-    threadHandle: hThread as unknown as NativeHandle,
-    job,
-    stdout,
-    stderr,
-    exited,
-  };
+  } finally {
+    if (attrListReady && attrListPtr !== null) {
+      k.symbols.DeleteProcThreadAttributeList(attrListPtr);
+    }
+    guard.closeAll();
+    if (jobOwned) job.close();
+  }
 }
 
 export class OpenCodeLauncherUnsupportedError extends Error {

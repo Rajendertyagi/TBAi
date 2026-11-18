@@ -555,12 +555,10 @@ export function createV2ThreadController(
    *
    * 1. a **warning**, so the log shows the transcript is incomplete;
    * 2. a **diagnostic count** in the domain state, so the state itself can
-   *    say that some events were lost;
-   * 3. the attempt's **readiness is failed**, so the runtime does not claim a
-   *    successful reconciliation. A transcript that silently lost events is
-   *    not reconciled, and the only honest repair is a fresh read - which the
-   *    failed readiness schedules.
+   *    say that some events were lost.
    *
+   * Readiness is NOT failed here: the reconciliation path owns that decision
+   * (it commits the transcript and fails readiness when it detects the loss).
    * The events themselves are gone; nothing here pretends otherwise.
    *
    * @param dropped - How many events were dropped.
@@ -1608,11 +1606,11 @@ export function createV2ThreadController(
       // the runtime reconciled, and it did not: events were lost and they are
       // not recovered.
       //
-      // The attempt's readiness was ALREADY failed when the overflow was
-      // reported - that is the report's own repair, and it is why this
-      // hydration never reaches the commit. The count is still recorded here,
-      // because the overflow may have been reported before the attempt
-      // existed, and the state must carry the loss either way.
+      // This throw is what fails the attempt's readiness: the overflow report
+      // only records the count and warns, leaving the reconciliation decision
+      // here. The count is still dispatched because the overflow may have been
+      // reported before the attempt existed, and the state must carry the loss
+      // either way.
       dispatch({ type: "events_dropped", count: dropped });
       throw new V2ControllerError({
         kind: "network",
@@ -2370,7 +2368,17 @@ export function createV2ThreadController(
       } satisfies V2PromptSendError;
     }
 
-    await applySelection();
+    try {
+      await applySelection();
+    } catch (error) {
+      // Nothing was dispatched: the prompt is definitively not admitted. Settle
+      // the record so it is terminal (and therefore evictable) instead of
+      // leaving an unprotected, non-evictable "submitting" record behind. No
+      // protections were acquired yet (they are acquired after selection), and
+      // no optimistic message was dispatched, so there is nothing to roll back.
+      prompts.settleVerdict(messageId, "definitive-failure");
+      throw error;
+    }
     const payload = toV2PromptInput(message);
     const localMessage = optimisticMessage(message, messageId);
     dispatch({ type: "prompt_submitting", message: localMessage });

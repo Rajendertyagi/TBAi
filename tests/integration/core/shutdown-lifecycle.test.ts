@@ -16,6 +16,12 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { startServer, shutdownServer } from "@/server.ts";
 import { db } from "@/db";
 import { logger } from "@/lib/logger.ts";
+import {
+  installManagedTarget,
+  readConnectionState,
+  readShutdownState,
+} from "@/services/opencode/connectionState.ts";
+import { describeOpenCodeRuntime } from "@/services/opencode/runtimeTarget.ts";
 
 // Logger level is global singleton state shared across test files.
 beforeEach(() => {
@@ -36,6 +42,16 @@ describe("shutdown lifecycle", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
 
+    // Simulate a published managed target so the production shutdown path has
+    // real connection state to clear (the real child is never started here).
+    const targetId = installManagedTarget({
+      baseUrl: "http://127.0.0.1:59999",
+      password: "shutdown-test",
+    });
+    expect(describeOpenCodeRuntime().mode).toBe("managed");
+    expect(describeOpenCodeRuntime().targetId).toBe(targetId);
+    const epochBefore = readShutdownState().shutdownEpoch;
+
     // Graceful shutdown: resolves without throwing.
     // Repeated triggers share the same completion: both callers observe the
     // one teardown rather than racing a second one.
@@ -44,6 +60,15 @@ describe("shutdown lifecycle", () => {
     expect(second).toBe(first);
     await first;
     await second;
+
+    // Production shutdown must run the canonical beginShutdown() contract:
+    // the shutdown latch is set, the epoch advances exactly once, and no
+    // stale managed target / usable URL survives.
+    expect(readShutdownState().shutdownStarted).toBe(true);
+    expect(readShutdownState().shutdownEpoch).toBe(epochBefore + 1);
+    expect(describeOpenCodeRuntime().mode).toBe("unresolved");
+    expect(describeOpenCodeRuntime().targetId).toBeNull();
+    expect(readConnectionState().target.mode).toBe("unresolved");
 
     // The shared db singleton is now closed: a query must throw.
     let threw = false;

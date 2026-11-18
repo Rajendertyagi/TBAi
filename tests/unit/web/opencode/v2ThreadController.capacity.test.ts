@@ -110,6 +110,65 @@ describe("P4 prompt capacity backpressure", () => {
     }
   });
 
+  // M1 / §3-B: a rejected model/agent selection before dispatch must not leave
+  // a non-terminal, non-evictable prompt record behind.
+  it("settles the prompt record when selection fails before dispatch", async () => {
+    const generation = createGeneration(1, {
+      switchModel: async () => {
+        throw new Error("model switch refused");
+      },
+    });
+    const prompts = createPromptsInFlight(CAPACITY_POLICY);
+    const controller = createV2ThreadController(
+      createClient([generation]),
+      { promptAdmissionTimeoutMs: 2_000 },
+      {
+        conversationId: "conv_selection_failure",
+        fetchActivity: async () => "not-running",
+        lifecycleStores: { prompts },
+      },
+    );
+
+    try {
+      await controller.awaitReady();
+      // Make modelChanged true so sendMessage invokes switchModel.
+      controller.setDesiredSelection({
+        model: { providerID: "test-provider", modelID: "different-model" },
+        agent: null,
+      });
+
+      const err = await controller
+        .sendMessage(USER_MESSAGE, { messageId: "msg_orphan", delivery: "steer" })
+        .then(
+          () => null,
+          (e) => e,
+        );
+      expect(err).toBeTruthy();
+      expect(generation.promptInputs).toHaveLength(0); // nothing dispatched
+
+      // The record must be terminal (settled) and reclaimable by a sweep —
+      // before the fix it stays phase="submitting", verdict=null, non-evictable.
+      const rec = prompts.get("msg_orphan");
+      expect(rec?.terminal).not.toBeNull();
+      prompts.sweep(Date.now() + 86_400_000);
+      expect(prompts.get("msg_orphan")).toBeUndefined();
+
+      // A later submission is not blocked by the orphaned slot. Clear the
+      // failing desired selection first so the retry can proceed.
+      controller.setDesiredSelection({ model: null, agent: null });
+      generation.setPromptHandler(async () => userInbox("inbox_after", "steer"));
+      await expect(
+        controller.sendMessage(USER_MESSAGE, { messageId: "msg_after", delivery: "steer" }),
+      ).resolves.toEqual({
+        messageId: "msg_after",
+        inboxId: "inbox_after",
+        delivery: "steer",
+      });
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("reports a capacity refusal as recoverable, never as a network failure", async () => {
     const generation = createGeneration(1);
     const prompts = createPromptsInFlight(CAPACITY_POLICY);

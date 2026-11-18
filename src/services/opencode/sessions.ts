@@ -355,6 +355,7 @@ async function assignSessionModelIfMissing(
   storedModelId: string | null | undefined,
   sessionId: string,
   boundModel: string | null,
+  storedVariant?: string | null,
 ): Promise<void> {
   try {
     // Both lookups go through THIS service's client: an adopted session must be
@@ -365,7 +366,13 @@ async function assignSessionModelIfMissing(
     if (!target) return;
     await client.session.switchModel({
       sessionID: sessionId,
-      model: { id: target.id, providerID: target.providerID },
+      model: {
+        id: target.id,
+        providerID: target.providerID,
+        // Preserve the stored thinking level on the adopt/repair path just as
+        // the create path bakes it into params.model.variant.
+        ...(storedVariant ? { variant: storedVariant } : {}),
+      },
     });
     logger.info("opencode", "opencode.session_model_assigned", {
       conversationId,
@@ -797,28 +804,79 @@ export interface EnsureSessionOptions {
   }>;
 }
 
+type PermissionRule = NonNullable<EnsureSessionOptions["permissions"]>[number];
+
+/** Effect severity for the most-restrictive-wins merge (deny > ask > allow). */
+const EFFECT_RANK: Record<PermissionRule["effect"], number> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+};
+
+/**
+ * Merge permission sets from concurrent callers so a security-sensitive caller
+ * is never silently discarded by a less restrictive one. Rules are keyed by
+ * (action, resource); the most restrictive effect wins. `undefined` inputs are
+ * ignored (no explicit restrictions). Returns `undefined` when no caller
+ * supplied permissions, preserving the server-default path.
+ */
+export function mergeSessionPermissions(
+  ...sets: ReadonlyArray<ReadonlyArray<PermissionRule> | undefined>
+): ReadonlyArray<PermissionRule> | undefined {
+  const merged = new Map<string, PermissionRule>();
+  for (const set of sets) {
+    if (!set) continue;
+    for (const rule of set) {
+      const key = `${rule.action}|${rule.resource}`;
+      const existing = merged.get(key);
+      if (!existing || EFFECT_RANK[rule.effect] > EFFECT_RANK[existing.effect]) {
+        merged.set(key, rule);
+      }
+    }
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
+
+interface InFlightEnsure {
+  readonly promise: Promise<OpenCodeSessionBinding>;
+  /** Mutable: later callers merge their restrictions before create reads them. */
+  options: EnsureSessionOptions;
+}
+
 export async function ensureOpenCodeSession(
   conversationId: string,
   options?: EnsureSessionOptions,
 ): Promise<OpenCodeSessionBinding> {
   // Phase 4 singleflight: concurrent callers for one conversation share a
-  // single ensure — no second session.create, no last-writer-wins orphan.
-  // (The persisted pointer covers the sequential case; this covers overlap.)
-  const inFlightKey = options?.permissions ? `${conversationId}:custom_perms` : conversationId;
-  const inFlight = sessionEnsuresInFlight.get(inFlightKey);
-  if (inFlight) return inFlight;
-  const ensure = ensureOpenCodeSessionInner(conversationId, options);
-  sessionEnsuresInFlight.set(inFlightKey, ensure);
+  // single ensure — no second session.create, no last-writer-wins orphan. The
+  // key is per-conversation (NOT per permission shape): two callers with
+  // different option shapes must still dedupe. A later caller's permissions are
+  // merged into the in-flight options with most-restrictive-wins so a
+  // security-sensitive caller is never silently discarded.
+  const inFlight = sessionEnsuresInFlight.get(conversationId);
+  if (inFlight) {
+    if (options?.permissions) {
+      inFlight.options.permissions = mergeSessionPermissions(
+        inFlight.options.permissions,
+        options.permissions,
+      );
+    }
+    return inFlight.promise;
+  }
+  const sharedOptions: EnsureSessionOptions = { ...(options ?? {}) };
+  const ensure = ensureOpenCodeSessionInner(conversationId, sharedOptions);
+  const entry: InFlightEnsure = { promise: ensure, options: sharedOptions };
+  sessionEnsuresInFlight.set(conversationId, entry);
   try {
     return await ensure;
   } finally {
-    if (sessionEnsuresInFlight.get(inFlightKey) === ensure) {
-      sessionEnsuresInFlight.delete(inFlightKey);
+    if (sessionEnsuresInFlight.get(conversationId) === entry) {
+      sessionEnsuresInFlight.delete(conversationId);
     }
   }
 }
 
-const sessionEnsuresInFlight = new Map<string, Promise<OpenCodeSessionBinding>>();
+const sessionEnsuresInFlight = new Map<string, InFlightEnsure>();
 
 async function ensureOpenCodeSessionInner(
   conversationId: string,
@@ -883,6 +941,7 @@ async function ensureOpenCodeSessionInner(
         conversation.opencodeModel,
         live.id,
         live.model,
+        conversation.opencodeVariant,
       );
       return {
         sessionId: live.id,
@@ -1169,6 +1228,15 @@ async function ensureOpenCodeSessionInner(
 
     const attempt = async (): Promise<string> => {
       responseMismatch = false;
+      // Refresh permissions from the shared options at dispatch time: a later
+      // caller may have merged stricter rules into `options.permissions` after
+      // `params` was first built. Snapshotting only once could silently drop
+      // those restrictions from the created session.
+      if (options?.permissions) {
+        params.permissions = options.permissions;
+      } else {
+        delete params.permissions;
+      }
       const session = await client.session.create(params);
       const responseId =
         extractSessionId(session) ?? (typeof session?.id === "string" ? session.id : "");

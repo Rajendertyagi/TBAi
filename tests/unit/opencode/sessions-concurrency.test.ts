@@ -38,6 +38,16 @@ import * as realOpenCodeClient from "@/services/opencode/client.ts";
 let createCalls = 0;
 let conversation: Record<string, unknown> | null = null;
 let updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
+let createEntered = 0;
+let releaseCreate: (() => void) | null = null;
+let createBarrier: Promise<void> | null = null;
+let lastCreatePermissions:
+  | ReadonlyArray<{ action: string; resource: string; effect: string }>
+  | undefined;
+// Barrier at model.default (after params.permissions snapshot, before create).
+let modelDefaultEntered = 0;
+let releaseModelDefault: (() => void) | null = null;
+let modelDefaultBarrier: Promise<void> | null = null;
 
 mock.module("@/services/storage", () => ({
   conversationService: {
@@ -66,11 +76,13 @@ mock.module("@/services/opencode/client", () => ({
       get: async () => {
         throw new Error("not reached: no stored session in this probe");
       },
-      create: async (args: { id: string }) => {
+      create: async (args: { id: string; permissions?: typeof lastCreatePermissions }) => {
         createCalls += 1;
-        // Hold the race window open so both callers overlap inside `create`
-        // instead of one finishing before the other starts.
-        await Bun.sleep(25);
+        createEntered += 1;
+        lastCreatePermissions = args.permissions;
+        // Deterministic barrier: hold until the test releases it, so both
+        // callers overlap inside `create` regardless of timing.
+        if (createBarrier) await createBarrier;
         // The real server echoes the caller-supplied id (RT-001).
         return { id: args.id };
       },
@@ -80,7 +92,14 @@ mock.module("@/services/opencode/client", () => ({
     // unbound and this file keeps asserting only what it is about: the create
     // dedup. Not recorded in the create counter, which must stay exact.
     agent: { list: async () => ({ data: [] }) },
-    model: { list: async () => ({ data: [] }), default: async () => ({ data: null }) },
+    model: {
+      list: async () => ({ data: [] }),
+      default: async () => {
+        modelDefaultEntered += 1;
+        if (modelDefaultBarrier) await modelDefaultBarrier;
+        return { data: null };
+      },
+    },
   }),
 }));
 
@@ -101,6 +120,17 @@ const { ensureOpenCodeSession } = await import("@/services/opencode/sessions.ts"
 
 beforeEach(() => {
   createCalls = 0;
+  createEntered = 0;
+  lastCreatePermissions = undefined;
+  releaseCreate = null;
+  createBarrier = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  modelDefaultEntered = 0;
+  releaseModelDefault = null;
+  modelDefaultBarrier = new Promise<void>((resolve) => {
+    releaseModelDefault = resolve;
+  });
   updates = [];
   conversation = {
     engine: "opencode",
@@ -113,11 +143,74 @@ beforeEach(() => {
 
 describe("ensureOpenCodeSession — concurrent first-session race", () => {
   it("two concurrent calls with no stored session create EXACTLY ONE session and share its id", async () => {
-    const [first, second] = await Promise.all([
-      ensureOpenCodeSession("conv-race"),
-      ensureOpenCodeSession("conv-race"),
-    ]);
+    const firstP = ensureOpenCodeSession("conv-race");
+    const secondP = ensureOpenCodeSession("conv-race");
+    // Release the model-resolution barrier so the flow reaches create.
+    for (let i = 0; i < 100 && modelDefaultEntered === 0; i += 1) await Bun.sleep(1);
+    releaseModelDefault?.();
+    // With the fix both callers dedupe into one create; without it two creates
+    // are entered. Release once at least one create is in flight.
+    for (let i = 0; i < 100 && createEntered === 0; i += 1) await Bun.sleep(1);
+    releaseCreate?.();
+    const [first, second] = await Promise.all([firstP, secondP]);
     expect(createCalls).toBe(1);
     expect(first.sessionId).toBe(second.sessionId);
+  });
+
+  // M2 / §3-C: different option shapes must still dedupe, and a security-
+  // sensitive caller's permissions must not be silently discarded.
+  it("concurrent calls with different permission shapes create one session with merged restrictions", async () => {
+    const { READ_ONLY_PERMISSIONS } = await import("@/services/opencode/sessions.ts");
+    const firstP = ensureOpenCodeSession("conv-race-shapes"); // no options (user path)
+    const secondP = ensureOpenCodeSession("conv-race-shapes", {
+      permissions: READ_ONLY_PERMISSIONS,
+    }); // scheduler path
+    for (let i = 0; i < 100 && modelDefaultEntered === 0; i += 1) await Bun.sleep(1);
+    releaseModelDefault?.();
+    for (let i = 0; i < 100 && createEntered === 0; i += 1) await Bun.sleep(1);
+    releaseCreate?.();
+    const [first, second] = await Promise.all([firstP, secondP]);
+
+    expect(createCalls).toBe(1); // RED before fix: 2
+    expect(first.sessionId).toBe(second.sessionId); // RED before fix: different ids
+
+    // The READ_ONLY caller's restrictions must be honored even though the
+    // no-options caller arrived first: most-restrictive-wins merge.
+    expect(lastCreatePermissions).toBeDefined();
+    const editRule = lastCreatePermissions!.find((r) => r.action === "edit");
+    expect(editRule?.effect).toBe("deny");
+    const shellRule = lastCreatePermissions!.find((r) => r.action === "shell");
+    expect(shellRule?.effect).toBe("deny");
+  });
+
+  // F1 (independent audit): a restrictive caller joining AFTER the initial
+  // params.permissions snapshot but before create dispatch must still have its
+  // restrictions included. The fix refreshes params.permissions at dispatch.
+  it("includes permissions merged after the initial snapshot at create dispatch", async () => {
+    const { READ_ONLY_PERMISSIONS } = await import("@/services/opencode/sessions.ts");
+    // First caller with no options: snapshots params.permissions (undefined),
+    // then blocks at model.default (after snapshot, before create).
+    const firstP = ensureOpenCodeSession("conv-late-merge");
+    for (let i = 0; i < 100 && modelDefaultEntered === 0; i += 1) await Bun.sleep(1);
+    expect(modelDefaultEntered).toBe(1);
+
+    // Late joiner merges restrictive permissions into the shared options while
+    // the first caller is suspended between snapshot and create.
+    const secondP = ensureOpenCodeSession("conv-late-merge", {
+      permissions: READ_ONLY_PERMISSIONS,
+    });
+
+    // Release model resolution, then the create barrier.
+    releaseModelDefault?.();
+    for (let i = 0; i < 100 && createEntered === 0; i += 1) await Bun.sleep(1);
+    releaseCreate?.();
+    await Promise.all([firstP, secondP]);
+
+    expect(createCalls).toBe(1);
+    // The create must carry the late-merged restrictions (RED before the
+    // dispatch-time refresh: params.permissions was snapshotted as undefined).
+    expect(lastCreatePermissions).toBeDefined();
+    expect(lastCreatePermissions!.find((r) => r.action === "edit")?.effect).toBe("deny");
+    expect(lastCreatePermissions!.find((r) => r.action === "shell")?.effect).toBe("deny");
   });
 });
