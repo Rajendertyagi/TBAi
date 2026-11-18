@@ -75,6 +75,120 @@ Follow these phases in order:
   obtaining the required permission.
 - Keep decisions and unresolved questions explicit.
 
+## 6. GitHub-first review workflow
+
+This section makes the workflow in §2 concrete when a GitHub remote is
+available. It does **not** replace §2–§5, `AGENTS.md`, or
+`docs/engineering-quality.md`; it links to them. GitHub-first is the default,
+not an optional suggestion, and applies to small fixes and architectural
+changes alike. The actual remote branch and commit are the review source of
+truth — not an agent's summary, a pasted diff, or a local-only working tree.
+
+### Roles
+
+- **Project manager** — owns requirements, architecture direction, plan review
+  and approval, and the independent post-push review. Retrieves evidence from
+  GitHub directly instead of asking the user to supply it.
+- **Implementation agent** — executes only the approved, limited task; writes
+  tests before fixes where practical; runs the required gates; reports exact
+  commands, results, exit codes, branch, commit SHA, and changed files. It does
+  not self-approve, expand scope, or declare its own work independently verified.
+- **Independent reviewer** — reviews the **pushed commit** from GitHub, not the
+  implementation agent's summary. Challenges correctness, regressions, weak
+  tests, scope, and architecture, and reports findings with file/line evidence.
+
+### A. Repository inspection
+
+- Identify the repository (`git remote -v`), the active branch, and the latest
+  remote commit (`git ls-remote`, `gh api`, or a fetch plus
+  `git rev-parse origin/<branch>`).
+- Inspect the relevant files directly from GitHub (API/raw content, or a local
+  checkout of the fetched remote ref).
+- Review commit history and compare the proposed change against its **parent
+  commit** (`git show <sha>`, `git diff <sha>^ <sha>`, or the GitHub commit API).
+- Inspect related callers, dependencies, tests, configuration, and documentation
+  — not only the changed lines.
+- Check branch divergence (`git rev-list --left-right --count HEAD...origin/<branch>`)
+  and unrelated changes where relevant.
+- Treat the actual remote branch and commit as the review source of truth.
+
+### B. Independent investigation
+
+- Establish the requirement or reproduce the defect before proposing a change.
+- Trace the complete affected execution path.
+- Inspect existing test coverage and relevant failure scenarios.
+- Research official documentation when external library behaviour is involved.
+- Identify risks and the smallest reasonable solution.
+- This is the concrete form of §2 phases 1–4 and the `AGENTS.md` "Change
+  workflow" checklist; follow those rules rather than restating them here.
+
+### C. Planning and approval
+
+- Present findings, evidence, recommended architecture, scope, acceptance
+  criteria, and verification requirements.
+- Have the plan independently reviewed and refined.
+- Do not begin implementation until the owner explicitly approves it (§3).
+
+### D. Controlled implementation
+
+- Give the implementation agent a precise, limited task.
+- Require tests before fixes wherever practical (TDD); prove a guard can fail.
+- Preserve existing architecture and project conventions (`AGENTS.md`,
+  `docs/architectural-principles.md`, `docs/architecture.md`).
+- No unrelated refactoring, dependency additions, concurrency changes, or scope
+  expansion without approval (§3).
+- Run the required quality gates (`docs/engineering-quality.md`, `bun run
+  verify`) and report exact commands, results, and exit codes.
+
+### E. Commit and push
+
+- Follow the repository's existing authorization and verification requirements
+  (§3 and the `AGENTS.md` "Definition of DONE"). Never commit or push unfinished
+  or unverified work.
+- Report the exact branch, commit SHA, and changed files.
+- Do not include unrelated files or pre-existing untracked work.
+
+### F. Independent post-push review
+
+- The project manager must independently retrieve the pushed commit from
+  GitHub and inspect the **complete commit diff**, not just the agent's summary.
+- Compare against the parent commit and inspect all changed files.
+- Check correctness, regressions, missing edge cases, weak tests, accidental
+  scope expansion, and architectural violations.
+- Examine related code and consumers, not only the changed lines.
+- Verify the new tests actually cover the claimed behaviour (including that a
+  guard can fail — `AGENTS.md` "Maintainability protocol" §5).
+- Review GitHub Actions/CI results when available.
+- Do not accept an agent's statement that tests passed as independently
+  verified evidence. Never ask the user to paste a diff when GitHub access can
+  retrieve it.
+
+## 7. Evidence categories in final reports
+
+Every final report must distinguish these four categories explicitly:
+
+1. **Independently verified through GitHub** — retrieved and inspected by the
+   project manager from the remote branch or commit.
+2. **Reported by the implementation agent** — stated by the agent but not
+   independently re-checked.
+3. **Verified through available CI results** — an actual workflow/check result
+   was observed.
+4. **Not verified or still unresolved** — no evidence available, or a known gap.
+
+Never claim a local test passed based solely on GitHub source inspection. Never
+claim CI passed when no actual result is available. Keep unverified items
+pending (§4).
+
+## 8. GitHub access limitations
+
+- If GitHub access is available, retrieve files, commits, and comparisons
+  directly; do not ask the user for them as a substitute.
+- If a commit has not been pushed, state that local changes cannot yet be
+  independently inspected through GitHub.
+- If a GitHub operation fails, report the exact limitation and use another
+  available read-only GitHub route where practical.
+- Never invent repository state, commit details, or CI results.
+
 ## Project-Specific Context
 
 This section is the durable reference for TBAi: what the project is, how it is
