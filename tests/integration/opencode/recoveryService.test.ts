@@ -763,7 +763,7 @@ describe("recovery retry-exhaustion outcomes", () => {
     // Cancel reserves one call for the prompt: max 2 cancel attempts (3 - 1).
     expect(cancels).toBe(2);
     expect(prompts).toBe(0); // failed cancel never proceeds to prompt
-    expect(getOpenCodeRecoveryState().lastOutcome).not.toBe("recovered");
+    expect(getOpenCodeRecoveryState().lastOutcome).toBe("failed");
   });
 
   // B: prompt exhausts its retries → failed, never recovered.

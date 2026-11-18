@@ -9,6 +9,7 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
+import { messageErrorText } from "@/lib/assistant-message-error";
 import { AlertCircle, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
@@ -1047,44 +1048,15 @@ function HighlightingSyntax(props: {
 }
 
 function AssistantError() {
-  const statusError = useAuiState((s) => {
-    const status = s.message.status;
-    if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
-    const err = status.error;
-    if (typeof err === "string") return err;
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "message" in err &&
-      typeof err.message === "string"
-    ) {
-      return err.message;
-    }
-    return err ? String(err) : "An error occurred";
-  });
-
-  // The reloaded copy of the same failure, read back from history.
-  //
-  // A stored failure has no `status` — the AI SDK converter drops an assistant
-  // status on the way in — so `MessagePrimitive.Error` and
-  // `ErrorPrimitive.Message` both render null for it. The text instead lives in
-  // message metadata, where the chat route wrote `sanitizeStreamError`'s output;
-  // the converter folds it into `custom`, which is why it is read from
-  // `metadata.custom.error`.
-  //
-  // Gated on the last message for the same reason the runtime's own auto status
-  // is (core `runtime/utils/auto-status.ts`: `isLast && error`): a live error
-  // belongs to the turn that just failed, and a turn the user has since moved
-  // past must not keep wearing a card with a Retry action that would re-run it.
-  const storedError = useAuiState((s) => {
-    if (s.message.role !== "assistant") return undefined;
-    if (s.thread.messages.at(-1)?.id !== s.message.id) return undefined;
-    const custom = s.message.metadata?.custom as { error?: unknown } | undefined;
-    const text = custom?.error;
-    return typeof text === "string" && text.length > 0 ? text : undefined;
-  });
-
-  const error = statusError ?? storedError;
+  // One owner for the "is this message a failure" decision, shared with the
+  // action bar so a failed message shows exactly one retry control.
+  const error = useAuiState(messageErrorText);
+  // `MessagePrimitive.Error` is only the render gate for a LIVE status error;
+  // a stored (reloaded) failure has no status and renders the identical card
+  // without the wrapper. Keep that distinction with a narrow live-status read.
+  const hasLiveStatusError = useAuiState(
+    (s) => s.message.status?.type === "incomplete" && s.message.status.reason === "error",
+  );
   if (!error) return null;
 
   const transportCopy = chatErrorCopy(classifyChatError(error));
@@ -1139,5 +1111,5 @@ function AssistantError() {
     </ErrorPrimitive.Root>
   );
 
-  return statusError === undefined ? card : <MessagePrimitive.Error>{card}</MessagePrimitive.Error>;
+  return hasLiveStatusError ? <MessagePrimitive.Error>{card}</MessagePrimitive.Error> : card;
 }

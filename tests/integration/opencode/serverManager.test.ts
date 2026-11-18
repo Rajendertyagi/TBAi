@@ -742,8 +742,9 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
     // Tests use fake children and must not publish to the real host registration path.
   }
 
-  protected override async removeOwnedRegistration(): Promise<void> {
+  protected override async removeOwnedRegistration(): Promise<boolean> {
     // No-op: fake manager never publishes a real registration record.
+    return false;
   }
 
   protected resolveBinary(): string {

@@ -1,9 +1,9 @@
 # TBAi OpenCode Restart Recovery — Plan (revised after idle-signal review, 2026-11-17)
 
 **Status: IMPLEMENTED — production implementation authorized and completed (2026-11-17).**
-**Branch:** `review/managed-opencode-hardening-2026-11-15` · implementation commit `2ef39c5`; correctness
-passes `0a37700`, `27dee28`, and `3636bb5` (all pushed). A fourth focused pass (retry-exhaustion outcome
-handling) is applied on top and **uncommitted at this revision**.
+**Branch:** `review/managed-opencode-hardening-2026-11-15` · commit chain `2ef39c5` → `0a37700` →
+`27dee28` → `3636bb5` → `9502943` (all pushed). The fourth focused pass (retry-exhaustion outcome
+handling) is commit `9502943`, pushed.
 **Pinned runtime:** OpenCode / `@opencode/client` 2.2.6 (binary `D:\Coding\OpenCode\opencode.exe`, v2.2.6).
 **Scope:** one backend-owned recovery service under `src/services/opencode/`, config in
 `src/config/opencode-recovery.ts`, wiring in `src/server.ts`, and read-only candidate enumeration in
@@ -764,8 +764,8 @@ unchanged by this revision.
 filtering, presence-based shutdown grace, shared retry budget), `27dee28` (cancel budget reservation,
 per-call timeout enforcement, grace recalculation, managed-target replacement cancellation), and
 `3636bb5` (projected-user vs different-pending-user precedence, real timeout assertions, explicit
-read-vs-resume timeout policy) were all pushed. A fourth focused pass (retry-exhaustion outcome handling)
-is applied on top and remains **uncommitted** pending separate authorization.
+read-vs-resume timeout policy), and `9502943` (retry-exhaustion outcome handling) were all pushed. The
+complete chain is `2ef39c5` → `0a37700` → `27dee28` → `3636bb5` → `9502943`.
 
 ### Implemented modules
 - `src/config/opencode-recovery.ts` — all recovery constants.
@@ -800,7 +800,7 @@ is applied on top and remains **uncommitted** pending separate authorization.
   signal was actually aborted and that the pass settled within a bounded time (not via the drain's 10 s
   bound), plus a separate test asserts resume timeouts retry up to 3 calls.
 
-### Fourth correction pass (uncommitted) — retry-exhaustion outcomes
+### Fourth correction pass (commit `9502943`, pushed) — retry-exhaustion outcomes
 - **Defect:** `runStep()` returned `"transient"` when all retry attempts were exhausted, but `terminal()`
   did not treat it as terminal. A failed cancellation therefore proceeded to the prompt, and exhausted
   prompt/synthetic retries could still be reported as `"recovered"`.

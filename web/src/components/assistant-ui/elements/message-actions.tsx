@@ -3,6 +3,7 @@
 import { ActionBarPrimitive, useAuiState } from "@assistant-ui/react";
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { messageErrorText } from "@/lib/assistant-message-error";
 import { messageActionsConfig } from "@/config/messageActions";
 import { TooltipIconButton } from "./tooltip-icon-button";
 
@@ -63,13 +64,18 @@ function MessageRegenerateAction() {
  * All reader-facing copy comes from `messageActionsConfig`.
  */
 export function MessageActions({ className }: { className?: string }) {
+  // A failed message already shows a Retry button in its error card. Both that
+  // button and this Regenerate action call the same `onReload` handler, so
+  // showing both is one action presented twice. Hide Regenerate on a failure;
+  // the error card is the single retry control for that turn.
+  const isFailed = useAuiState((s) => messageErrorText(s) !== undefined);
   return (
     <ActionBarPrimitive.Root
       data-slot="message-actions"
       className={cn("flex items-center gap-0.5", className)}
     >
       <MessageCopyAction />
-      <MessageRegenerateAction />
+      {isFailed ? null : <MessageRegenerateAction />}
     </ActionBarPrimitive.Root>
   );
 }

@@ -815,3 +815,175 @@ describe("retry and step parts never become visible content", () => {
     ]);
   });
 });
+
+/**
+ * WS4 — error reachability. These tests establish WHAT THE PROJECTION DOES in
+ * each divergent case, before any fix. They do not assert a desired outcome —
+ * they pin the current behavior so a future targeted fix can be measured
+ * against it. No blanket dedup is applied.
+ *
+ * Two error writers converge here:
+ * - Source A: a persisted `message.error` / `finish:"error"` → `status.error`
+ *   on that message (messageToAssistant, ~:320-344).
+ * - Source B: `state.execution.type === "error"` → overwrites the target
+ *   assistant's status, or appends a synthetic `err:...` message (~:438-482).
+ */
+describe("error reachability — what the projection produces", () => {
+  const U = "msg_reach_user";
+  const A1 = "msg_reach_assistant_1";
+  const A2 = "msg_reach_assistant_2";
+  const DETAIL = "Connection lost while working.";
+
+  function assistant(id: string, parentId: string, error?: string): V2MessageState {
+    return {
+      id,
+      parentId,
+      role: "assistant",
+      createdAt: 2,
+      parts: [
+        {
+          kind: "text",
+          id: `text:${id}:0`,
+          order: 0,
+          value: "partial",
+          status: "complete",
+        },
+      ],
+      source: null,
+      ...(error !== undefined ? { error } : {}),
+    };
+  }
+
+  function baseState(messages: Record<string, V2MessageState>, order: string[]) {
+    const initial = createInitialV2ThreadState(SESSION_ID);
+    return {
+      ...initial,
+      messages: {
+        [U]: {
+          id: U,
+          parentId: null,
+          role: "user" as const,
+          createdAt: 1,
+          parts: [
+            {
+              kind: "text" as const,
+              id: `text:${U}:0`,
+              order: 0,
+              value: "build it",
+              status: "complete" as const,
+            },
+          ],
+          source: null,
+        },
+        ...messages,
+      },
+      messageOrder: [U, ...order],
+    };
+  }
+
+  /** Count projected messages carrying an error status (one card each). */
+  function errorCount(state: ReturnType<typeof baseState>): number {
+    return projectV2RepositoryItems(state).filter(
+      (item) =>
+        item.message.status?.type === "incomplete" && item.message.status.reason === "error",
+    ).length;
+  }
+
+  it("same-message: a persisted error and an execution error on the same assistant yield one error-bearing message", () => {
+    const state = baseState({ [A1]: assistant(A1, U, DETAIL) }, [A1]);
+    const withExec = {
+      ...state,
+      execution: {
+        type: "error" as const,
+        userMessageId: U,
+        assistantMessageId: A1,
+        error: { kind: "server" as const, message: DETAIL },
+      },
+    };
+    // Source B overwrites the target's status; it does not append a second card.
+    expect(errorCount(withExec)).toBe(1);
+  });
+
+  it("divergent target: a persisted error on one assistant and an execution error targeting another yield two error-bearing messages", () => {
+    const state = baseState({ [A1]: assistant(A1, U, DETAIL), [A2]: assistant(A2, A1) }, [A1, A2]);
+    const withExec = {
+      ...state,
+      execution: {
+        type: "error" as const,
+        userMessageId: U,
+        assistantMessageId: A2,
+        error: { kind: "server" as const, message: DETAIL },
+      },
+    };
+    // A1 keeps its persisted error; A2 gets the execution error. Two cards.
+    expect(errorCount(withExec)).toBe(2);
+  });
+
+  it("stale target id: an execution error naming a missing assistant appends a synthetic error message", () => {
+    const state = baseState({ [A1]: assistant(A1, U) }, [A1]);
+    const withExec = {
+      ...state,
+      execution: {
+        type: "error" as const,
+        userMessageId: U,
+        assistantMessageId: "msg_missing_target",
+        error: { kind: "server" as const, message: DETAIL },
+      },
+    };
+    const items = projectV2RepositoryItems(withExec);
+    const synthetic = items.find((item) => item.message.id.startsWith("err:"));
+    expect(synthetic).toBeDefined();
+    expect(errorCount(withExec)).toBe(1);
+  });
+
+  it("no assistant: an execution error with no assistant message appends exactly one synthetic error", () => {
+    const state = baseState({}, []);
+    const withExec = {
+      ...state,
+      execution: {
+        type: "error" as const,
+        userMessageId: U,
+        assistantMessageId: null,
+        error: { kind: "server" as const, message: DETAIL },
+      },
+    };
+    expect(errorCount(withExec)).toBe(1);
+  });
+
+  it("null target with an assistant present overwrites the last assistant, no synthetic card", () => {
+    // A reloaded-history state can carry a persisted error on the last assistant
+    // plus an execution error whose assistantMessageId is null (the reducer only
+    // captures it while streaming, v2Events.ts:646-647). The projection's fallback
+    // loop (v2MessageProjection.ts:443-450) then overwrites the last assistant's
+    // status — no `err:` card. This is distinct from test 4 (null target, no
+    // assistant → synthetic card).
+    const EXEC_DETAIL = "Execution failed after reload.";
+    const state = baseState({ [A1]: assistant(A1, U, DETAIL) }, [A1]);
+    const withNullTarget = {
+      ...state,
+      execution: {
+        type: "error" as const,
+        userMessageId: U,
+        assistantMessageId: null,
+        error: { kind: "server" as const, message: EXEC_DETAIL },
+      },
+    };
+    const items = projectV2RepositoryItems(withNullTarget);
+    expect(items.some((item) => item.message.id.startsWith("err:"))).toBe(false);
+    expect(errorCount(withNullTarget)).toBe(1);
+    // The execution error's distinct detail proves the fallback actually
+    // overwrote A1's status, rather than leaving its persisted error in place.
+    const a1 = items.find((item) => item.message.id === A1);
+    const status = a1?.message.status;
+    expect(status && "error" in status ? String(status.error) : "").toContain(EXEC_DETAIL);
+  });
+
+  // Not covered here: "live failure vs reloaded history" and "repeated/replayed
+  // failure events" are REDUCER transitions (v2Events.ts). The difference between
+  // those scenarios lives in the reducer, which produces different states; the
+  // projection only sees the resulting state, so testing the transition here
+  // would duplicate a state→output test or assert a tautology. projectV2RepositoryItems
+  // is deterministic for error-card behavior (the synthetic message's id/timestamp
+  // are clock-derived). These transitions should be covered by a v2Events reducer
+  // test, which does not yet exist for these cases.
+});

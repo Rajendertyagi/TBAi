@@ -1,0 +1,187 @@
+/*
+ * TBAi UI rulebook — standalone artifact, NOT imported anywhere.
+ *
+ * This is a design review artifact for a future application pass. It is not
+ * wired into the app, not loaded by any component, and changes nothing at
+ * runtime. See audit.md for the evidence and application-plan.md for the
+ * phased rollout.
+ *
+ * NO COLOR LITERALS. There is no hex, oklch, rgb or hsl value in this file.
+ * Where a color is unavoidable it is derived from an existing theme variable
+ * with color-mix (e.g. var(--border), var(--foreground)). Colors remain owned
+ * by the theme system in web/src/themes/*.json and styles/themes.css.
+ *
+ * Naming: --rule-* marks a NEW token proposed by this artifact. Existing TBAi
+ * tokens are referenced directly and are never redefined here.
+ */
+
+/* --------------------------------------------------------------------------
+   1. TYPOGRAPHY — semantic roles, size only
+   --------------------------------------------------------------------------
+   Reuse: --font-sans, --font-weight-base, --code-font-*, --terminal-font-*,
+   --reading-line-height and the root font-size (all written to the DOM by
+   features/appearance/typography.ts:530-568).
+   NEW semantic size roles are justified by the audit: TBAi has no equivalent
+   of OpenChamber's --text-* roles. Values are rem so they scale with the
+   appearance-controlled root size; no font family or weight literal appears. */
+:root {
+  --rule-text-header: 0.875rem;   /* page/section header */
+  --rule-text-section: 0.9375rem; /* sidebar section label */
+  --rule-text-label: 0.84375rem;  /* field / row label */
+  --rule-text-body: 1rem;         /* inherits the root interface size */
+  --rule-text-meta: 0.78125rem;   /* timestamps, counts */
+  --rule-text-micro: 0.75rem;     /* smallest legible UI text */
+  --rule-text-markdown: 0.875rem; /* message body */
+  --rule-text-code: var(--code-font-size); /* reuse the appearance setting */
+
+  --rule-weight-regular: var(--font-weight-base, 300);
+  --rule-reading-line-height: var(--reading-line-height, 1.5);
+}
+
+/* Semantic classes follow OpenChamber's typography.css pattern: font-size
+   only (plus a rounded line-height), never a color. */
+.typography-header   { font-size: var(--rule-text-header); line-height: round(1.45em, 1px); }
+.typography-section  { font-size: var(--rule-text-section); line-height: round(1.45em, 1px); }
+.typography-label    { font-size: var(--rule-text-label); line-height: round(1.45em, 1px); }
+.typography-meta     { font-size: var(--rule-text-meta); line-height: round(1.45em, 1px); }
+.typography-micro    { font-size: var(--rule-text-micro); line-height: round(1.45em, 1px); }
+.typography-markdown { font-size: var(--rule-text-markdown); line-height: var(--rule-reading-line-height); }
+.typography-code     { font-size: var(--rule-text-code); font-family: var(--code-font-family); }
+
+/* --------------------------------------------------------------------------
+   2. SPACING — derived from the theme's --spacing
+   --------------------------------------------------------------------------
+   Reuse: --spacing from web/src/themes/*.json cssVars.theme (0.25rem in the
+   default theme). The audit found it defined but unused. NEW aliases are
+   justified so a theme change actually rescales layout. No px literals.
+   TBAi has no --padding-scale; if one is introduced later, multiply by it. */
+:root {
+  --rule-space-1: calc(var(--spacing, 0.25rem) * 1);
+  --rule-space-2: calc(var(--spacing, 0.25rem) * 2);
+  --rule-space-3: calc(var(--spacing, 0.25rem) * 3);
+  --rule-space-4: calc(var(--spacing, 0.25rem) * 4);
+  --rule-space-6: calc(var(--spacing, 0.25rem) * 6);
+  --rule-space-8: calc(var(--spacing, 0.25rem) * 8);
+}
+
+/* --------------------------------------------------------------------------
+   3. RADIUS — REUSE ONLY, no new scale
+   --------------------------------------------------------------------------
+   TBAi already derives every step from one --radius (globals.css:109, 274-280):
+     --radius-sm  = calc(var(--radius) * 0.6)
+     --radius-md  = calc(var(--radius) * 0.8)
+     --radius-lg  = var(--radius)
+     --radius-xl  = calc(var(--radius) * 1.2)
+     --radius-2xl = calc(var(--radius) * 1.6)
+     --radius-3xl = calc(var(--radius) * 2)
+     --radius-4xl = calc(var(--radius) * 2.6)
+   The audit recommends KEEPING this scale. The aliases below carry no new
+   value; they only name which existing step a role should use. */
+:root {
+  --rule-radius-control: var(--radius-lg);   /* buttons, inputs */
+  --rule-radius-surface: var(--radius-xl);   /* cards, composer */
+  --rule-radius-popover: var(--radius-xl);   /* menus, popovers */
+}
+
+/* --------------------------------------------------------------------------
+   4. EDGES — three strengths from the theme border
+   --------------------------------------------------------------------------
+   Reuse: --border (globals.css:93 light / 201 dark), theme-controlled.
+   NEW strengths are justified by the audit: TBAi has no strength scale and
+   call sites invent opacities (/40, /50, full, border-none), which is why
+   selection borders disappear. Mirrors OpenChamber's --oc-edge-* pattern. */
+:root {
+  --rule-edge-muted: color-mix(in srgb, var(--border) 40%, transparent);
+  --rule-edge: color-mix(in srgb, var(--border) 70%, transparent);
+  --rule-edge-strong: var(--border);
+
+  --rule-edge-hairline-width: 1px;
+  --rule-edge-strong-width: 1px;
+}
+
+/* --------------------------------------------------------------------------
+   5. ELEVATION — three levels, geometry only
+   --------------------------------------------------------------------------
+   Reuse: --elevation-floating / --elevation-overlay and their --shadow-*
+   aliases (globals.css:132-135, 228-229, 284-285). NEW button and raised
+   levels are justified by the audit: the lower two rungs are missing, so
+   call sites fall back to Tailwind's hardcoded shadow-xs / shadow-sm.
+   Every color below is derived from a theme variable via color-mix. */
+:root {
+  --rule-elevation-button:
+    0 1px 1.5px 0 color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 0 0 0.5px color-mix(in srgb, var(--border) 70%, transparent);
+
+  --rule-elevation-raised:
+    inset 0 1px 0 0 color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 0 0 0.5px color-mix(in srgb, var(--border) 70%, transparent),
+    0 1px 2px -0.5px color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 4px 10px -2px color-mix(in srgb, var(--foreground) 7%, transparent);
+
+  --rule-elevation-floating: var(--elevation-floating); /* reuse existing */
+  --rule-elevation-overlay: var(--elevation-overlay);   /* reuse existing */
+}
+
+/* --------------------------------------------------------------------------
+   6. ICONOGRAPHY — named sizes and stroke, no color
+   --------------------------------------------------------------------------
+   Reuse: lucide-react's default stroke and the existing button rule
+   `[&_svg:not([class*='size-'])]:size-4` (components/ui/button.tsx:9).
+   NEW aliases are justified by the audit: call sites invent size-3/size-4/
+   size-5 and one uses strokeWidth="2" (OpenCodeChipShared.tsx:205). These are
+   lengths and a number — no color. */
+:root {
+  --rule-icon-size-sm: 0.75rem;  /* 12px, icon-xs */
+  --rule-icon-size-md: 1rem;     /* 16px, default button icon */
+  --rule-icon-size-lg: 1.25rem;  /* 20px, section headers */
+  --rule-icon-stroke: 1.5;       /* thin, consistent with the design identity */
+  --rule-icon-target-min: 1.5rem; /* 24px minimum interactive target */
+}
+
+/* --------------------------------------------------------------------------
+   7. MOTION — named durations and easing, no color
+   --------------------------------------------------------------------------
+   Reuse: --animation-duration (globals.css:438) as the base. NEW aliases are
+   justified by the audit: only one duration exists and there is no
+   prefers-reduced-motion branch anywhere in web/src. Durations/easing are not
+   colors. */
+:root {
+  --rule-motion-fast: 150ms;
+  --rule-motion-base: var(--animation-duration, 200ms); /* reuse existing */
+  --rule-motion-easing: ease-in-out;
+}
+
+/* Reduced motion: collapse durations to zero. No color involved. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rule-motion-fast: 0ms;
+    --rule-motion-base: 0ms;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8. FOCUS — one visible ring, color from the theme
+   --------------------------------------------------------------------------
+   Reuse: --ring (globals.css:95 light / 203 dark), theme-controlled and already
+   exposed as --color-ring (globals.css:263). NEW width/offset aliases are
+   justified by the audit: 56 call sites use three different ring widths.
+   The ring COLOR is var(--ring) — never a literal. Do not adopt OpenChamber's
+   ring removal (design-system.css:824-838); TBAi keeps a visible focus. */
+:root {
+  --rule-focus-ring-width: 2px;
+  --rule-focus-ring-offset: 2px;
+  --rule-focus-ring-color: var(--ring);
+}
+
+/* --------------------------------------------------------------------------
+   9. LAYERING — named z steps, no color
+   --------------------------------------------------------------------------
+   No named z scale exists in TBAi (raw z-50/z-10/z-20 across 34 call sites).
+   NEW four-step scale mirrors OpenChamber's --z-base/raised/overlay/modal
+   (design-system.css:981-984). These are integers — no color. */
+:root {
+  --rule-z-base: 0;
+  --rule-z-raised: 10;
+  --rule-z-overlay: 40;
+  --rule-z-modal: 50;
+}

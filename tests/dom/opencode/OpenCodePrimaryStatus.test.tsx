@@ -464,6 +464,20 @@ describe("the live retry's clock", () => {
     expect(announcementOf(primary)).toBe(before);
   });
 
+  it("does not re-animate the countdown label on each tick", () => {
+    // The crossfade is for discrete state changes, not a 1 Hz countdown. The
+    // retry branch opts out via animateLabel={false}, so the label span carries
+    // no fade/blur classes and does not remount every second.
+    runtimeState.retry = { attempt: 2, next: BASE_TIME + 5_000 };
+    const { container } = mount();
+    const labelSpan = [...singlePrimary(container).querySelectorAll("span")].find((span) =>
+      span.textContent?.includes("Retrying in"),
+    );
+    expect(labelSpan).toBeDefined();
+    expect(labelSpan?.className).not.toContain("animate-in");
+    expect(labelSpan?.className).not.toContain("fade-in");
+  });
+
   it("keeps the last number from going negative at the deadline", () => {
     runtimeState.retry = { attempt: 2, next: BASE_TIME + 1_000 };
     const { container } = mount();

@@ -149,6 +149,22 @@ export interface RuntimeIsolation {
   readonly xdgDataHome: string;
   /** The isolated `opencode` data directory holding `opencode.db`. */
   readonly dataDir: string;
+  /** `$XDG_STATE_HOME` - isolated OpenCode/TBAI state root. */
+  readonly xdgStateHome: string;
+  /** `$XDG_CACHE_HOME` - isolated cache root. */
+  readonly xdgCacheHome: string;
+  /** TBAI app data dir (`DATA_DIR`). */
+  readonly tbaiDataDir: string;
+  /** TBAI conversation workspace root (`WORKSPACE_DIR`). */
+  readonly workspaceDir: string;
+  /** Explicit OpenCode database path (`OPENCODE_DB`). */
+  readonly opencodeDbPath: string;
+  /** Isolated temp dir (`TEMP`/`TMP`). */
+  readonly tempDir: string;
+  /** Isolated home/profile roots for Windows/user-scoped resolvers. */
+  readonly userHomeDir: string;
+  readonly appDataDir: string;
+  readonly localAppDataDir: string;
 }
 
 /**
@@ -176,7 +192,28 @@ export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
   const homeDir = path.join(root, "home");
   const xdgDataHome = path.join(root, "xdg-data");
   const dataDir = path.join(xdgDataHome, "opencode");
-  for (const dir of [configDir, homeDir, dataDir]) {
+  const xdgStateHome = path.join(root, "xdg-state");
+  const xdgCacheHome = path.join(root, "xdg-cache");
+  const tbaiDataDir = path.join(root, "tbai-data");
+  const workspaceDir = path.join(root, "workspace");
+  const tempDir = path.join(root, "temp");
+  const userHomeDir = path.join(root, "user-home");
+  const appDataDir = path.join(root, "appdata-roaming");
+  const localAppDataDir = path.join(root, "appdata-local");
+  const opencodeDbPath = path.join(dataDir, "opencode.db");
+  for (const dir of [
+    configDir,
+    homeDir,
+    dataDir,
+    xdgStateHome,
+    xdgCacheHome,
+    tbaiDataDir,
+    workspaceDir,
+    tempDir,
+    userHomeDir,
+    appDataDir,
+    localAppDataDir,
+  ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   return {
@@ -187,7 +224,131 @@ export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
     homeDir,
     xdgDataHome,
     dataDir,
+    xdgStateHome,
+    xdgCacheHome,
+    tbaiDataDir,
+    workspaceDir,
+    opencodeDbPath,
+    tempDir,
+    userHomeDir,
+    appDataDir,
+    localAppDataDir,
   };
+}
+
+/** Writes an explicit OpenCode config file inside the isolated root. */
+export function writeIsolatedOpenCodeConfig(
+  isolation: RuntimeIsolation,
+  config: Record<string, unknown> = {},
+): string {
+  fs.mkdirSync(path.dirname(isolation.configFile), { recursive: true });
+  fs.writeFileSync(isolation.configFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return isolation.configFile;
+}
+
+/** Environment variables that must not leak ambient OpenCode/TBAI routing into a drill. */
+export const AMBIENT_OPENCODE_ENV_VARS = [
+  "OPENCODE_CONFIG_CONTENT",
+  "OPENCODE_URL",
+  "OPENCODE_HOST",
+  "OPENCODE_PORT",
+  "OPENCODE_SERVER_PASSWORD",
+  "OPENCODE_PASSWORD",
+  "OPENCODE_DB",
+  "OPENCODE_BINARY",
+] as const;
+
+/** Windows/process env keys preserved when building a sanitized drill environment. */
+export const PRESERVED_PROCESS_ENV_KEYS = [
+  "PATH",
+  "Path",
+  "SystemRoot",
+  "WINDIR",
+  "ComSpec",
+  "PATHEXT",
+  "SYSTEMDRIVE",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+  "OS",
+] as const;
+
+function isInsideRoot(root: string, target: string): boolean {
+  const r = path.resolve(root);
+  const t = path.resolve(target);
+  return t === r || t.startsWith(r + path.sep);
+}
+
+/** Asserts every effective drill path resolves inside the unique temporary root. */
+export function assertRuntimeIsolationPaths(isolation: RuntimeIsolation): void {
+  const paths: Array<[string, string]> = [
+    ["root", isolation.root],
+    ["xdgConfigHome", isolation.xdgConfigHome],
+    ["configDir", isolation.configDir],
+    ["configFile", isolation.configFile],
+    ["homeDir", isolation.homeDir],
+    ["xdgDataHome", isolation.xdgDataHome],
+    ["dataDir", isolation.dataDir],
+    ["xdgStateHome", isolation.xdgStateHome],
+    ["xdgCacheHome", isolation.xdgCacheHome],
+    ["tbaiDataDir", isolation.tbaiDataDir],
+    ["workspaceDir", isolation.workspaceDir],
+    ["opencodeDbPath", isolation.opencodeDbPath],
+    ["tempDir", isolation.tempDir],
+    ["userHomeDir", isolation.userHomeDir],
+    ["appDataDir", isolation.appDataDir],
+    ["localAppDataDir", isolation.localAppDataDir],
+  ];
+  for (const [name, value] of paths) {
+    if (!isInsideRoot(isolation.root, value)) {
+      throw new Error(`Runtime isolation path ${name} escapes root: ${value}`);
+    }
+  }
+}
+
+/**
+ * Builds a sanitized environment for starting an isolated TBAI/OpenCode drill.
+ * Preserves only required Windows/process launch keys from the current env and
+ * applies explicit drill-owned overrides. Ambient OpenCode routing/auth/storage
+ * variables are cleared unless explicitly provided in overrides.
+ */
+export function buildIsolatedDrillEnv(
+  isolation: RuntimeIsolation,
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string> {
+  assertRuntimeIsolationPaths(isolation);
+  const env: Record<string, string> = {};
+  for (const key of PRESERVED_PROCESS_ENV_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.length > 0) env[key] = value;
+  }
+  const base: Record<string, string> = {
+    DATA_DIR: isolation.tbaiDataDir,
+    WORKSPACE_DIR: isolation.workspaceDir,
+    OPENCODE_DB: isolation.opencodeDbPath,
+    XDG_DATA_HOME: isolation.xdgDataHome,
+    XDG_CONFIG_HOME: isolation.xdgConfigHome,
+    XDG_STATE_HOME: isolation.xdgStateHome,
+    XDG_CACHE_HOME: isolation.xdgCacheHome,
+    OPENCODE_CONFIG_DIR: isolation.configDir,
+    OPENCODE_CONFIG: isolation.configFile,
+    OPENCODE_CONFIG_PROJECT_DISABLE: "1",
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    HOME: isolation.userHomeDir,
+    USERPROFILE: isolation.userHomeDir,
+    APPDATA: isolation.appDataDir,
+    LOCALAPPDATA: isolation.localAppDataDir,
+    TEMP: isolation.tempDir,
+    TMP: isolation.tempDir,
+  };
+  for (const [k, v] of Object.entries(base)) env[k] = v;
+  for (const key of AMBIENT_OPENCODE_ENV_VARS) {
+    if (!(key in overrides)) delete env[key];
+  }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === undefined) delete env[k];
+    else env[k] = v;
+  }
+  return env;
 }
 
 /**

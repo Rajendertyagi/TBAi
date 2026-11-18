@@ -27,15 +27,19 @@
  */
 import { describe, expect, it } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import { resolveManagedBinary } from "@/services/opencode/runtime.ts";
 import {
   allocateTestLoopbackPort,
+  assertRuntimeIsolationPaths,
+  buildIsolatedDrillEnv,
+  createRuntimeIsolation,
   runtimeAuthHeaders,
   runtimeUnavailableReason,
+  writeIsolatedOpenCodeConfig,
+  type RuntimeIsolation,
 } from "../../harness/opencodeRuntimeHarness";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
@@ -75,16 +79,6 @@ interface RealRun {
   readonly shell: ShellRecord;
   readonly ready: ReadyRecord | null;
   readonly error: ErrorRecord | null;
-}
-
-interface Isolation {
-  readonly root: string;
-  readonly dataHome: string;
-  readonly dataDir: string;
-  readonly configHome: string;
-  readonly stateHome: string;
-  readonly homeDir: string;
-  readonly dbPath: string;
 }
 
 async function waitForFile(file: string, timeoutMs = 60000): Promise<boolean> {
@@ -133,60 +127,27 @@ function hardKill(pid: number): void {
   });
 }
 
-function createIsolation(label: string): Isolation {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `tbai-g2-real-${label}-`));
-  const dataHome = path.join(root, "xdg-data");
-  const dataDir = path.join(root, "tbai-data");
-  const configHome = path.join(root, "xdg-config");
-  const stateHome = path.join(root, "xdg-state");
-  const homeDir = path.join(root, "home");
-  const openCodeConfigDir = path.join(configHome, "opencode");
-  const openCodeHome = path.join(dataDir, "opencode-home");
-  for (const dir of [
-    dataHome,
-    dataDir,
-    configHome,
-    stateHome,
-    openCodeConfigDir,
-    openCodeHome,
-    homeDir,
-  ]) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  const dbPath = path.join(dataHome, "opencode", "opencode.db");
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  return {
-    root,
-    dataHome,
-    dataDir,
-    configHome,
-    stateHome,
-    homeDir,
-    dbPath,
-  };
+function createIsolation(label: string): RuntimeIsolation {
+  const isolation = createRuntimeIsolation(
+    `g2-real-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  writeIsolatedOpenCodeConfig(isolation, {});
+  assertRuntimeIsolationPaths(isolation);
+  return isolation;
 }
 
 function isolatedEnv(
-  isolation: Isolation,
+  isolation: RuntimeIsolation,
   binary: string,
   runDir: string,
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
 ): Record<string, string> {
-  return {
-    ...process.env,
+  return buildIsolatedDrillEnv(isolation, {
     OPENCODE_BINARY: binary,
-    OPENCODE_DB: isolation.dbPath,
-    XDG_DATA_HOME: isolation.dataHome,
-    XDG_CONFIG_HOME: isolation.configHome,
-    XDG_STATE_HOME: isolation.stateHome,
-    OPENCODE_CONFIG_DIR: path.join(isolation.configHome, "opencode"),
-    OPENCODE_CONFIG_PROJECT_DISABLE: "1",
-    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-    DATA_DIR: isolation.dataDir,
     TBAI_G2_DIR: runDir,
     TBAI_G2_SIDECAR: REAL_SIDECAR_FIXTURE,
     ...extraEnv,
-  } as Record<string, string>;
+  });
 }
 
 async function waitForPort(baseUrl: string, timeoutMs = 30000): Promise<boolean> {
@@ -199,10 +160,10 @@ async function waitForPort(baseUrl: string, timeoutMs = 30000): Promise<boolean>
 }
 
 async function startRealShell(
-  isolation: Isolation,
+  isolation: RuntimeIsolation,
   binary: string,
   runDir: string,
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
 ): Promise<RealRun> {
   fs.mkdirSync(runDir, { recursive: true });
   const child = Bun.spawn(["bun", SHELL_FIXTURE], {
@@ -278,7 +239,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
       expect(run.ready).not.toBeNull();
       if (!run.ready) throw new Error("managed run did not become ready");
       expect(run.ready.backendJob.status).toBe("installed");
-      expect(path.resolve(run.ready.dbPath)).toBe(path.resolve(isolation.dbPath));
+      expect(path.resolve(run.ready.dbPath)).toBe(path.resolve(isolation.opencodeDbPath));
 
       // Both foreign OpenCode and managed OpenCode must be alive concurrently
       expect(pidAlive(foreign.pid)).toBe(true);
@@ -333,7 +294,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
 
       // Write a service.json registration pointing to the running external service.
       // Managed-only runtime must not adopt or attach to it.
-      const regDir = path.join(isolation.stateHome, "opencode");
+      const regDir = path.join(isolation.xdgStateHome, "opencode");
       fs.mkdirSync(regDir, { recursive: true });
       const regPath = path.join(regDir, "service.json");
       fs.writeFileSync(
@@ -396,7 +357,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
       expect(first.ready).not.toBeNull();
       if (!first.ready) throw new Error("first managed run did not become ready");
       expect(first.ready.backendJob.status).toBe("installed");
-      expect(path.resolve(first.ready.dbPath)).toBe(path.resolve(isolation.dbPath));
+      expect(path.resolve(first.ready.dbPath)).toBe(path.resolve(isolation.opencodeDbPath));
       const firstSidecarPid = first.shell.sidecarPid;
       const firstOpenCode = first.ready.managedPid;
       expect(firstOpenCode).toBeDefined();
@@ -407,7 +368,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
       expect(await descendantAlive(first.ready.baseUrl)).toBe(true);
 
       // Verify service registration was published for firstOpenCode
-      const regPath = path.join(isolation.stateHome, "opencode", "service.json");
+      const regPath = path.join(isolation.xdgStateHome, "opencode", "service.json");
       expect(fs.existsSync(regPath)).toBe(true);
       const reg1 = JSON.parse(fs.readFileSync(regPath, "utf8"));
       expect(reg1.pid).toBe(firstOpenCode);
@@ -424,7 +385,7 @@ describeG2("G2 real-server client-daemon runtime acceptance", () => {
       expect(second.ready).not.toBeNull();
       if (!second.ready) throw new Error("second managed run did not become ready");
       expect(second.ready.backendJob.status).toBe("installed");
-      expect(path.resolve(second.ready.dbPath)).toBe(path.resolve(isolation.dbPath));
+      expect(path.resolve(second.ready.dbPath)).toBe(path.resolve(isolation.opencodeDbPath));
       expect(second.ready.baseUrl).not.toBe(first.ready.baseUrl);
       expect(await descendantAlive(second.ready.baseUrl)).toBe(true);
       const secondSidecarPid = second.shell.sidecarPid;

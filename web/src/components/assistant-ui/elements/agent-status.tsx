@@ -17,13 +17,16 @@ export function AgentStatus({
   label,
   elapsed,
   trailing,
+  animateLabel = true,
   className,
   ...props
-}: Omit<ComponentProps<"span">, "children" | "state" | "label" | "elapsed"> & {
+}: Omit<ComponentProps<"span">, "children" | "state" | "label" | "elapsed" | "animateLabel"> & {
   state: AgentState;
   label: string;
   elapsed?: string | undefined;
   trailing?: ReactNode | undefined;
+  /** Crossfade the label when it changes. Set false for a ticking label (e.g. a countdown) to avoid a re-fade every tick. */
+  animateLabel?: boolean | undefined;
 }) {
   return (
     <span
@@ -51,7 +54,16 @@ export function AgentStatus({
         />
       )}
       <span className="sr-only">{state}</span>
-      <span className="max-w-44 truncate text-xs">{label}</span>
+      <span
+        key={animateLabel ? label : undefined}
+        className={cn(
+          "max-w-44 truncate text-xs",
+          animateLabel &&
+            "fade-in blur-in-[2px] animate-in duration-300 motion-reduce:animate-none",
+        )}
+      >
+        {label}
+      </span>
       {elapsed !== undefined && state !== "done" && state !== "failed" && (
         <span className={cn(mono, "text-muted-foreground tabular-nums")}>{elapsed}</span>
       )}

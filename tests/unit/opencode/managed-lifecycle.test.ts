@@ -139,7 +139,9 @@ class TestManager extends OpenCodeServerManager {
   }
 
   protected override async publishManagedRegistration(): Promise<void> {}
-  protected override async removeOwnedRegistration(): Promise<void> {}
+  protected override async removeOwnedRegistration(): Promise<boolean> {
+    return false;
+  }
 
   protected override createChild(): Subprocess {
     this.createChildCalls += 1;

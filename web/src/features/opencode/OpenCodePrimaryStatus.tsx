@@ -110,6 +110,7 @@ export function OpenCodePrimaryStatus() {
           aria-hidden="true"
           state="working"
           label={`${countdown} (attempt ${retry.attempt})`}
+          animateLabel={false}
           className="min-w-0 max-w-full"
         />
       </PrimaryRow>

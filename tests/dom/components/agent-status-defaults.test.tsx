@@ -80,6 +80,29 @@ function hasHiddenAncestor(node: Element): boolean {
   return false;
 }
 
+describe("the label crossfade", () => {
+  it("is on by default so a discrete label change fades", () => {
+    // The vendored element matches the official Agent status: the label span is
+    // keyed and carries the fade/blur classes by default. This positive guard
+    // complements the retry-countdown test that asserts the opt-out removes them.
+    const { container } = render(<AgentStatus state="working" label="Reading…" />);
+    const label = container.querySelector("span.max-w-44");
+    expect(label).not.toBeNull();
+    expect(label?.className).toContain("animate-in");
+    expect(label?.className).toContain("fade-in");
+  });
+
+  it("is off when animateLabel is false, for a ticking label", () => {
+    const { container } = render(
+      <AgentStatus state="working" label="Retrying in 5s" animateLabel={false} />,
+    );
+    const label = container.querySelector("span.max-w-44");
+    expect(label).not.toBeNull();
+    expect(label?.className).not.toContain("animate-in");
+    expect(label?.className).not.toContain("fade-in");
+  });
+});
+
 describe("the default trailing icon is decoration", () => {
   for (const state of STATES) {
     it(`stays hidden from assistive technology in the ${state} state`, () => {

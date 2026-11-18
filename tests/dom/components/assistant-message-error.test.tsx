@@ -376,6 +376,16 @@ describe("a reloaded failure renders the same card", () => {
     expect(found[0]?.textContent ?? "").toContain(STORED);
   });
 
+  it("a reloaded failure also shows one retry control, not both", async () => {
+    // The stored-error branch of the shared selector must drive the same single
+    // retry control as the live-status branch: the card's Retry, no footer
+    // Regenerate. Guards the reloaded path against a future regression.
+    const { container } = await mount({ messages: [USER, reloaded()], mode: "chat" });
+
+    expect(buttonsWithText(container, "Retry")).toHaveLength(1);
+    expect(buttonsWithText(container, "Regenerate response")).toHaveLength(0);
+  });
+
   it("still shows it when the failed turn produced no parts", async () => {
     // The out-of-credits shape: the provider failed before any text existed, and
     // the row was persisted with `parts: []` plus the error alone.
@@ -442,6 +452,23 @@ describe("non-error outcomes render no error card", () => {
 });
 
 describe("message-level chrome is restored exactly once", () => {
+  it("a failed message shows one retry control, not both Retry and Regenerate", async () => {
+    // The error card's Retry and the footer's Regenerate call the same onReload.
+    // A failed message must present that action once — via the error card — so
+    // the footer hides its Regenerate button.
+    const failed: ThreadMessageLike = {
+      id: "assistant_failed",
+      role: "assistant",
+      status: { type: "incomplete", reason: "error", error: DETAIL },
+      content: [{ type: "text", text: "partial", status: { type: "complete" } }],
+    };
+    const { container } = await mount({ messages: [USER, failed], mode: "chat" });
+
+    expect(alerts(container)).toHaveLength(1);
+    expect(buttonsWithText(container, "Retry")).toHaveLength(1);
+    expect(buttonsWithText(container, "Regenerate response")).toHaveLength(0);
+  });
+
   it("renders one copy and one regenerate control for a multi-part message", async () => {
     const ok: ThreadMessageLike = {
       id: "assistant_ok",

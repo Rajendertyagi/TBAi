@@ -800,11 +800,23 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     };
   }
 
-  protected async removeOwnedRegistration(): Promise<void> {
+  protected async removeOwnedRegistration(): Promise<boolean> {
     const owned = this.publishedRegistration;
-    if (!owned) return;
+    if (!owned) return false;
+    let removed = false;
     try {
-      await removeOpenCodeRegistrationIfOwned(owned, { config: this.config });
+      removed = await removeOpenCodeRegistrationIfOwned(owned, { config: this.config });
+      if (removed) {
+        logger.info("opencode", "opencode.registration_removed", {
+          path: owned.path,
+          pid: owned.pid,
+        });
+      } else {
+        logger.warn("opencode", "opencode.registration_remove_refused", {
+          path: owned.path,
+          pid: owned.pid,
+        });
+      }
     } catch (error) {
       logger.warn("opencode", "opencode.registration_cleanup_failed", {
         path: owned.path,
@@ -814,6 +826,7 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     } finally {
       this.publishedRegistration = null;
     }
+    return removed;
   }
 
   private async runManagedStart(record: StartRecord): Promise<void> {
