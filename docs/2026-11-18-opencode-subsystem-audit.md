@@ -682,4 +682,13 @@ and found five items; all were addressed before completion:
   re-posts the projected user by id; the same 2.2.6 no-inbox-work behavior could
   apply there. Not exercised by the two required scenarios; recorded for a
   future focused test rather than changed speculatively.
-- CI execution of the new commit is pending push and inspection.
+- **CI verified.** Commit `72a540f` pushed; Actions run `44548605590`
+  (`workflow_dispatch`, head `72a540f`) → **success**. All five active jobs passed
+  (`verify`, `opencode-runtime`, `opencode-g3`, `tauri`, `e2e`); `e2e-full` and
+  `e2e-big-pickle` skipped by default-false inputs. The `e2e` job ran all three
+  recovery scenarios explicitly: completed-transcript (`1 passed`, stub 2),
+  orderly-shutdown (`1 passed`, stub 3, `recovery synthetic reached stub at
+  request 3`), abrupt-crash (`1 passed`, stub 3, same synthetic evidence). The
+  `managed-restart-evidence` artifact (12,014,550 bytes) was uploaded, and the
+  runner regression test passed in `verify`. No CI claim rests on the workflow
+  conclusion alone — each required scenario's step and log were inspected.
