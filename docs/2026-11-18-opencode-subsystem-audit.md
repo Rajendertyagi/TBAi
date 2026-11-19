@@ -680,11 +680,18 @@ commit `72a540f` modified `docs/opencode-context.md`, which the recovery plan
 (`A12572D2…`) is from a historical uncommitted working-tree state that matches
 no git commit, and the file was already modified by the earlier DOC5 task
 (`4c5b6c5`, explicitly requested). To avoid compounding the discrepancy, the
-file was restored to its exact pre-task bytes (`fa116b0`, SHA-256
-`A1803640…`) in a follow-up commit; the current HEAD note is recorded here in
-the canonical audit instead. The §16 baseline itself remains stale from before
-this work and would need an approved refresh — recorded as a known limitation,
-not silently changed.
+file was restored to its exact pre-task bytes from `fa116b0` using
+`git restore --source=fa116b0 --worktree -- docs/opencode-context.md` (no text
+conversion). An earlier restoration attempt via shell redirection corrupted the
+UTF-8 encoding (mojibake `ΓÇö`/`┬º`); that was detected by Git blob comparison
+and corrected. Final verification: `git rev-parse fa116b0:docs/opencode-context.md`
+and `git hash-object docs/opencode-context.md` both return
+`408275f549c1129003a70ce75dbc278bdebb973c`, and
+`git diff --exit-code fa116b0 -- docs/opencode-context.md` exits 0. The file is
+UTF-8 with original Unicode (em dashes, §) preserved and no mojibake. The
+current HEAD note is recorded here in the canonical audit instead. The §16
+baseline itself remains stale from before this work and would need an approved
+refresh — recorded as a known limitation, not silently changed.
 
 **Remaining limitations:**
 - The fix is scoped to projected users with a shutdown-interruption signal (the
