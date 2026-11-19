@@ -101,13 +101,21 @@ describe("classifyRecovery — decision table", () => {
     }
   });
 
-  it("projected user, no assistant → resubmit user (crash before assistant)", () => {
+  it("projected user, no assistant → resubmit-user marked projected (crash before assistant)", () => {
+    // Verified against OpenCode 2.2.6: re-posting an already-projected user id
+    // reconciles (200) but creates no inbox work, so the wake goes idle without
+    // an assistant. The action stays resubmit-user (plan semantics) but is marked
+    // projected so the executor uses a fresh synthetic to actually wake the turn.
     const action = classifyRecovery({
       messages: [msg("u1", "user")],
       inbox: [],
       truncated: false,
     });
     expect(action.kind).toBe("resubmit-user");
+    if (action.kind === "resubmit-user") {
+      expect(action.id).toBe("u1");
+      expect(action.projected).toBe(true);
+    }
   });
 
   it("user + incomplete assistant, no idle → recovery synthetic", () => {

@@ -502,6 +502,35 @@ async function performAction(
     const cancelId = action.kind === "cancel-and-resubmit-user" ? action.cancelId : undefined;
     const userId = action.kind === "resubmit-user" ? action.id : action.userId;
     const delivery = action.delivery;
+
+    // An already-PROJECTED user cannot be woken by re-posting its id: OpenCode
+    // 2.2.6 reconciles the id (200) but creates no new inbox work, so the wake
+    // runs an empty drain that marks the turn idle without an assistant. Use a
+    // fresh recovery synthetic instead — it creates a promotable steer item that
+    // continues the turn in the same session without duplicating the user input.
+    // (A PENDING user is still re-posted by id below.)
+    if (
+      action.kind === "resubmit-user" &&
+      action.projected === true &&
+      action.shutdownInterruption === true
+    ) {
+      const syntheticId = deps.newId();
+      const syntheticResult = await runStep((callSignal) =>
+        client.session.synthetic(
+          {
+            sessionID,
+            id: syntheticId,
+            text: "The server restarted while you were working. Continue from where you left off.",
+            metadata: { notice: RECOVERY_NOTICE },
+            delivery: "steer",
+            resume: true,
+          },
+          { signal: callSignal },
+        ),
+      );
+      if (syntheticResult !== "ok") return failureOutcome(syntheticResult);
+      return "recovered";
+    }
     if (cancelId !== undefined) {
       // Reserve one call for the prompt: cancellation may use at most
       // maxHttpCalls - 1 attempts, so a successful cancel always leaves a call

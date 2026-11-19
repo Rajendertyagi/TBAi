@@ -3,7 +3,7 @@
 **Last updated:** 2026-11-19\
 **Repository:** `D:\Temp\ai-chat-app` (TBAi)  
 **Branch:** `review/managed-opencode-hardening-2026-11-15`  
-**Current branch tip:** `15bf5f84526566c9ebd29c525f8f7819fc3c8e24` (pushed; in sync with origin). The `80813d8` HEAD and "uncommitted" notes in §§8–10 below are point-in-time records of the 2026-11-15 verification passes, not current state.\
+**Current branch tip:** `fa116b01ecd89b2487712e1fd2b1e825347d39c0` (pushed; in sync with origin at the start of the interrupted-turn recovery work). The `80813d8` HEAD and "uncommitted" notes in §§8–10 below are point-in-time records of the 2026-11-15 verification passes, not current state. See `docs/2026-11-18-opencode-subsystem-audit.md` §15 for the latest interrupted-turn recovery work.\
 **Base:** `develop` / `origin/develop` `4fec0072696cc3a01891f62fdfc1c16330058ce5`  
 **`main` / `origin/main`:** `7407d49ccdd4bd4c3c70d72eeef472593c81e8b6` (untouched)\
 **Current status:** see `docs/2026-11-18-opencode-subsystem-audit.md` (canonical finding register and final verification).

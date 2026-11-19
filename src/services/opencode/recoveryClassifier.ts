@@ -71,6 +71,13 @@ export type RecoveryAction =
       readonly kind: "resubmit-user";
       readonly id: string;
       readonly delivery: "steer" | "queue";
+      /**
+       * True when the user message is already projected in durable history (not
+       * a pending inbox item). OpenCode 2.2.6 cannot wake such a turn by
+       * re-posting its id alone — the reconcile hits but creates no inbox work —
+       * so the executor must use a fresh recovery synthetic instead.
+       */
+      readonly projected?: boolean;
     } & ShutdownInterruption)
   | ({
       readonly kind: "repost-synthetic";
@@ -305,13 +312,17 @@ export function classifyRecovery(input: ClassifyInput): RecoveryAction {
       return { kind: "indeterminate", reason: "completed_assistant_no_idle" };
     }
 
-    // No assistant after the user: crash before assistant creation. No pending
-    // user exists here (same-id and different-id cases were handled above), so
-    // the projected user's own delivery defaults to steer.
+    // No assistant after the user: crash before assistant creation. The user is
+    // ALREADY PROJECTED (no pending user with that id — handled above). Mark it
+    // so the executor uses a fresh recovery synthetic: re-posting a projected id
+    // reconciles (200) but creates no inbox work in OpenCode 2.2.6, so the wake
+    // goes idle without an assistant. A synthetic creates a promotable steer item
+    // that continues the turn without duplicating the user message.
     return {
       kind: "resubmit-user",
       id: lastInput.id,
       delivery: "steer",
+      projected: true,
       shutdownInterruption,
     };
   }

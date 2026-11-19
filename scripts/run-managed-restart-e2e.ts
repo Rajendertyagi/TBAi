@@ -1,29 +1,43 @@
 /**
- * Dedicated runner for the managed-restart recovery acceptance test.
+ * Dedicated runner for the managed-restart recovery acceptance tests.
  *
  * WHY THIS EXISTS
  * ---------------
- * `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts` needs a local
- * stub model provider and a TBAi server configured to use it. The stub is a
- * `Bun.serve` instance that lives in THIS process. Playwright must therefore be
- * driven with an ASYNC child process: a synchronous `spawnSync` blocks this
- * process's event loop for the whole test, so the stub can never answer the
- * model request OpenCode sends. That was the exact cause of B1 — the prompt was
- * admitted and delivered, but the LLM step never started because the stub could
- * not respond while the runner's loop was blocked. The connection only arrived
- * at cleanup, when the loop was finally free.
+ * The recovery specs need a local stub model provider and a TBAi server
+ * configured to use it. The stub is a `Bun.serve` instance that lives in THIS
+ * process. Playwright must therefore be driven with an ASYNC child process: a
+ * synchronous `spawnSync` blocks this process's event loop for the whole test,
+ * so the stub can never answer the model request. That was the exact cause of
+ * B1 — the prompt was admitted and delivered, but the LLM step never started
+ * because the stub could not respond while the runner's loop was blocked.
  *
  * This runner is the durable, in-repo form of that fix. It is the only supported
- * way to run the dedicated spec, and CI invokes it from the Windows `e2e` job.
+ * way to run the dedicated recovery specs, and CI invokes it from the Windows
+ * `e2e` job.
  *
- * It provides:
- *   - an isolated temp root and evidence directory per run;
- *   - a local stub provider (no external credentials) with a fixed marker;
- *   - a TBAi server pointed at that stub via a generated OpenCode config;
- *   - the pinned OpenCode binary (from OPENCODE_BINARY or PATH, version-checked);
- *   - cleanup of the server, stub and temp root after success AND failure;
- *   - fail-closed exit codes: a missing stub call or a non-zero Playwright exit
- *     fails the run, so a green result always means the recovery really worked.
+ * SCENARIOS
+ * ---------
+ * - completed-transcript (default): the original B1 test — a completed turn
+ *   survives a managed-child restart.
+ * - orderly-shutdown: the stub holds the first request so the turn is genuinely
+ *   unfinished; the spec drives a real application shutdown + restart through
+ *   the control protocol below, then asserts recovery continued the turn.
+ * - abrupt-crash: the stub holds the first request; the spec kills the verified
+ *   managed child, the manager restarts it, and recovery must continue the turn.
+ *
+ * CONTROL PROTOCOL (orderly-shutdown scenario)
+ * --------------------------------------------
+ * When `controlDir` is set, the runner watches it (non-blocking) for command
+ * files written by the spec:
+ *   - `cmd.shutdown` → send the production `{"type":"shutdown"}` line to TBAi's
+ *     stdin, wait for exit, write `done.shutdown`.
+ *   - `cmd.start` → relaunch TBAi with the SAME data/env/port, wait for healthz,
+ *     write `done.start`.
+ * The spec waits for each `done.*` file. This keeps the production shutdown
+ * entry point real while letting a single Playwright spec drive the full cycle.
+ *
+ * The runner fails closed: a passing Playwright run with fewer than the expected
+ * stub calls is a failure, so a green result always means the model was reached.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -33,7 +47,7 @@ import { startStubProvider } from "../tests/harness/opencodeStubProvider";
 import { buildStubOpenCodeConfig, STUB_MODEL_ID } from "../tests/harness/opencodeStubConfig";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SPEC = "tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts";
+const DEFAULT_SPEC = "tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts";
 const EXPECTED_OPENCODE_VERSION = "2.2.6";
 
 /**
@@ -113,7 +127,14 @@ export interface ManagedRestartRunOptions {
   readonly root: string;
   readonly evidenceDir: string;
   readonly openCodeBinary?: string;
-  readonly project?: string;
+  /** Spec file (relative to repo root). Defaults to the completed-transcript B1 spec. */
+  readonly spec?: string;
+  /** Hold the first stub request to create a genuinely unfinished turn. */
+  readonly holdFirstRequest?: boolean;
+  /** Directory for the shutdown/start control protocol (orderly-shutdown scenario). */
+  readonly controlDir?: string;
+  /** Minimum stub requests required for a passing run (fail-closed). Defaults to 1. */
+  readonly minStubRequests?: number;
 }
 
 /** Execute one managed-restart acceptance run. Returns the Playwright exit code. */
@@ -167,66 +188,104 @@ export async function runManagedRestartE2E(options: ManagedRestartRunOptions): P
 
   const ts = path.basename(root);
   const fixedMarker = `UI-RESTART-MARKER-${ts}-${process.pid}`;
-  const stub = await startStubProvider({ model: STUB_MODEL_ID, text: `OK ${fixedMarker}` });
+  const stub = await startStubProvider({
+    model: STUB_MODEL_ID,
+    text: `OK ${fixedMarker}`,
+    holdFirstRequest: options.holdFirstRequest === true,
+  });
   let tbai: ReturnType<typeof spawn> | null = null;
+  let controlTimer: ReturnType<typeof setInterval> | null = null;
   let pwExit = 1;
+
+  const port = 47123 + Math.floor(Math.random() * 1000);
+  const base = `http://127.0.0.1:${port}`;
+  const env: Record<string, string> = {
+    ...preservedEnv(),
+    DATA_DIR: iso.tbaiDataDir,
+    WORKSPACE_DIR: iso.workspaceDir,
+    OPENCODE_DB: iso.opencodeDbPath,
+    XDG_DATA_HOME: iso.xdgDataHome,
+    XDG_CONFIG_HOME: iso.xdgConfigHome,
+    XDG_STATE_HOME: iso.xdgStateHome,
+    XDG_CACHE_HOME: iso.xdgCacheHome,
+    OPENCODE_CONFIG_DIR: iso.configDir,
+    OPENCODE_CONFIG: iso.configFile,
+    OPENCODE_CONFIG_PROJECT_DISABLE: "1",
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    HOME: iso.userHomeDir,
+    USERPROFILE: iso.userHomeDir,
+    APPDATA: iso.appDataDir,
+    LOCALAPPDATA: iso.localAppDataDir,
+    TEMP: iso.tempDir,
+    TMP: iso.tempDir,
+    PORT: String(port),
+    NODE_ENV: "test",
+    TBAI_OPENCODE_DIAG_LOG: path.join(evidenceDir, "opencode-diag.jsonl"),
+  };
+  if (options.openCodeBinary) env.OPENCODE_BINARY = options.openCodeBinary;
+  for (const k of [
+    "OPENCODE_CONFIG_CONTENT",
+    "OPENCODE_URL",
+    "OPENCODE_HOST",
+    "OPENCODE_PORT",
+    "OPENCODE_SERVER_PASSWORD",
+    "OPENCODE_PASSWORD",
+  ])
+    delete env[k];
+
+  const startTBAi = (): ReturnType<typeof spawn> => {
+    const out = fs.openSync(path.join(evidenceDir, "tbai.stdout.log"), "a");
+    const err = fs.openSync(path.join(evidenceDir, "tbai.stderr.log"), "a");
+    const child = spawn(process.execPath, ["src/index.ts"], {
+      cwd: REPO_ROOT,
+      env,
+      stdio: ["pipe", out, err],
+    });
+    log("tbai spawned", child.pid, "port", port);
+    return child;
+  };
+
+  const stopTBAi = async (child: ReturnType<typeof spawn>): Promise<void> => {
+    if (child.exitCode !== null) return;
+    try {
+      child.stdin?.write('{"type":"shutdown"}\n');
+      child.stdin?.end();
+      await waitFor(
+        async () => child.exitCode !== null || child.signalCode !== null,
+        30_000,
+        "tbai exit",
+      ).catch(() => undefined);
+    } catch {
+      /* ignore */
+    }
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }
+  };
 
   try {
     const config = { ...buildStubOpenCodeConfig(stub.baseURL), plugin: [] };
     fs.writeFileSync(iso.configFile, JSON.stringify(config, null, 2), "utf8");
     fs.writeFileSync(path.join(evidenceDir, "fixed-marker.txt"), fixedMarker, "utf8");
-    log("stub", stub.baseURL, "marker", fixedMarker);
-
-    const port = 47123 + Math.floor(Math.random() * 1000);
-    const env: Record<string, string> = {
-      ...preservedEnv(),
-      DATA_DIR: iso.tbaiDataDir,
-      WORKSPACE_DIR: iso.workspaceDir,
-      OPENCODE_DB: iso.opencodeDbPath,
-      XDG_DATA_HOME: iso.xdgDataHome,
-      XDG_CONFIG_HOME: iso.xdgConfigHome,
-      XDG_STATE_HOME: iso.xdgStateHome,
-      XDG_CACHE_HOME: iso.xdgCacheHome,
-      OPENCODE_CONFIG_DIR: iso.configDir,
-      OPENCODE_CONFIG: iso.configFile,
-      OPENCODE_CONFIG_PROJECT_DISABLE: "1",
-      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-      HOME: iso.userHomeDir,
-      USERPROFILE: iso.userHomeDir,
-      APPDATA: iso.appDataDir,
-      LOCALAPPDATA: iso.localAppDataDir,
-      TEMP: iso.tempDir,
-      TMP: iso.tempDir,
-      PORT: String(port),
-      NODE_ENV: "test",
-      TBAI_OPENCODE_DIAG_LOG: path.join(evidenceDir, "opencode-diag.jsonl"),
-    };
-    if (options.openCodeBinary) env.OPENCODE_BINARY = options.openCodeBinary;
-    for (const k of [
-      "OPENCODE_CONFIG_CONTENT",
-      "OPENCODE_URL",
-      "OPENCODE_HOST",
-      "OPENCODE_PORT",
-      "OPENCODE_SERVER_PASSWORD",
-      "OPENCODE_PASSWORD",
-    ])
-      delete env[k];
     fs.writeFileSync(
       path.join(evidenceDir, "tbai-env.json"),
       JSON.stringify({ ...env, PATH: "<preserved>", Path: "<preserved>" }, null, 2),
       "utf8",
     );
+    log(
+      "stub",
+      stub.baseURL,
+      "marker",
+      fixedMarker,
+      "holdFirstRequest",
+      options.holdFirstRequest === true,
+    );
 
-    const out = fs.openSync(path.join(evidenceDir, "tbai.stdout.log"), "a");
-    const err = fs.openSync(path.join(evidenceDir, "tbai.stderr.log"), "a");
-    tbai = spawn(process.execPath, ["src/index.ts"], {
-      cwd: REPO_ROOT,
-      env,
-      stdio: ["pipe", out, err],
-    });
-    log("tbai spawned", tbai.pid, "port", port);
-    const base = `http://127.0.0.1:${port}`;
-
+    tbai = startTBAi();
     await waitFor(
       async () => {
         try {
@@ -240,11 +299,71 @@ export async function runManagedRestartE2E(options: ManagedRestartRunOptions): P
     );
     log("tbai ready");
 
+    // Control protocol for the orderly-shutdown scenario. Non-blocking polling
+    // keeps the event loop free for the in-process stub (the B1 fix).
+    if (options.controlDir) {
+      const controlDir = options.controlDir;
+      fs.mkdirSync(controlDir, { recursive: true });
+      let busy = false;
+      controlTimer = setInterval(() => {
+        if (busy) return;
+        try {
+          if (
+            fs.existsSync(path.join(controlDir, "cmd.shutdown")) &&
+            !fs.existsSync(path.join(controlDir, "done.shutdown"))
+          ) {
+            busy = true;
+            void (async () => {
+              try {
+                log("control: shutdown requested");
+                const current = tbai!;
+                await stopTBAi(current);
+                fs.writeFileSync(path.join(controlDir, "done.shutdown"), "ok", "utf8");
+                log("control: shutdown done");
+              } finally {
+                busy = false;
+              }
+            })();
+          } else if (
+            fs.existsSync(path.join(controlDir, "cmd.start")) &&
+            !fs.existsSync(path.join(controlDir, "done.start"))
+          ) {
+            busy = true;
+            void (async () => {
+              try {
+                log("control: start requested");
+                tbai = startTBAi();
+                await waitFor(
+                  async () => {
+                    try {
+                      return (await fetch(`${base}/healthz`)).ok;
+                    } catch {
+                      return false;
+                    }
+                  },
+                  120_000,
+                  "tbai healthz after restart",
+                );
+                fs.writeFileSync(path.join(controlDir, "done.start"), "ok", "utf8");
+                log("control: start done");
+              } finally {
+                busy = false;
+              }
+            })();
+          }
+        } catch (err) {
+          log("control error", String(err));
+          busy = false;
+        }
+      }, 250);
+    }
+
     // THE FIX: async spawn keeps this process's event loop free so the in-process
     // stub can answer OpenCode's model request while Playwright drives the test.
+    const spec = options.spec ?? DEFAULT_SPEC;
     pwExit = await runChildAsync(
       process.execPath,
-      ["x", "playwright", "test", SPEC, "--project=chromium-headless", "--reporter=line"],
+      ["x", "playwright", "test", spec, "--project=chromium-headless", "--reporter=line"],
       {
         cwd: path.join(REPO_ROOT, "web"),
         env: {
@@ -254,45 +373,54 @@ export async function runManagedRestartE2E(options: ManagedRestartRunOptions): P
           TBAI_RESTART_EVIDENCE_DIR: evidenceDir,
           TBAI_RESTART_TEMP_ROOT: root,
           TBAI_RESTART_FIXED_MARKER: fixedMarker,
+          ...(options.controlDir ? { TBAI_RESTART_CONTROL_DIR: options.controlDir } : {}),
         },
         stdio: "inherit",
       },
     );
     log("playwright exit", pwExit);
 
-    // Fail closed: a passing Playwright run with zero stub calls means the model
-    // was never reached — the exact B1 failure — and must not be reported green.
+    // Fail closed: a passing Playwright run with too few stub calls means the
+    // model was never reached (B1) or recovery never re-submitted (interruption
+    // scenarios). Never report green on missing evidence.
     fs.writeFileSync(
       path.join(evidenceDir, "stub-requests.json"),
       JSON.stringify(stub.requests, null, 2),
       "utf8",
     );
     log("stub requests", stub.requests.length);
-    if (pwExit === 0 && stub.requests.length === 0) {
-      log("FAIL: Playwright passed but the stub provider received no model request");
+    const minRequests = options.minStubRequests ?? 1;
+    if (pwExit === 0 && stub.requests.length < minRequests) {
+      log(
+        `FAIL: Playwright passed but stub received ${stub.requests.length} < ${minRequests} requests`,
+      );
       pwExit = 1;
     }
+    // For interruption scenarios, prove the SHARED RECOVERY SERVICE drove the
+    // continuation — not an OpenCode-internal auto-resume. The stub always
+    // answers the same text, so a plain assistant response is indistinguishable.
+    // The recovery synthetic posts a distinctive prompt; require a request whose
+    // messages carry it. This is the load-bearing evidence for point 2.
+    if (pwExit === 0 && options.holdFirstRequest === true) {
+      const recoveryMarker = "The server restarted while you were working";
+      const recoveryRequest = stub.requests.find((r) =>
+        r.messages?.some(
+          (m) => typeof m.content === "string" && m.content.includes(recoveryMarker),
+        ),
+      );
+      if (!recoveryRequest) {
+        log(
+          "FAIL: Playwright passed but no stub request carried the recovery-synthetic prompt " +
+            "— the assistant response did not come from the shared recovery service",
+        );
+        pwExit = 1;
+      } else {
+        log("recovery synthetic reached stub at request", recoveryRequest.sequence);
+      }
+    }
   } finally {
-    if (tbai && tbai.exitCode === null) {
-      try {
-        tbai.stdin?.write('{"type":"shutdown"}\n');
-        tbai.stdin?.end();
-        await waitFor(
-          async () => tbai!.exitCode !== null || tbai!.signalCode !== null,
-          30_000,
-          "tbai exit",
-        ).catch(() => undefined);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (tbai && tbai.exitCode === null) {
-      try {
-        tbai.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
+    if (controlTimer) clearInterval(controlTimer);
+    if (tbai) await stopTBAi(tbai);
     try {
       stub.stop();
     } catch {
@@ -307,20 +435,43 @@ async function main(): Promise<number> {
     .toISOString()
     .replace(/[-:T.Z]/g, "")
     .slice(0, 14);
+  const scenario = process.env.TBAI_RECOVERY_SCENARIO ?? "completed-transcript";
   const root = path.join(
     REPO_ROOT,
     "tests",
     ".artifacts",
     "managed-restart",
-    `${stamp}-${process.pid}`,
+    `${scenario}-${stamp}-${process.pid}`,
   );
   const evidenceDir = path.join(root, "evidence", "ui-restart");
   const openCodeBinary = process.env.OPENCODE_BINARY || undefined;
-  console.log(`[managed-restart] root=${root}`);
+  console.log(`[managed-restart] scenario=${scenario} root=${root}`);
   console.log(
     `[managed-restart] expected OpenCode version ${EXPECTED_OPENCODE_VERSION} (binary: ${openCodeBinary ?? "PATH"})`,
   );
-  return runManagedRestartE2E({ root, evidenceDir, openCodeBinary });
+
+  const scenarioConfig: Record<string, Partial<ManagedRestartRunOptions>> = {
+    "completed-transcript": { spec: DEFAULT_SPEC, minStubRequests: 1 },
+    "orderly-shutdown": {
+      spec: "tests/e2e/opencode/opencode-recovery-shutdown.spec.ts",
+      holdFirstRequest: true,
+      controlDir: path.join(root, "control"),
+      // title + held main turn + recovery synthetic
+      minStubRequests: 3,
+    },
+    "abrupt-crash": {
+      spec: "tests/e2e/opencode/opencode-recovery-crash.spec.ts",
+      holdFirstRequest: true,
+      // title + held main turn + recovery synthetic
+      minStubRequests: 3,
+    },
+  };
+  const config = scenarioConfig[scenario];
+  if (!config) {
+    console.error(`[managed-restart] unknown scenario: ${scenario}`);
+    return 1;
+  }
+  return runManagedRestartE2E({ root, evidenceDir, openCodeBinary, ...config });
 }
 
 if (import.meta.main) {

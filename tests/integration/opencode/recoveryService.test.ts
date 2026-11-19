@@ -439,6 +439,38 @@ describe("recovery correctness fixes", () => {
     expect(graceWaits).toContain(5_000); // projected-user grace
   });
 
+  // B1 interrupted-turn defect: an already-projected user message cannot be
+  // woken by re-posting its id (OpenCode 2.2.6 reconciles but creates no inbox
+  // work). The executor must use a fresh synthetic to actually continue the turn.
+  it("uses a fresh synthetic for an already-projected user (no pending inbox)", async () => {
+    const { client, calls } = fakeClient({
+      messages: [{ id: "u1", type: "user", time: { created: 1 } }],
+      inbox: [],
+    });
+    const { deps, listeners, state } = makeDeps({
+      client,
+      readSessionSignal: async () => ({ busy: true, idle: false }),
+    });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls).toContain("synthetic");
+    expect(calls).not.toContain("prompt");
+  });
+
+  it("re-posts a PENDING user by id (no synthetic layered on pending input)", async () => {
+    const { client, calls } = fakeClient({
+      messages: [],
+      inbox: [{ id: "u1", type: "user", delivery: "steer", timeCreated: 1 }],
+    });
+    const { deps, listeners, state } = makeDeps({ client });
+    startOpenCodeRecovery(deps);
+    emitManaged(listeners, state);
+    await drainOpenCodeRecovery();
+    expect(calls).toContain("prompt");
+    expect(calls).not.toContain("synthetic");
+  });
+
   // Defect 4: ownership filtering.
   it("filters candidates by history ownership (local, legacy managed, remote, unreadable)", () => {
     const candidates = [

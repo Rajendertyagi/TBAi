@@ -254,7 +254,7 @@ this file is both the finding register and the execution sequence.
 
 | ID | Finding (source) | Maps to §3 | Status | Evidence / resolution |
 |---|---|---|---|---|
-| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | **Fixed** — root cause in the external runner, not OpenCode/TBAi | Root cause: the external runner drove Playwright with `spawnSync`, blocking the Bun event loop that hosts the in-process stub provider, so the stub could never answer OpenCode's model request. Fixed by an in-repo runner using async `spawn` (`scripts/run-managed-restart-e2e.ts`); test also made deterministic (wait for settled transcript). 8/8 repeated E2E runs pass; regression test proves the guard; added to the Windows `e2e` CI job. See §14.1. |
+| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | **Fixed** — three scenarios now covered | (a) Completed-transcript persistence: root cause was the external runner's blocking `spawnSync`; fixed with in-repo async runner (§14.1). (b) Orderly-shutdown interrupted-turn continuation and (c) abrupt managed-child crash recovery: new E2E specs + runner control protocol; revealed a genuine production defect — re-posting an already-projected user id reconciles but creates no inbox work in OpenCode 2.2.6, so the wake goes idle without an assistant. Fixed by using a fresh recovery synthetic for projected+shutdown-interruption cases (§15). All three scenarios pass 3/3 and are gated in CI. |
 | B2 | Production shutdown never calls `beginShutdown()` (§2) | A | Confirmed defect (static) | `beginShutdown()` has no production caller; `serverManager.shutdown()`→`clearBindingForShutdown()` never calls `clearManagedTarget()`. Fix + regression test pending. |
 | M1 | Frontend orphaned prompt record on selection failure (§3) | B | Needs verification | `v2ThreadController.ts:2357-2373` no try/catch around `applySelection()`. |
 | M2 | Singleflight keyed by permission shape (§3) | C | Needs verification | `sessions.ts:807-821`; caller reachability to be traced. |
@@ -579,3 +579,107 @@ CLI; evidence artifact uploaded; regression test passed in `verify`.
   (`stub requests 2`) and the regression test. No remaining blockers.
 - L9 and DOC1–DOC8 are closed. All other findings from §10/§11 remain as recorded
   (fixed or not-a-defect). All local and CI quality gates pass.
+
+---
+
+## 15. Interrupted-turn recovery scenarios (2026-11-19)
+
+The completed-transcript B1 test (§14.1) proved a finished turn survives a
+managed-child restart. It did NOT prove an unfinished turn is continued. This
+section records closing that gap with two real E2E scenarios through the ONE
+shared backend recovery service (`src/services/opencode/recovery.ts`).
+
+### 15.1 Genuine production defect found and fixed
+
+**Symptom.** With a genuinely unfinished turn (user projected, `time.busy` set,
+no assistant, no idle marker), the recovery service classified the state as
+`resubmit-user` and re-posted the original user id via `session.prompt`. OpenCode
+2.2.6 returned HTTP 200 (`outcome=recovered`) but produced NO assistant response:
+the stub received no new model request, and the session gained an `idle` marker
+with `outcome=succeeded` — an empty drain marked the turn complete.
+
+**Root cause (verified by a standalone experiment against the pinned 2.2.6
+binary).** Re-posting an ALREADY-PROJECTED user id reconciles to the existing
+message (`inbox.ts:184-189` `promotedFromMessage`) but creates NO new inbox item.
+`execution.wake` starts a drain, `nextPromotable` finds nothing, and the drain
+settles as `Execution.Succeeded` — no model call. A PENDING user id still works
+because its inbox row is delivered on wake. The plan's §5/§8 claim that same-id
+re-post "works whether pending or projected" is incorrect for 2.2.6.
+
+**Fix (smallest, shared path).** The classifier keeps the `resubmit-user` action
+(plan semantics) but marks already-projected users with `projected: true`
+(`recoveryClassifier.ts`). For a projected user with a shutdown-interruption
+signal (`busy` present, `idle` absent — the demonstrated unfinished-turn state),
+`performAction` (`recovery.ts`) now posts a FRESH recovery synthetic
+(`session.synthetic`, new stable id, `notice: opencode-restart`, `steer`,
+`resume: true`) instead of re-posting the user id. The synthetic creates a
+promotable steer item that continues the turn in the same session without
+duplicating the user message. Pending users are still re-posted by id. The
+user → completed-compaction → no-assistant window (§6.A.9) is unchanged.
+
+**Regression tests.** `tests/unit/opencode/recoveryClassifier.test.ts` asserts
+the `projected` marker; `tests/integration/opencode/recoveryService.test.ts`
+asserts a projected+shutdown-interruption user produces a `synthetic` call and
+NO `prompt` call, while a pending user produces `prompt` and NO `synthetic`.
+Both pass (28/28 classifier, 34/34 recovery service).
+
+### 15.2 Scenario A — orderly shutdown interruption
+
+`tests/e2e/opencode/opencode-recovery-shutdown.spec.ts` + runner scenario
+`orderly-shutdown`. The stub holds the first main-turn request (title requests
+are excluded), so the turn is genuinely unfinished. The spec drives the REAL
+production shutdown entry point through the runner's file-based control
+protocol (runner writes `{"type":"shutdown"}` to TBAi stdin), then relaunches
+TBAi with the same durable data. It asserts: original conversation/session ids
+preserved, original user message present exactly once, no assistant/idle before
+interruption, a distinct assistant response persisted in the ORIGINAL session
+after recovery, and the conversation usable after restart. **3/3 runs passed**
+(`1 passed`, `stub requests 3` each).
+
+### 15.3 Scenario B — abrupt managed-child crash
+
+`tests/e2e/opencode/opencode-recovery-crash.spec.ts` + runner scenario
+`abrupt-crash`. After a real execution-start boundary with an unfinished turn,
+the spec verifies the managed child's PID/creation identity and kills ONLY that
+child. The real manager restarts it, a new managed target is published, and the
+shared recovery service continues the turn. It asserts: original session reused,
+no duplicate logical user message, provider receives a recovery request, a
+distinct assistant response persisted in the original session, final transcript
+correct, and no stale registration/duplicate child. **3/3 runs passed**
+(`1 passed`, `stub requests 3` each).
+
+### 15.4 Infrastructure and CI
+
+- `scripts/run-managed-restart-e2e.ts` extended with scenario selection
+  (`TBAI_RECOVERY_SCENARIO`), a `holdFirstRequest` stub option, and a non-blocking
+  control-file protocol for shutdown/start. The async-spawn B1 fix is preserved.
+- `tests/harness/opencodeStubProvider.ts` gained `holdFirstRequest`/`release()`
+  (deferred barrier; title/summary requests excluded so the MAIN turn is held).
+- Windows `e2e` CI job now runs all three scenarios explicitly with the pinned
+  integrity-verified 2.2.6 CLI; evidence uploaded per scenario.
+- Full local verification: `bun run verify` exit 0 (5996 pass / 0 fail),
+  `bun run test:opencode-runtime` 10/10, `git diff --check` exit 0.
+
+**Independent read-only review (§12).** A focused review challenged both scenarios
+and found five items; all were addressed before completion:
+1. The runner now asserts a stub request carrying the recovery-synthetic prompt
+   (`"The server restarted while you were working"`) and raises the interruption
+   floor to 3 requests — proving the SHARED recovery service (not an OpenCode
+   internal auto-resume) drove continuation. Both scenarios log
+   `recovery synthetic reached stub at request 3`.
+2. Replaced `require()` in the ESM test helper with proper `node:fs`/`node:path`
+   imports so `session-poll.json` evidence is actually written (verified present).
+3. The crash scenario now verifies the NEW child's creation identity (not just a
+   different live PID), preventing PID-reuse false positives.
+4. Both specs assert exactly one distinct assistant response (no duplicate).
+5. Pagination shape (`body.cursor.next`) was confirmed against a real response.
+
+**Remaining limitations:**
+- The fix is scoped to projected users with a shutdown-interruption signal (the
+  demonstrated unfinished-turn state). Other projected-user states (e.g. no busy
+  signal) retain the plan's re-post behavior; no defect was demonstrated there.
+- The `cancel-and-resubmit-user` path (pending synthetic + projected user) still
+  re-posts the projected user by id; the same 2.2.6 no-inbox-work behavior could
+  apply there. Not exercised by the two required scenarios; recorded for a
+  future focused test rather than changed speculatively.
+- CI execution of the new commit is pending push and inspection.

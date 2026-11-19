@@ -116,6 +116,14 @@ export interface StubProviderOptions {
   readonly text?: string;
   /** Status/body/header used when `respond` returns `"retryable-error"`. */
   readonly error?: StubErrorOptions;
+  /**
+   * Hold the first non-summary model request open until {@link StubProvider.release}
+   * is called. Used by the interrupted-turn recovery E2E tests to create a
+   * genuinely unfinished turn (execution started, no assistant persisted, no
+   * idle marker). Only the FIRST request is held; later requests (e.g. a
+   * recovery re-submission) answer normally, so recovery can be observed.
+   */
+  readonly holdFirstRequest?: boolean;
 }
 
 /**
@@ -149,6 +157,8 @@ export interface StubProvider {
   readonly toolResultRequests: readonly StubRequest[];
   /** Every request answered with a provider error, in order. */
   readonly errorResponses: readonly StubErrorResponse[];
+  /** Release a held first request (see `holdFirstRequest`). Safe to call more than once. */
+  release(): void;
   /** Stop the server. Safe to call more than once. */
   stop(): void;
 }
@@ -201,6 +211,18 @@ function looksLikeSummaryRequest(messages: ReadonlyArray<Record<string, unknown>
   return messages.some((message) => {
     const content = typeof message.content === "string" ? message.content : "";
     return /summarize the conversation above into a structured summary/i.test(content);
+  });
+}
+
+/**
+ * Recognises OpenCode's title-generation request. It runs in parallel with the
+ * main turn and must NOT be the request a `holdFirstRequest` barrier holds —
+ * otherwise the main turn completes normally and no unfinished turn exists.
+ */
+function looksLikeTitleRequest(messages: ReadonlyArray<Record<string, unknown>>): boolean {
+  return messages.some((message) => {
+    const content = typeof message.content === "string" ? message.content : "";
+    return /name conversations so the user can find them later/i.test(content);
   });
 }
 
@@ -312,6 +334,22 @@ export async function startStubProvider(options: StubProviderOptions = {}): Prom
   const errorResponses: StubErrorResponse[] = [];
   let sequence = 0;
 
+  // Barrier for interrupted-turn tests: the first non-summary request waits here
+  // until released. A deferred promise is used (not a sleep) so the wait is
+  // deterministic and the event loop stays free — the same property the B1
+  // runner fix depends on.
+  let holdResolve: (() => void) | null = null;
+  let firstHeld = false;
+  const hold = options.holdFirstRequest
+    ? new Promise<void>((resolve) => {
+        holdResolve = resolve;
+      })
+    : null;
+  const release = (): void => {
+    holdResolve?.();
+    holdResolve = null;
+  };
+
   /** Monotonic request counter. Named so the call site reads as a call, not an assignment. */
   const nextSequence = (): number => {
     sequence += 1;
@@ -354,6 +392,16 @@ export async function startStubProvider(options: StubProviderOptions = {}): Prom
       const behaviour =
         (await options.respond?.(record)) ??
         (looksLikeSummaryRequest(messages) ? "summary" : "text");
+
+      // Hold the first MAIN-TURN request to create an unfinished turn. Title
+      // generation and compaction run in parallel with the turn and must not be
+      // held — otherwise the main turn completes and no unfinished turn exists.
+      // The request is already recorded (so evidence proves the model was
+      // reached), but no response bytes are sent until the test releases it.
+      if (hold && behaviour !== "summary" && !looksLikeTitleRequest(messages) && !firstHeld) {
+        firstHeld = true;
+        await hold;
+      }
 
       if (behaviour === "retryable-error") {
         errorResponses.push({
@@ -414,9 +462,12 @@ export async function startStubProvider(options: StubProviderOptions = {}): Prom
       return requests.filter((request) => request.carriesToolResult);
     },
     errorResponses,
+    release,
     stop() {
       if (stopped) return;
       stopped = true;
+      // Release any held request so the handler cannot leak on shutdown.
+      release();
       server.stop(true);
     },
   };

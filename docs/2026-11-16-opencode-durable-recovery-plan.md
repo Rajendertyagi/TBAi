@@ -605,6 +605,23 @@ Explicit behavior for every pending state. **Precedence is promotion order (§5)
 
 ### 13.2 Proposed for a later implementation phase (NOT run)
 
+> **Execution status (2026-11-19).** Two real-runtime scenarios from this matrix
+> are now EXECUTED and passing via the shared recovery service — see
+> `docs/2026-11-18-opencode-subsystem-audit.md` §15:
+> - **Scenario 4** (crash after `Execution.Started` before assistant creation) —
+>   executed as the abrupt managed-child crash E2E (`opencode-recovery-crash.spec.ts`),
+>   3/3 passing. This exposed a genuine defect: re-posting an already-projected
+>   user id reconciles but creates no inbox work in OpenCode 2.2.6, so the wake
+>   goes idle without an assistant. Fixed by posting a fresh recovery synthetic
+>   for projected+shutdown-interruption users (§15.1 of the audit).
+> - **Scenario 3** (shutdown interruption, no idle marker) — executed as the
+>   orderly-shutdown E2E (`opencode-recovery-shutdown.spec.ts`), 3/3 passing.
+>
+> The remaining items below are still PROPOSED / not run unless the audit says
+> otherwise. The §5/§8 claim that same-id re-post "works whether pending or
+> projected" is corrected for 2.2.6 in audit §15.1: it works for PENDING users;
+> PROJECTED users need a fresh synthetic to create promotable inbox work.
+
 1. Idle messages surviving a hard restart while historical `session.log` remains empty.
 2. Success, failure, and non-shutdown interruption producing idle markers.
 3. Shutdown interruption not producing an idle marker.

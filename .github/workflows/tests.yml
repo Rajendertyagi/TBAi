@@ -473,6 +473,16 @@ jobs:
       - name: E2E (managed-restart recovery, B1)
         run: bun run test:e2e:managed-restart
 
+      - name: E2E (orderly shutdown interrupted-turn recovery)
+        run: bun run test:e2e:managed-restart
+        env:
+          TBAI_RECOVERY_SCENARIO: orderly-shutdown
+
+      - name: E2E (abrupt managed-child crash recovery)
+        run: bun run test:e2e:managed-restart
+        env:
+          TBAI_RECOVERY_SCENARIO: abrupt-crash
+
       - name: Upload managed-restart evidence
         if: always()
         uses: actions/upload-artifact@v4
