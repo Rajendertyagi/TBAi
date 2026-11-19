@@ -34,6 +34,7 @@
     "verify:packaged-origin": "bun scripts/verify-packaged-webview-origin.ts",
     "observe:dev-origin": "bun scripts/observe-dev-webview-origin.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
+    "test:e2e:managed-restart": "bun scripts/run-managed-restart-e2e.ts",
     "e2e:settings": "bun scripts/dump-playwright-settings.ts",
     "e2e:aggregate": "bun scripts/aggregate-e2e-reports.ts",
     "e2e:compare": "bun scripts/compare-e2e-reports.ts",

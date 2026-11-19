@@ -191,7 +191,19 @@ async function waitForDistinctAssistantResponse(
       const transcript = await fetchAllOpenCodeMessages(request, sessionId);
       const analysis = analyzeTranscript(transcript.messages, marker, prompt, expectedResponse);
       last = { transcript, analysis };
-      return analysis.assistantResponseComplete && analysis.distinctAssistantIds.length > 0;
+      // Wait for the SETTLED transcript, not merely the first streamed text.
+      // The assistant message gains `finish`/`completed`/`tokens` and an `idle`
+      // marker after the turn ends. Snapshotting before that makes the
+      // before/after comparison race: the `before` copy is mid-stream while the
+      // `after` copy is settled, so they differ even though recovery preserved
+      // the transcript. Requiring the settled state is deterministic and proves
+      // the response was fully persisted before the restart.
+      return (
+        analysis.assistantResponseComplete &&
+        analysis.distinctAssistantIds.length > 0 &&
+        analysis.assistantResponseSettled &&
+        analysis.idlePresent
+      );
     },
     timeoutMs,
     "distinct assistant response persisted in OpenCode session history",
@@ -300,6 +312,15 @@ function analyzeTranscript(
     markerInAssistantResponse,
     expectedResponseInAssistant,
     assistantResponseComplete: expectedResponseInAssistant,
+    // Settled = the distinct assistant message has a terminal finish reason and
+    // a completion timestamp, i.e. the turn fully persisted rather than only
+    // streaming its first text delta.
+    assistantResponseSettled:
+      distinctAssistantWithResponse.length > 0 &&
+      distinctAssistantWithResponse.every((m) => m.finish != null && m.time?.completed != null),
+    // The `idle` marker is published when the session finishes the turn. Its
+    // presence means the transcript will not gain more messages from this turn.
+    idlePresent: normalized.some((m) => m.type === "idle"),
     distinctAssistantIds: distinctAssistantWithResponse.map((m) => m.id),
     distinctAssistantMessages: distinctAssistantWithResponse,
   };

@@ -753,7 +753,7 @@ at the start of this revision and all matched:
 | `tests/integration/opencode/opencode-ownership-runtime.test.ts` | `1BC30A08E1C67D0E4356970BD87281D24CA8F61BBF75D9D357FE971A0C1D85F0` |
 | `tests/integration/opencode/serverManager.test.ts` | `A5F00C727411D5BE0390CE4C2303029D60F1FE2B70460D31E36F3D748031E544` |
 | `tests/unit/opencode/managed-lifecycle.test.ts` | `A72E31187AB21BA69B0596BF0793BCF6230EFCDB3115BF93949AD5E18031DE18` |
-| `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts` | `48DA59A4053CCC8392A95E66B4B6A58B7D3919EBC6410077645245977104FFF1` (updated 2026-11-19: smallest justified change — wait for the Send button to be enabled and the composer to hold the prompt before clicking; fixes a UI timing flake that dropped the prompt and never issued the prompt POST. No acceptance assertion, timeout budget, or transcript-persistence check was weakened.) |
+| `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts` | `5ED8ACE10EA8780B9770E6952DA837D7A80322ECC87BF6F7D1003F6154D532FC` (updated 2026-11-19: two smallest-justified changes — (1) wait for the Send button to be enabled and the composer to hold the prompt before clicking, fixing a UI timing flake that dropped the prompt; (2) wait for the SETTLED transcript (assistant `finish`/`completed` + `idle` marker) before snapshotting, removing a before/after comparison race. Both strengthen determinism; no acceptance assertion, timeout budget, or transcript-persistence check was weakened.) |
 | `verify-output.txt` | `DA2685EF3311677F59FB5F1F4967E07B5D14AC3F61DF0387A3ECA33E3EEFD278` |
 
 The P0 test file `tests/integration/opencode/opencode-restart-reconstruction-p0.test.ts` is preserved

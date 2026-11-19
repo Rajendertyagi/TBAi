@@ -462,6 +462,25 @@ jobs:
           appearance-scaling.spec.ts
           typography-standardization.spec.ts
 
+      # B1 — dedicated managed-restart recovery acceptance. This is the ONLY
+      # gate for the interrupted-turn recovery contract: it drives the real
+      # managed OpenCode child, kills and restarts it, and asserts the assistant
+      # response is really persisted in session history across the restart.
+      # The ordinary E2E job above does NOT cover this scenario. The runner
+      # (scripts/run-managed-restart-e2e.ts) starts a local stub provider with no
+      # credentials, uses the pinned CLI installed above (on PATH), isolates its
+      # temp/evidence roots, and fails closed if the stub is never called.
+      - name: E2E (managed-restart recovery, B1)
+        run: bun run test:e2e:managed-restart
+
+      - name: Upload managed-restart evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-restart-evidence
+          path: tests/.artifacts/managed-restart
+          if-no-files-found: warn
+
   # G5 — the same full, non-live suite at two revisions, compared test identity by
   # test identity.
   #

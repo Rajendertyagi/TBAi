@@ -11,13 +11,23 @@
 
 ## 1. Verdict
 
-**NOT done.** The subsystem is robust and well-tested overall — no data-loss,
-security-bypass, or framework-boundary catastrophe was found — but it cannot be
-declared complete while the key acceptance test is failing and a production
-shutdown contract is dead. A green `bun run verify` is necessary but not
-sufficient; the issues below are ones the gates do not catch.
+**Audit verdict (2026-11-18 snapshot): NOT done.** That snapshot predates the
+closure work recorded in §§11–14. As of 2026-11-19, the blockers it names are
+resolved: B1 (managed-restart E2E) was root-caused to the external runner's
+blocking `spawnSync` and fixed with an in-repo async runner (§14.1), and B2
+(production shutdown) was fixed with a regression test (§11). All findings in
+the canonical register (§10) are now `Fixed`, `Not a defect`, or documented
+scope decisions. The dedicated managed-restart acceptance test passes 8/8 and is
+gated in CI. The only unverified item is GitHub Actions execution of the new
+commit (no CI result exists until the work is pushed and a run inspected).
 
-## 2. Blockers (resolve before "done")
+## 2. Blockers (resolve before "done") — historical snapshot
+
+> **2026-11-19 status:** both blockers below are resolved. B1 was root-caused to
+> the external runner's blocking `spawnSync` and fixed with an in-repo async
+> runner, a deterministic test, a regression guard, and a CI gate (§14.1). B2 was
+> fixed with a production `beginShutdown()` call and regression test (§11). The
+> text below is preserved as the original audit finding.
 
 ### B1 — Dedicated managed-restart recovery E2E is failing and not gated
 
@@ -219,20 +229,18 @@ and do not justify opening this task.
 | test:dom | 813 pass, 0 fail (84 files) |
 | test:quarantine | OK — no stale entries |
 
-## 9. Recommended path to "done"
+## 9. Recommended path to "done" (historical — all items now closed)
 
-1. Fix or formally reclassify the managed-restart E2E (B1) — make it pass and gate it,
-   or record an explicit owner decision that it is not a release gate.
-2. Wire `beginShutdown()` into production shutdown (B2) and add a test for the
-   production-only path.
-3. Fix the frontend orphaned-prompt record and the singleflight key split; add the
-   missing guard test for the `@opencode/client` boundary.
-4. Reconcile the stale docs (canonical roadmap, 2026-11-16 plan, engineering-quality,
-   opencode-context, RT-004).
-5. Re-run `bun run verify` and the gated E2E after fixes.
+This was the audit's 2026-11-18 remediation plan. Every item is now resolved in
+§§11–14:
 
-Each item requires its own reviewed and owner-approved implementation task. This
-audit does not authorize any of them.
+1. **B1** — fixed (external runner `spawnSync` → async `spawn`), gated in CI (§14.1).
+2. **B2** — `beginShutdown()` wired into production shutdown with a regression test (§11).
+3. **M1/M2/M3** — orphaned-prompt record, singleflight key split, and client-boundary
+   guard all fixed with tests (§11).
+4. **DOC1–DOC8** — reconciled in place (§14.3).
+5. **Verification** — `bun run verify` exit 0 and the dedicated managed-restart E2E
+   8/8 passing (§14.4).
 
 ---
 
@@ -246,7 +254,7 @@ this file is both the finding register and the execution sequence.
 
 | ID | Finding (source) | Maps to §3 | Status | Evidence / resolution |
 |---|---|---|---|---|
-| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | **Blocked** (UI flake fixed; substantive failure unresolved) | Re-run on current HEAD: deterministic `timeout waiting for distinct assistant response persisted in OpenCode session history`, stub requests 0. UI send-button timing flake fixed (smallest justified change; hash updated). Substantive failure is in OpenCode's execution path (prompt admitted, `session.inbox.delivered` fires, no `session.step.started`, stub never called) — not reproducible in isolation. Not added to gate. See §14. |
+| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | **Fixed** — root cause in the external runner, not OpenCode/TBAi | Root cause: the external runner drove Playwright with `spawnSync`, blocking the Bun event loop that hosts the in-process stub provider, so the stub could never answer OpenCode's model request. Fixed by an in-repo runner using async `spawn` (`scripts/run-managed-restart-e2e.ts`); test also made deterministic (wait for settled transcript). 8/8 repeated E2E runs pass; regression test proves the guard; added to the Windows `e2e` CI job. See §14.1. |
 | B2 | Production shutdown never calls `beginShutdown()` (§2) | A | Confirmed defect (static) | `beginShutdown()` has no production caller; `serverManager.shutdown()`→`clearBindingForShutdown()` never calls `clearManagedTarget()`. Fix + regression test pending. |
 | M1 | Frontend orphaned prompt record on selection failure (§3) | B | Needs verification | `v2ThreadController.ts:2357-2373` no try/catch around `applySelection()`. |
 | M2 | Singleflight keyed by permission shape (§3) | C | Needs verification | `sessions.ts:807-821`; caller reachability to be traced. |
@@ -306,7 +314,7 @@ callers, state transitions, and tests. Statuses below supersede §10.
 
 ### Needs runtime verification / blocked
 
-- **B1 / G** managed-restart E2E: **Blocked** — see §14 for the full root-cause investigation. The UI send-button timing flake was fixed (smallest justified change; hash updated to `48DA59A4…04FFF1`), but the substantive failure persists: prompt admitted (`msg_pending_*`), SSE reaches `session.inbox.delivered`, no `session.step.started`, stub receives 0 requests. Exhaustively not reproducible in isolation (binary 2.2.6, `plugin: []`, `msg_pending_*` id, directory header, env vars, model switch, SSE consumer, and the exact forwarded body all work directly). The failure is in OpenCode's execution path under the full TBAi E2E harness, not a TBAi product defect. Not added to the gate; acceptance criteria not weakened; not skipped/quarantined.
+- **B1 / G** managed-restart E2E: **Fixed** — see §14.1. Root cause was the external runner's `spawnSync` blocking the Bun event loop that hosts the in-process stub provider, so the stub could never answer OpenCode's model request. Replaced with an in-repo async-spawn runner (`scripts/run-managed-restart-e2e.ts`); test made deterministic (wait for settled transcript); 8/8 repeated runs pass; regression test proves the guard; gated in the Windows `e2e` CI job.
 - **L9** `refresh()`/`reconcileStagedRevert()` lack attempt-liveness guards across awaits: **Fixed** — see §14. Race reproduced deterministically (stale gen-1 session title committed after takeover), fixed with captured-generation + `isLive(live)` checks after each await, guard proven to fail when reverted. Regression test added.
 - **L6** restart-exhaustion recovery entry points have no caller: dead code, informational; budget is reset internally by the stability timer. Left unchanged.
 
@@ -348,9 +356,9 @@ check-runs exist for the current branch tip. The most recent workflow runs are
 for older commits (`43680414645` head `4fec007` → failure; `43630158900` head
 `2c88db1` → success). No CI claim is made for the current work.
 
-**Remaining blockers:** B1/G (managed-restart E2E — substantive failure blocked
-in OpenCode's execution path under the full harness; UI flake fixed; not gated).
-L9 and DOC1–DOC8 are closed. See §14.
+**Remaining blockers:** none in the finding register — B1/G is fixed and gated
+(§14.1), L9 and DOC1–DOC8 are closed. The only open item is CI verification of
+the resulting commit, which requires a push and an inspected Actions run.
 
 **Git:** no commit, push, merge, rebase, reset, or branch change performed.
 The canonical audit file is the working record; no duplicate audit/plan
@@ -411,40 +419,71 @@ Send button to be enabled, and the composer to hold the prompt before clicking.
 No acceptance assertion, timeout budget, or transcript-persistence check was
 weakened. The documented SHA-256 pin in
 `docs/2026-11-16-opencode-durable-recovery-plan.md:756` was updated from
-`4358F6FD…CBB6F` to `48DA59A4…04FFF1` with an explanatory note.
+`4358F6FD…CBB6F` to `48DA59A4…04FFF1` (UI fix) and finally to
+`5ED8ACE1…532FC` (settled-transcript fix), each with an explanatory note.
 
-**Substantive failure remains — Blocked.** Final focused run via the dedicated
-external runner (`bun D:\Coding\OpenCode\user\tmp\opencode\run-restart-recovery-e2e.ts`)
-→ exit 1, `1 failed`, `stub requests 0`, `timeout waiting for distinct assistant
-response persisted in OpenCode session history`.
+**Root cause — confirmed, and NOT in OpenCode or TBAi product code.** The
+failure was in the **external test runner**
+(`D:\Coding\OpenCode\user\tmp\opencode\run-restart-recovery-e2e.ts`). That runner
+hosts the stub model provider as an in-process `Bun.serve` instance, but drove
+Playwright with **`spawnSync`** (line 136). `spawnSync` blocks the runner's Bun
+event loop for the entire test, so the stub could never accept or answer
+OpenCode's model request. This explains every observed symptom exactly:
 
-Evidence collected at each boundary:
-- Playwright submits the prompt; TBAi `POST /api/opencode/api/session/:id/prompt`
-  returns 200 in ~12 ms with `msg_pending_*` (prompt admitted).
-- SSE events reach `session.inbox.enqueued` → `session.execution.started` →
-  `session.instructions.updated` → `session.inbox.delivered` (eventIndex 5), then
-  **no `session.step.started`** until the test's 120 s timeout/cleanup.
-- Stub provider receives **0** requests; no assistant message is persisted; the
-  OpenCode DB has no session row for the failing run.
-- The exact forwarded body was captured from the proxy:
-  `{"id":"msg_pending_…","text":"Reply with exactly: OK …","files":[],"agents":[],"skills":[],"delivery":"steer"}`.
+- OpenCode admitted the prompt (`msg_pending_*`), published
+  `session.inbox.enqueued` → `session.execution.started` →
+  `session.instructions.updated` → `session.inbox.delivered`, and reached
+  `llm.stream.before` (captured via the `TBAI_OPENCODE_DIAG_LOG` stage hook in the
+  2.2.6 diagnostic build) — then stalled with **no `llm.stream.start`** for the
+  full 120 s test timeout.
+- The stub received **0** requests during the test. An instrumented stub that
+  logs at the top of its `fetch` handler showed the `POST /v1/chat/completions`
+  arriving only at cleanup — the moment `spawnSync` returned and the event loop
+  was free again. A TCP monitor confirmed no connection to the stub port during
+  the run.
+- The working minimal control (OpenCode + stub driven directly, no `spawnSync`)
+  always produced `stub requests 2–3` and a persisted assistant message. Every
+  suspected differentiator was tested in isolation and did **not** reproduce the
+  failure: binary pin 2.2.6, `plugin: []`, `msg_pending_*` id, directory header,
+  project-disable env vars, model switch, SSE consumer, exact body, headers,
+  `OPENCODE_CONFIG` file, and the Windows job-object spawn. The one difference
+  that mattered was the blocking child spawn in the same process as the stub.
 
-Isolation control (`bun D:\Coding\OpenCode\user\tmp\opencode\minimal-oc-test.ts`):
-the same OpenCode 2.2.6 binary + stub provider, driven directly over HTTP,
-produces `stub requests 3`, an assistant message `OK MINIMAL`, and an idle
-marker. Each suspected differentiator was tested in isolation and **did not**
-reproduce the failure: binary pin 2.2.6 (PATH `opencode` is 2.3.0), `plugin: []`,
-`msg_pending_*` id, `x-opencode-directory` header, `OPENCODE_*_PROJECT_DISABLE`
-env vars, `switchModel` to `stub/tiny`, an open SSE consumer, and the exact
-forwarded body shape.
+**Correction.** Added a durable in-repo runner
+`scripts/run-managed-restart-e2e.ts` (`bun run test:e2e:managed-restart`) that:
+starts the stub in-process, generates an isolated config/temp/evidence root,
+launches TBAi against the pinned 2.2.6 binary, and drives Playwright with an
+**async `spawn`** (`runChildAsync`) so the event loop stays free. It fails closed
+if Playwright passes but the stub received no model request. The external runner
+was likewise switched to async spawn for local reproduction.
 
-Conclusion: the failure is in OpenCode's execution path (the LLM step never
-starts after `session.inbox.delivered`) under the full TBAi E2E harness, not a
-TBAi product defect and not reproducible in isolation. It is **not** labeled
-"environmental" without this investigation, but it cannot be fixed in TBAi code.
-The spec is **not** added to the required CI gate (unreliable), **not** skipped,
-**not** quarantined, and its acceptance criteria are unchanged. B1 remains a
-material open blocker; the subsystem is **not** declared complete.
+**Test determinism.** The spec also had a real race: it snapshotted the
+"before" transcript as soon as streamed text appeared, before the assistant
+message settled (`finish`/`completed`/`tokens`) and before the `idle` marker was
+published. The "after" snapshot was settled, so `comparison.equal` failed
+intermittently (observed 1 in 4 runs). `waitForDistinctAssistantResponse` now
+requires the settled state (`assistantResponseSettled` + `idlePresent`) — this
+**strengthens** the assertion (the response must be fully persisted before
+restart) and removes the race. No acceptance assertion, timeout budget, or
+transcript-persistence check was weakened; the SHA-256 pin was updated to
+`5ED8ACE1…532FC` with rationale.
+
+**Regression test.** `tests/unit/tooling/managed-restart-runner.test.ts` starts
+a real in-process stub and calls it through `runChildAsync`; it fails when the
+helper is reverted to blocking `spawnSync` (proven by temporary revert) and
+passes with the async fix.
+
+**Repeated E2E results.** `bun run test:e2e:managed-restart` (pinned 2.2.6):
+**8/8 runs passed** (`1 passed`, exit 0, `stub requests 2` each). Both restart
+scenarios in the recovery plan are exercised by the spec: the assistant response
+is persisted before restart, the managed child is killed and restarted, and the
+settled transcript is identical after restart with the conversation still usable.
+
+**CI.** Added a required step to the Windows `e2e` job in
+`.github/workflows/tests.yml` that runs `bun run test:e2e:managed-restart` using
+the pinned CLI installed by `install-opencode` (on PATH, integrity-verified),
+with evidence uploaded via `actions/upload-artifact`. The job fails if the test
+fails or the stub is never called.
 
 ### 14.2 L9 — frontend attempt-liveness race
 
@@ -505,29 +544,30 @@ rather than rewritten.
 | `bun run test:opencode-runtime` | exit 0 — 10/10 required suites passed (54 pass, 0 fail, 0 skip total) |
 | `bun run verify` (full chain) | **exit 0** — all gates green |
 | — typecheck / lint / format:check / test:locations / build | all exit 0 |
-| — `bun run test` (within verify) | 5993 pass, 0 fail |
+| — `bun run test` (within verify) | 5994 pass, 0 fail |
 | — `test:shutdown` | 1 pass, 0 fail |
 | — `test:startup-rollback` | 2 pass, 0 fail |
 | — `test:lifecycle-integration` | 3 pass, 0 fail |
 | — `test:dom` | 813 pass, 0 fail |
 | — `test:quarantine` | OK — no stale entries |
 | `git diff --check` | exit 0 |
-| Focused B1 E2E (external runner) | exit 1 — 1 failed, stub requests 0 (see §14.1) |
+| `bun test --isolate tests/unit/tooling/managed-restart-runner.test.ts` | 1 pass, 0 fail (fails when reverted to blocking spawn) |
+| `bun run test:e2e:managed-restart` (pinned 2.2.6) | exit 0 — 1 passed, stub requests 2; **8/8 repeated runs passed** |
 
 The full `bun run verify` chain was re-run after all changes and completed with
-exit 0 (an earlier invocation exceeded a 600 s tool wall-clock limit during the
-DOM stage; re-run with a longer limit it completed green). No gate was weakened
-or skipped.
+exit 0. No gate was weakened or skipped.
 
-**GitHub CI:** not verified — no check-runs for `15bf5f8` (`total_count: 0`); most
-recent runs are for older commits. No CI claim is made.
+**GitHub CI:** the new commit has not been pushed; no Actions result exists yet.
+The dedicated managed-restart test was added to the Windows `e2e` job and must be
+verified by inspecting an actual run after push.
 
 ### 14.5 Final remaining-risk assessment
 
-- **B1/G — open blocker.** Managed-restart recovery E2E does not pass; the
-  substantive failure is in OpenCode's execution path under the full harness and
-  is not fixable in TBAi code. Not gated, not skipped, not weakened. The subsystem
-  is **not** declared complete while this remains.
-- **CI — unverified.** No GitHub Actions result exists for the current tip.
+- **B1/G — fixed.** Root cause was the external runner's blocking `spawnSync`,
+  not OpenCode or TBAi product code. In-repo async runner + deterministic test +
+  regression guard + CI gate; 8/8 repeated E2E runs pass. No acceptance criteria
+  weakened, no skip/quarantine.
+- **CI — unverified.** No GitHub Actions result exists for the new commit yet;
+  the dedicated test is now gated and must be confirmed by an inspected run.
 - L9 and DOC1–DOC8 are closed. All other findings from §10/§11 remain as recorded
   (fixed or not-a-defect). All local quality gates pass.
