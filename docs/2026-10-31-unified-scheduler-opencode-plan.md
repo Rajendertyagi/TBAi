@@ -1,5 +1,7 @@
 # Unified Scheduler: Direct + OpenCode 2.2.0 Engine Architecture (V1 Implementation Plan)
 
+> **Version note (2026-11-19):** the "2.2.0" in the title and version references below are historical to this plan's date. The sole currently supported runtime is OpenCode / `@opencode/client` **2.2.6**; see `docs/2026-11-18-opencode-subsystem-audit.md`.
+
 > **Document Status**: **FINAL V1 IMPLEMENTATION PLAN (Planning Phase Only — No Application Code Modified)**
 > **Repository Baseline**: `Rajendertyagi/TBAi` @ branch `ci/tauri-e2e-verify` (Commit: `22d6f59ac20c041244846dd5cdde7a0440621e2e`)
 > **Governing Standards**: `AGENTS.md` (lines 134–150), `docs/PROJECT_MANAGER_PROTOCOL.md` (§9 Engineering Philosophy and Scope).

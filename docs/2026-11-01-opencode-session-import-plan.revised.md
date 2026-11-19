@@ -4,6 +4,16 @@
 
 **Status:** Revised architecture plan — directory behavior and implementation boundaries verified; implementation still requires explicit authorization
 
+> **Current status (2026-11-19):** the "still requires explicit authorization"
+> label above is the original 2026-11-01 revised-plan status and is retained as
+> history. Authorization was subsequently granted and the implementation landed
+> in commit `d560b26` (`src/services/opencode/import.ts`, the
+> `/api/opencode/session/import` route, and the import-provenance DB schema). This
+> file is now a historical design record; current behavior is described in
+> `docs/opencode-session-import.md` and tracked in
+> `docs/2026-11-18-opencode-subsystem-audit.md`. The 2.2.0 version references
+> below are historical; the sole currently supported runtime is **2.2.6**.
+
 **Target Subsystem:** OpenCode Subsystem (`TBAi`)
 
 **Reference Implementations:**

@@ -77,12 +77,12 @@ is not stylistic:
   `bun run test` scopes to `./tests/unit ./tests/integration` and excludes the
   three lifecycle test files (`shutdown-lifecycle`, `startup-rollback`,
   `lifecycle-integration`), giving 319. Bare `bun test` collects all 322
-  unit/integration files, plus the 50 DOM contract files, plus the 50 E2E
-  Playwright specs in `tests/e2e`: 322 + 50 + 50 = 422.
+  unit/integration files, plus the 50 DOM contract files, plus the 53 E2E
+  Playwright specs in `tests/e2e`: 322 + 50 + 53 = 425.
   The DOM files need `--preload ./tests/setup/dom-preload.ts` and fail
   without it (measured: 18 fail, 8 errors). The E2E specs are named
-  `*.spec.ts`, which bare `bun test` collects; they are the 50 on disk
-  (43 non-live + 7 `*-live`).
+  `*.spec.ts`, which bare `bun test` collects; they are the 53 on disk
+  (46 non-live + 7 `*-live`).
   The totals move as tests are added; the argument rests on the named
   groups, not on a fixed difference.
 - Without `--isolate` the shared test database cascades "Database has closed",
@@ -145,8 +145,8 @@ model credentials - a runner without them exercises the refusal surface instead
 of the model. The last two are the typography/scaling rendered-behaviour specs.
 The remaining specs on disk are pre-existing work in progress and are not gated
 here; widening this list is a deliberate decision, not an oversight. The
-scoped list is **not** the full E2E suite: 50 specs live on disk
-(43 non-live + 7 `*-live`), and the `e2e` job runs only the nine above.
+scoped list is **not** the full E2E suite: 53 specs live on disk
+(46 non-live + 7 `*-live`), and the `e2e` job runs only the nine above.
 `docs/e2e-spec-inventory.md` records the per-spec classification and the rule
 for widening the list.
 
@@ -177,8 +177,10 @@ and needs the pinned CLI, which `verify` deliberately never does. On CI it is it
 own job (`opencode-runtime`), installed with the same
 `./.github/actions/install-opencode` action and the same pinned version and SHA512
 from the workflow's `env`. Measured cost on `windows-latest`, 2026-10-24 (run
-40126225730): **about 38 s** for the seven required suites, slowest single suite
-10.3 s.
+40126225730): **about 38 s** for the seven suites required at that time,
+slowest single suite 10.3 s. The registry now defines **ten** required suites
+(`scripts/run-opencode-runtime-suites.ts:67-78`); the 38 s figure predates the
+three suites added since and is historical, not a current measurement.
 
 The verdict is not "the command exited 0", and that is the whole reason this is a
 script (`scripts/run-opencode-runtime-suites.ts`) rather than a loop in YAML. Every

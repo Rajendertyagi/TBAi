@@ -1854,15 +1854,20 @@ export function createV2ThreadController(
 
   async function refresh(): Promise<void> {
     await awaitReady();
-    requireGeneration();
+    const live = currentAttempt;
+    const generation = requireGeneration();
     dispatch({ type: "load_started", reason: "refresh" });
     try {
-      const session = await requireGeneration().operations.sessionGet({
+      const session = await generation.operations.sessionGet({
         sessionID: client.sessionId,
       });
+      // A takeover while the read was in flight must not let this attempt
+      // commit state onto the newer attempt (L9).
+      if (!live || !isLive(live)) return;
       dispatch({ type: "session_hydrated", session });
       const held = beginHistoryReadScope();
-      const snapshot = await history.read(requireGeneration());
+      const snapshot = await history.read(generation);
+      if (!live || !isLive(live)) return;
       history.commit(snapshot, historyMerge(held));
       dispatch({ type: "load_completed" });
       if (health.degraded) void reconcileLifecycle();
@@ -1933,21 +1938,26 @@ export function createV2ThreadController(
 
   async function reconcileStagedRevert(): Promise<void> {
     await awaitReady();
-    requireGeneration();
+    const live = currentAttempt;
+    const generation = requireGeneration();
     try {
-      const session = await requireGeneration().operations.sessionGet({
+      const session = await generation.operations.sessionGet({
         sessionID: client.sessionId,
       });
+      if (!live || !isLive(live)) return;
       dispatch({ type: "session_hydrated", session });
       if (session.revert !== undefined) {
         dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
-        await requireGeneration().operations.revertClear({ sessionID: client.sessionId });
+        await generation.operations.revertClear({ sessionID: client.sessionId });
+        if (!live || !isLive(live)) return;
       }
-      const verified = await requireGeneration().operations.sessionGet({
+      const verified = await generation.operations.sessionGet({
         sessionID: client.sessionId,
       });
+      if (!live || !isLive(live)) return;
       const held = beginHistoryReadScope();
-      const snapshot = await history.read(requireGeneration());
+      const snapshot = await history.read(generation);
+      if (!live || !isLive(live)) return;
       history.commit(snapshot, historyMerge(held));
       if (verified.revert !== undefined) throw new Error("staged revert remains");
       dispatch({ type: "revert_recovery_cleared" });

@@ -1,5 +1,7 @@
 # TBAi OpenCode Hybrid Runtime — Implementation Plan (revision 22, Windows scope)
 
+> **Version note (2026-11-19):** OpenCode version references below are historical to this plan's date. The sole currently supported runtime is OpenCode / `@opencode/client` **2.2.6**; see `docs/2026-11-18-opencode-subsystem-audit.md`.
+
 **Status:** revised proposal for review. **Nothing implemented.** No source, test, config,
 dependency, lockfile, or documentation file changes accompany this document beyond the document
 itself.

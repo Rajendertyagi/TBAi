@@ -1,5 +1,7 @@
 # OpenCode retry visibility + honest session restoration — implementation and acceptance plan
 
+> **Version note (2026-11-19):** the 2.0.x / 2.1.2 version references below are historical to this plan's date. The sole currently supported runtime is OpenCode / `@opencode/client` **2.2.6**; see `docs/2026-11-18-opencode-subsystem-audit.md`.
+
 **Status:** implemented and pushed. G1, G2, G3, G4, G5, and G6 pass within their
 stated scope; G2 now includes the packaged shell hard-kill, G4 now includes 2.0.x,
 G3 is the bounded process-kill guarantee, and G6 covers the Tauri sidecar restart.

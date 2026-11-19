@@ -1,9 +1,14 @@
 # TBAi OpenCode Restart Recovery — Plan (revised after idle-signal review, 2026-11-17)
 
 **Status: IMPLEMENTED — production implementation authorized and completed (2026-11-17).**
-**Branch:** `review/managed-opencode-hardening-2026-11-15` · commit chain `2ef39c5` → `0a37700` →
-`27dee28` → `3636bb5` → `9502943` (all pushed). The fourth focused pass (retry-exhaustion outcome
-handling) is commit `9502943`, pushed.
+**Branch:** `review/managed-opencode-hardening-2026-11-15` · original implementation commit chain
+`2ef39c5` → `0a37700` → `27dee28` → `3636bb5` → `9502943` (all pushed). The fourth focused pass
+(retry-exhaustion outcome handling) is commit `9502943`, pushed.
+**Subsequent hardening (2026-11-18/19):** `3b32598`, `15c3ca0`, `3dfa9bf`, `8b27424`, `15bf5f8`
+(all pushed) added per-candidate failure isolation, lifecycle-scoped pass-stop, and two independent
+audit rounds. Current status and final verification are tracked in
+`docs/2026-11-18-opencode-subsystem-audit.md`; the commit chain above is the original implementation
+history, not the current branch tip.
 **Pinned runtime:** OpenCode / `@opencode/client` 2.2.6 (binary `D:\Coding\OpenCode\opencode.exe`, v2.2.6).
 **Scope:** one backend-owned recovery service under `src/services/opencode/`, config in
 `src/config/opencode-recovery.ts`, wiring in `src/server.ts`, and read-only candidate enumeration in
@@ -748,7 +753,7 @@ at the start of this revision and all matched:
 | `tests/integration/opencode/opencode-ownership-runtime.test.ts` | `1BC30A08E1C67D0E4356970BD87281D24CA8F61BBF75D9D357FE971A0C1D85F0` |
 | `tests/integration/opencode/serverManager.test.ts` | `A5F00C727411D5BE0390CE4C2303029D60F1FE2B70460D31E36F3D748031E544` |
 | `tests/unit/opencode/managed-lifecycle.test.ts` | `A72E31187AB21BA69B0596BF0793BCF6230EFCDB3115BF93949AD5E18031DE18` |
-| `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts` | `4358F6FDE74EDAA05075A503B2EB8C8A3C6BA69A7866D93B04728E8CCCECBB6F` |
+| `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts` | `48DA59A4053CCC8392A95E66B4B6A58B7D3919EBC6410077645245977104FFF1` (updated 2026-11-19: smallest justified change — wait for the Send button to be enabled and the composer to hold the prompt before clicking; fixes a UI timing flake that dropped the prompt and never issued the prompt POST. No acceptance assertion, timeout budget, or transcript-persistence check was weakened.) |
 | `verify-output.txt` | `DA2685EF3311677F59FB5F1F4967E07B5D14AC3F61DF0387A3ECA33E3EEFD278` |
 
 The P0 test file `tests/integration/opencode/opencode-restart-reconstruction-p0.test.ts` is preserved

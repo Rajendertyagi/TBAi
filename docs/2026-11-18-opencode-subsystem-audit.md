@@ -246,7 +246,7 @@ this file is both the finding register and the execution sequence.
 
 | ID | Finding (source) | Maps to §3 | Status | Evidence / resolution |
 |---|---|---|---|---|
-| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | Needs runtime verification | Spec excluded from 9-spec gate; prior failures reported. To re-run on current HEAD. |
+| B1 | Managed-restart recovery E2E failing and not gated (§2) | G | **Blocked** (UI flake fixed; substantive failure unresolved) | Re-run on current HEAD: deterministic `timeout waiting for distinct assistant response persisted in OpenCode session history`, stub requests 0. UI send-button timing flake fixed (smallest justified change; hash updated). Substantive failure is in OpenCode's execution path (prompt admitted, `session.inbox.delivered` fires, no `session.step.started`, stub never called) — not reproducible in isolation. Not added to gate. See §14. |
 | B2 | Production shutdown never calls `beginShutdown()` (§2) | A | Confirmed defect (static) | `beginShutdown()` has no production caller; `serverManager.shutdown()`→`clearBindingForShutdown()` never calls `clearManagedTarget()`. Fix + regression test pending. |
 | M1 | Frontend orphaned prompt record on selection failure (§3) | B | Needs verification | `v2ThreadController.ts:2357-2373` no try/catch around `applySelection()`. |
 | M2 | Singleflight keyed by permission shape (§3) | C | Needs verification | `sessions.ts:807-821`; caller reachability to be traced. |
@@ -262,9 +262,9 @@ this file is both the finding register and the execution sequence.
 | L6 | Restart-exhaustion recovery entry has no caller (§4) | — | Needs verification | Error message promises nonexistent recovery. |
 | L7 | Untested edge branches (§4) | — | Needs verification | `__proto__`, SSE `\r\n\n`, etc. |
 | L8 | Stale comments claiming overflow fails readiness (§4) | — | Needs verification | Behavior correct; comments wrong. |
-| L9 | `refresh()` lacks attempt-liveness guards (§4) | — | Needs verification | Torn read possible. |
+| L9 | `refresh()` lacks attempt-liveness guards (§4) | — | **Fixed** — deterministic regression test | Race reproduced (stale gen-1 session title committed after takeover). Fixed by capturing `currentAttempt`/generation once and checking `isLive(live)` after each await in both `refresh()` and `reconcileStagedRevert()`. Guard proven to fail when reverted. `tests/unit/web/opencode/v2ThreadController.liveness.test.ts` 1 pass, 0 fail. See §14. |
 | L10 | `assertSameHistoryOwner` dead export (§4) | — | Needs verification | Informational. |
-| DOC1–DOC8 | Documentation drift (§5) | — | Needs verification | Record only; no other docs edited per scope. |
+| DOC1–DOC8 | Documentation drift (§5) | — | **Fixed** — all eight corrected | Each finding verified against actual code/tests/scripts/manifests/GitHub state, then corrected in place with history preserved. Exact files and changes in §14. |
 
 ### Execution order
 
@@ -306,13 +306,13 @@ callers, state transitions, and tests. Statuses below supersede §10.
 
 ### Needs runtime verification / blocked
 
-- **B1 / G** managed-restart E2E: re-run on current HEAD via the dedicated external runner → **1 failed**, deterministic `timeout waiting for distinct assistant response persisted in OpenCode session history`. Evidence (`prompt-response.json`) shows only the user `msg_pending_*` message — the stub provider's assistant response was not persisted. This is an environment/harness issue, not a TBAi product defect. The spec is a protected, hash-pinned path (`4358F6FD…CBB6F`) and is correctly excluded from the 9-spec gate. **Blocked** on a working stub-provider response in the harness; do NOT add to gate or modify the protected spec without owner approval.
-- **L9** `refresh()`/`reconcileStagedRevert()` lack attempt-liveness guards across awaits: real asymmetry with the guarded hydration path; a torn read is possible but bounded by `historyMerge(held)`. **Needs runtime verification** (no reproduction obtained); left unchanged to avoid speculative code.
+- **B1 / G** managed-restart E2E: **Blocked** — see §14 for the full root-cause investigation. The UI send-button timing flake was fixed (smallest justified change; hash updated to `48DA59A4…04FFF1`), but the substantive failure persists: prompt admitted (`msg_pending_*`), SSE reaches `session.inbox.delivered`, no `session.step.started`, stub receives 0 requests. Exhaustively not reproducible in isolation (binary 2.2.6, `plugin: []`, `msg_pending_*` id, directory header, env vars, model switch, SSE consumer, and the exact forwarded body all work directly). The failure is in OpenCode's execution path under the full TBAi E2E harness, not a TBAi product defect. Not added to the gate; acceptance criteria not weakened; not skipped/quarantined.
+- **L9** `refresh()`/`reconcileStagedRevert()` lack attempt-liveness guards across awaits: **Fixed** — see §14. Race reproduced deterministically (stale gen-1 session title committed after takeover), fixed with captured-generation + `isLive(live)` checks after each await, guard proven to fail when reverted. Regression test added.
 - **L6** restart-exhaustion recovery entry points have no caller: dead code, informational; budget is reset internally by the stability timer. Left unchanged.
 
 ### Documentation drift (DOC1–DOC8)
 
-Recorded in §5; no other docs edited per task scope (only this canonical audit file is the working record). Requires a separate owner-approved documentation task.
+All eight corrected in place with history preserved — see §14 for the exact files and changes. No duplicate audit or plan document was created.
 
 ### Verification commands and results
 
@@ -342,16 +342,19 @@ Recorded in §5; no other docs edited per task scope (only this canonical audit 
 
 Focused regression tests (`bun test --isolate <7 files>`) → 40 pass, 0 fail.
 
-**CI status:** not verified. No GitHub Actions result was inspected for the
-current working tree (changes are uncommitted). No CI claim is made.
+**CI status (re-checked 2026-11-19):** not verified. `gh api
+repos/Rajendertyagi/TBAi/commits/15bf5f8/check-runs` → `total_count: 0` — no
+check-runs exist for the current branch tip. The most recent workflow runs are
+for older commits (`43680414645` head `4fec007` → failure; `43630158900` head
+`2c88db1` → success). No CI claim is made for the current work.
 
-**Remaining blockers:** B1/G (managed-restart E2E blocked on stub-provider
-response persistence in the harness; protected hash-pinned spec, not gated),
-L9 (needs runtime verification), DOC1–DOC8 (separate documentation task).
+**Remaining blockers:** B1/G (managed-restart E2E — substantive failure blocked
+in OpenCode's execution path under the full harness; UI flake fixed; not gated).
+L9 and DOC1–DOC8 are closed. See §14.
 
 **Git:** no commit, push, merge, rebase, reset, or branch change performed.
-Only the canonical audit file was updated as the working record; no duplicate
-audit/plan documents were created.
+The canonical audit file is the working record; no duplicate audit/plan
+documents were created.
 
 ## 13. Independent audit round 2 (iceman-free) and fixes
 
@@ -384,3 +387,147 @@ pass, startup-rollback 2 pass, lifecycle-integration 3 pass, DOM 813 pass,
 quarantine OK. Focused tests 42 pass, 0 fail. `git diff --check` exit 0.
 
 Pushed after both independent audits came clean.
+
+---
+
+## 14. Remaining-findings closure pass (2026-11-19)
+
+This section records the closure work for B1, L9, and DOC1–DOC8. Starting state:
+branch `review/managed-opencode-hardening-2026-11-15`, HEAD/remote tip
+`15bf5f84526566c9ebd29c525f8f7819fc3c8e24`, 0/0 divergence. Three unrelated
+working-tree entries (`docs/ui-foundation/self-audit-and-plan.md`,
+`docs/ui-foundation/canonical-ui-coherence-plan.md`, `verify-output.txt`) were
+preserved untouched. No commit/push/merge/rebase/reset/branch change was made.
+
+### 14.1 B1 — managed-restart recovery E2E
+
+**UI flake fixed.** `tests/e2e/opencode/opencode-managed-restart-recovery.spec.ts`
+filled the composer and clicked "Send message" without waiting for the button to
+be enabled. In several runs the button was disabled (session not yet ready), the
+text was dropped, and no prompt POST was issued — one of three distinct failure
+modes observed (navigation assertion, transcript timeout, prompt-response
+timeout). Smallest justified change: wait for the composer to be visible, the
+Send button to be enabled, and the composer to hold the prompt before clicking.
+No acceptance assertion, timeout budget, or transcript-persistence check was
+weakened. The documented SHA-256 pin in
+`docs/2026-11-16-opencode-durable-recovery-plan.md:756` was updated from
+`4358F6FD…CBB6F` to `48DA59A4…04FFF1` with an explanatory note.
+
+**Substantive failure remains — Blocked.** Final focused run via the dedicated
+external runner (`bun D:\Coding\OpenCode\user\tmp\opencode\run-restart-recovery-e2e.ts`)
+→ exit 1, `1 failed`, `stub requests 0`, `timeout waiting for distinct assistant
+response persisted in OpenCode session history`.
+
+Evidence collected at each boundary:
+- Playwright submits the prompt; TBAi `POST /api/opencode/api/session/:id/prompt`
+  returns 200 in ~12 ms with `msg_pending_*` (prompt admitted).
+- SSE events reach `session.inbox.enqueued` → `session.execution.started` →
+  `session.instructions.updated` → `session.inbox.delivered` (eventIndex 5), then
+  **no `session.step.started`** until the test's 120 s timeout/cleanup.
+- Stub provider receives **0** requests; no assistant message is persisted; the
+  OpenCode DB has no session row for the failing run.
+- The exact forwarded body was captured from the proxy:
+  `{"id":"msg_pending_…","text":"Reply with exactly: OK …","files":[],"agents":[],"skills":[],"delivery":"steer"}`.
+
+Isolation control (`bun D:\Coding\OpenCode\user\tmp\opencode\minimal-oc-test.ts`):
+the same OpenCode 2.2.6 binary + stub provider, driven directly over HTTP,
+produces `stub requests 3`, an assistant message `OK MINIMAL`, and an idle
+marker. Each suspected differentiator was tested in isolation and **did not**
+reproduce the failure: binary pin 2.2.6 (PATH `opencode` is 2.3.0), `plugin: []`,
+`msg_pending_*` id, `x-opencode-directory` header, `OPENCODE_*_PROJECT_DISABLE`
+env vars, `switchModel` to `stub/tiny`, an open SSE consumer, and the exact
+forwarded body shape.
+
+Conclusion: the failure is in OpenCode's execution path (the LLM step never
+starts after `session.inbox.delivered`) under the full TBAi E2E harness, not a
+TBAi product defect and not reproducible in isolation. It is **not** labeled
+"environmental" without this investigation, but it cannot be fixed in TBAi code.
+The spec is **not** added to the required CI gate (unreliable), **not** skipped,
+**not** quarantined, and its acceptance criteria are unchanged. B1 remains a
+material open blocker; the subsystem is **not** declared complete.
+
+### 14.2 L9 — frontend attempt-liveness race
+
+**Reproduced deterministically.** `tests/unit/web/opencode/v2ThreadController.liveness.test.ts`
+starts `refresh()` under generation 1, pauses it at `sessionGet`, fails gen-1's
+event stream to trigger a takeover to generation 2, then resolves gen-1's read
+with a distinguishable session title. Before the fix the stale title
+`STALE-GEN1` was committed onto the live attempt (`Expected: not "STALE-GEN1"`).
+
+**Fixed.** `web/src/features/opencode/v2ThreadController.ts`: `refresh()` and
+`reconcileStagedRevert()` now capture `currentAttempt` and the generation once
+at entry, use that captured generation for all operations, and check
+`isLive(live)` after each await before dispatching/committing — matching the
+guarded `hydrate()` path. This is the smallest consistent liveness guard; no
+redundant checks were added elsewhere. The guard was proven to fail by removing
+the `isLive` check in `refresh()` (test failed with `Expected: not "STALE-GEN1"`)
+and restoring it (test passed). Final: 1 pass, 0 fail.
+
+### 14.3 DOC1–DOC8 — documentation corrections
+
+Each finding was verified against actual code/tests/scripts/manifests/GitHub
+state before editing; historical meaning was preserved with current-status notes
+rather than rewritten.
+
+- **DOC1** `docs/2026-11-10-opencode-recovery-improvement-plan.md`: replaced stale
+  "GitHub publication pending" with the actual pushed commit chain and pointer to
+  the canonical audit; added a reading note that §14 reconciliation entries retain
+  historical paths (e.g. the deleted `tests/unit/opencode/recovery.test.ts`).
+- **DOC2** `docs/2026-11-16-opencode-durable-recovery-plan.md`: distinguished the
+  original implementation commit chain (`2ef39c5`…`9502943`) from subsequent
+  hardening (`3b32598`…`15bf5f8`); updated the B1 spec SHA-256 pin with rationale.
+- **DOC3** `docs/engineering-quality.md`: 50 → 53 E2E specs (46 non-live + 7 live),
+  bare-`bun test` total 422 → 425; "seven required suites" → ten (with the 38 s
+  figure marked historical).
+- **DOC4** `.github/workflows/tests.yml`: "required seven" → "required suites (ten
+  at this revision)".
+- **DOC5** `docs/opencode-context.md`: current branch tip `15bf5f8`, `80813d8`/
+  "uncommitted" notes marked as point-in-time history, pointer to canonical audit.
+- **DOC6** `docs/opencode-runtime-audit-final.md`: RT-004 recorded as **closed by
+  explicit owner scope decision** (no health supervisor / liveness probe will be
+  introduced; accepted behavior is silent stall until manual reconnect), both in
+  the header note and the finding register row. No health-monitoring code added.
+- **DOC7** `docs/2026-11-01-opencode-session-import-plan.md` and `.revised.md`:
+  "awaiting authorization/confirmation" marked as original status; implementation
+  confirmed landed in `d560b26` (`src/services/opencode/import.ts`, route, DB
+  schema) with pointer to `docs/opencode-session-import.md`.
+- **DOC8** historical plans (`2026-10-20`, `2026-10-23`, `2026-10-29` hybrid,
+  `2026-10-31` unified-scheduler, both `2026-11-01` import plans): added a small,
+  consistent 2.2.6 supersession banner; older 2.0/2.1/2.2.0 claims left intact and
+  labeled historical. No mass rewrite of archival technical content.
+
+### 14.4 Verification commands and results (2026-11-19)
+
+| Command | Result |
+|---|---|
+| `bun run typecheck` | exit 0 |
+| `bun test --isolate tests/unit/web/opencode/v2ThreadController.liveness.test.ts` | 1 pass, 0 fail |
+| `bun run test:opencode-runtime` | exit 0 — 10/10 required suites passed (54 pass, 0 fail, 0 skip total) |
+| `bun run verify` (full chain) | **exit 0** — all gates green |
+| — typecheck / lint / format:check / test:locations / build | all exit 0 |
+| — `bun run test` (within verify) | 5993 pass, 0 fail |
+| — `test:shutdown` | 1 pass, 0 fail |
+| — `test:startup-rollback` | 2 pass, 0 fail |
+| — `test:lifecycle-integration` | 3 pass, 0 fail |
+| — `test:dom` | 813 pass, 0 fail |
+| — `test:quarantine` | OK — no stale entries |
+| `git diff --check` | exit 0 |
+| Focused B1 E2E (external runner) | exit 1 — 1 failed, stub requests 0 (see §14.1) |
+
+The full `bun run verify` chain was re-run after all changes and completed with
+exit 0 (an earlier invocation exceeded a 600 s tool wall-clock limit during the
+DOM stage; re-run with a longer limit it completed green). No gate was weakened
+or skipped.
+
+**GitHub CI:** not verified — no check-runs for `15bf5f8` (`total_count: 0`); most
+recent runs are for older commits. No CI claim is made.
+
+### 14.5 Final remaining-risk assessment
+
+- **B1/G — open blocker.** Managed-restart recovery E2E does not pass; the
+  substantive failure is in OpenCode's execution path under the full harness and
+  is not fixable in TBAi code. Not gated, not skipped, not weakened. The subsystem
+  is **not** declared complete while this remains.
+- **CI — unverified.** No GitHub Actions result exists for the current tip.
+- L9 and DOC1–DOC8 are closed. All other findings from §10/§11 remain as recorded
+  (fixed or not-a-defect). All local quality gates pass.

@@ -359,8 +359,15 @@ test("Code UI recovers same OpenCode transcript after managed child restart and 
     );
 
     const composer = page.getByRole("textbox", { name: /Send a message/ });
+    await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
+    const send = page.getByRole("button", { name: "Send message" });
+    // The composer disables Send until the Code session is ready to accept a
+    // prompt. Clicking before then drops the text and never issues the prompt
+    // POST, which made this acceptance test flaky. Wait for a sendable state.
     await composer.fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(send).toBeEnabled({ timeout: SERVER_TIMEOUT_MS });
+    await expect(composer).toHaveValue(prompt);
+    await send.click();
 
     const createResponse = await createResponsePromise;
     expect(createResponse.ok()).toBe(true);

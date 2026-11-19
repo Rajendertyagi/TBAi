@@ -2,6 +2,15 @@
 
 **Date:** 2026-11-01  
 **Status:** Architecture Proposal & Specification (Revised — Awaiting Confirmation)  
+> **Current status (2026-11-19):** the "awaiting confirmation" label below is the
+> original 2026-11-01 proposal status and is retained as history. The session-import
+> implementation was subsequently authorized and landed in commit `d560b26`
+> (`src/services/opencode/import.ts`, the `/api/opencode/session/import` route in
+> `src/routes/opencode.ts`, and the import-provenance DB schema). This document is
+> now a historical design record; current behavior is described in
+> `docs/opencode-session-import.md` and tracked in
+> `docs/2026-11-18-opencode-subsystem-audit.md`. The 2.2.0 version references
+> below are historical; the sole currently supported runtime is **2.2.6**.
 **Target Subsystem:** OpenCode Subsystem (`TBAi`)  
 **Reference Implementations:**  
 - Paseo (`D:\Temp\paseo`): OpenCode V2 Agent Adapter (`packages/server/src/server/agent/providers/opencode/v2/agent.ts`)

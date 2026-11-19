@@ -272,7 +272,7 @@ jobs:
   # `bun run test` collects these files but the harness self-skips them without
   # TBAI_OPENCODE_RUNTIME_TESTS, and a skipped suite exits 0 - so before this
   # job, "the runtime suites ran" was never actually asserted anywhere. This
-  # job runs the required seven against the pinned binary and fails if any
+  # job runs the required suites (ten at this revision) against the pinned binary and fails if any
   # suite is missing, fails, executes nothing, or skips a case. The script
   # (`scripts/run-opencode-runtime-suites.ts`) owns that rule, including the
   # classification of every suite file.

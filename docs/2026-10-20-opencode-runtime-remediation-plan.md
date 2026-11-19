@@ -1,5 +1,7 @@
 # OpenCode Runtime Remediation Plan — audit findings + reference-study patterns
 
+> **Version note (2026-11-19):** OpenCode version references below are historical to this plan's date. The sole currently supported runtime is OpenCode / `@opencode/client` **2.2.6**; see `docs/2026-11-18-opencode-subsystem-audit.md`.
+
 **Repository:** `Rajendertyagi/TBAi` (local: `D:\Temp\ai-chat-app`)
 **Branch:** `ci/tauri-e2e-verify` — **Audited commit:** `2475396ce36fdf33b53afc09779027ed7e6684b6`
 **Date:** 2026-10-20 — **last updated:** 2026-10-27 (G1/G2 and G3 closed by CI observation at `8bbe5a6`; Phase 8 complete — see the dated note in §15.5)
