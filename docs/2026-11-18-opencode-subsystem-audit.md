@@ -17,9 +17,9 @@ resolved: B1 (managed-restart E2E) was root-caused to the external runner's
 blocking `spawnSync` and fixed with an in-repo async runner (§14.1), and B2
 (production shutdown) was fixed with a regression test (§11). All findings in
 the canonical register (§10) are now `Fixed`, `Not a defect`, or documented
-scope decisions. The dedicated managed-restart acceptance test passes 8/8 and is
-gated in CI. The only unverified item is GitHub Actions execution of the new
-commit (no CI result exists until the work is pushed and a run inspected).
+scope decisions. The dedicated managed-restart acceptance test passes 8/8 locally
+and in CI (Actions run `44521502042` on commit `d4e7103` → success, all active
+jobs green). No blockers remain.
 
 ## 2. Blockers (resolve before "done") — historical snapshot
 
@@ -350,15 +350,20 @@ All eight corrected in place with history preserved — see §14 for the exact f
 
 Focused regression tests (`bun test --isolate <7 files>`) → 40 pass, 0 fail.
 
-**CI status (re-checked 2026-11-19):** not verified. `gh api
-repos/Rajendertyagi/TBAi/commits/15bf5f8/check-runs` → `total_count: 0` — no
-check-runs exist for the current branch tip. The most recent workflow runs are
-for older commits (`43680414645` head `4fec007` → failure; `43630158900` head
-`2c88db1` → success). No CI claim is made for the current work.
+**CI status (verified 2026-11-19):** the B1 fix was committed as `d4e7103` and
+pushed to `review/managed-opencode-hardening-2026-11-15`. GitHub Actions run
+`44521502042` (`workflow_dispatch`, head `d4e7103757f55ac654d492cf3ee0d33c5d4fcd2e`)
+→ **conclusion `success`**. All five active jobs passed (`e2e`, `verify`,
+`opencode-g3`, `opencode-runtime`, `tauri`); `e2e-full` and `e2e-big-pickle`
+were skipped by the default-false dispatch inputs. The `e2e` job's
+"E2E (managed-restart recovery, B1)" step ran `bun run test:e2e:managed-restart`
+against the pinned 2.2.6 CLI (integrity-verified, on PATH) and reported
+`1 passed (11.8s)`, `playwright exit 0`, `stub requests 2`; the
+`managed-restart-evidence` artifact (3,994,898 bytes) was uploaded. The
+regression test also passed in the `verify` job. See §14.4.
 
-**Remaining blockers:** none in the finding register — B1/G is fixed and gated
-(§14.1), L9 and DOC1–DOC8 are closed. The only open item is CI verification of
-the resulting commit, which requires a push and an inspected Actions run.
+**Remaining blockers:** none. B1/G is fixed, gated, and CI-verified (§14.1);
+L9 and DOC1–DOC8 are closed. All local and CI gates pass.
 
 **Git:** no commit, push, merge, rebase, reset, or branch change performed.
 The canonical audit file is the working record; no duplicate audit/plan
@@ -557,9 +562,11 @@ rather than rewritten.
 The full `bun run verify` chain was re-run after all changes and completed with
 exit 0. No gate was weakened or skipped.
 
-**GitHub CI:** the new commit has not been pushed; no Actions result exists yet.
-The dedicated managed-restart test was added to the Windows `e2e` job and must be
-verified by inspecting an actual run after push.
+**GitHub CI (verified):** commit `d4e7103` pushed; Actions run `44521502042`
+(head `d4e7103`, `workflow_dispatch`) → **success**. All five active jobs passed;
+`e2e-full`/`e2e-big-pickle` skipped by default-false inputs. The dedicated
+managed-restart step passed (`1 passed`, `stub requests 2`) on the pinned 2.2.6
+CLI; evidence artifact uploaded; regression test passed in `verify`.
 
 ### 14.5 Final remaining-risk assessment
 
@@ -567,7 +574,8 @@ verified by inspecting an actual run after push.
   not OpenCode or TBAi product code. In-repo async runner + deterministic test +
   regression guard + CI gate; 8/8 repeated E2E runs pass. No acceptance criteria
   weakened, no skip/quarantine.
-- **CI — unverified.** No GitHub Actions result exists for the new commit yet;
-  the dedicated test is now gated and must be confirmed by an inspected run.
+- **CI — verified.** Actions run `44521502042` on commit `d4e7103` → success;
+  all five active jobs passed including the dedicated managed-restart E2E
+  (`stub requests 2`) and the regression test. No remaining blockers.
 - L9 and DOC1–DOC8 are closed. All other findings from §10/§11 remain as recorded
-  (fixed or not-a-defect). All local quality gates pass.
+  (fixed or not-a-defect). All local and CI quality gates pass.
