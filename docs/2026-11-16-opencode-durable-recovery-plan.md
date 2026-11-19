@@ -692,7 +692,9 @@ Explicit behavior for every pending state. **Precedence is promotion order (§5)
     conservative no-auto-resume; compaction does not override the ambiguous completed-assistant state
     (§6.A precedence).
 
-All §13.2 tests are **proposed, not passed**.
+All §13.2 tests are **proposed, not passed**, EXCEPT scenarios 3 and 4, which
+were executed and passed in 2026-11-19 (see the execution-status note at the top
+of this section and `docs/2026-11-18-opencode-subsystem-audit.md` §15).
 
 ---
 

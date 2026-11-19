@@ -7,8 +7,10 @@
  * control protocol (the runner writes {"type":"shutdown"} to TBAi's stdin), then
  * asks the runner to relaunch TBAi with the same durable data. The shared
  * recovery service must observe the new managed target and continue the original
- * turn by its stable message ID. A distinct assistant response must be persisted
- * in the ORIGINAL session, with no duplicate logical user input.
+ * turn. For an already-projected user with a shutdown-interruption signal, the
+ * service posts a FRESH recovery synthetic (re-posting the user id alone creates
+ * no inbox work in OpenCode 2.2.6). A distinct assistant response must be
+ * persisted in the ORIGINAL session, with no duplicate logical user input.
  */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import fs from "node:fs";

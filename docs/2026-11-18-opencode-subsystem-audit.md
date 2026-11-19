@@ -674,6 +674,18 @@ and found five items; all were addressed before completion:
 4. Both specs assert exactly one distinct assistant response (no duplicate).
 5. Pagination shape (`body.cursor.next`) was confirmed against a real response.
 
+**Protected-file discrepancy (resolved).** An independent review noted that
+commit `72a540f` modified `docs/opencode-context.md`, which the recovery plan
+§16 lists as a protected path. Investigation showed the §16 baseline hash
+(`A12572D2…`) is from a historical uncommitted working-tree state that matches
+no git commit, and the file was already modified by the earlier DOC5 task
+(`4c5b6c5`, explicitly requested). To avoid compounding the discrepancy, the
+file was restored to its exact pre-task bytes (`fa116b0`, SHA-256
+`A1803640…`) in a follow-up commit; the current HEAD note is recorded here in
+the canonical audit instead. The §16 baseline itself remains stale from before
+this work and would need an approved refresh — recorded as a known limitation,
+not silently changed.
+
 **Remaining limitations:**
 - The fix is scoped to projected users with a shutdown-interruption signal (the
   demonstrated unfinished-turn state). Other projected-user states (e.g. no busy

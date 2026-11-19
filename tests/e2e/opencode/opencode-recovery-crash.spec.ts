@@ -4,8 +4,10 @@
  * The stub provider holds the first model request, so the turn is genuinely
  * unfinished (user projected, execution started, no assistant, no idle marker).
  * The verified managed child is killed; the real manager restarts it and the
- * shared durable recovery service must re-submit the original user message by
- * its stable ID. A distinct assistant response must then be persisted in the
+ * shared durable recovery service must continue the original turn. For an
+ * already-projected user with a shutdown-interruption signal, the service posts
+ * a FRESH recovery synthetic (re-posting the user id alone creates no inbox work
+ * in OpenCode 2.2.6). A distinct assistant response must then be persisted in the
  * ORIGINAL session, with no duplicate logical user input.
  */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
