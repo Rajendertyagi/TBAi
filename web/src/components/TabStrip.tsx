@@ -157,9 +157,9 @@ function SortableTab({
       >
         <div
           className={cn(
-            "group/tab relative flex h-full w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-t-lg px-2 text-xs transition-colors",
+            "group/tab relative flex h-full w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-t-lg border-b-2 border-transparent px-2 text-xs transition-colors",
             active
-              ? "bg-background text-foreground"
+              ? "border-edge-active bg-background text-foreground"
               : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
           )}
         >

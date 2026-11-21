@@ -285,8 +285,11 @@ stop inventing `size-3` / `size-4` / `size-5` per component. No color.
   by a test.
 - Components use Tailwind `animate-in/out` (`popover.tsx:27`) and `animate-pulse`
   (`TabStrip.tsx:171`, mermaid skeleton) with no shared duration/easing.
-- **No `prefers-reduced-motion` handling anywhere in `web/src`** (grep returns
-  zero hits). This is an accessibility gap.
+- Reduced motion is handled ad hoc per element: 27 `motion-reduce:` branches
+  (mostly in vendored assistant-ui elements such as `surfaces.tsx` and
+  `reasoning.tsx`). The gap is that these are not driven by a shared token, not
+  that handling is absent. (Corrected from an earlier claim that grep returned
+  zero hits — that pattern missed Tailwind's `motion-reduce:` variant.)
 - OpenChamber has `--oc-motion-popup-duration/easing`, `-exit-duration`,
   `-layout-duration/easing` (`design-system.css:100-104`) and reduced-motion
   overrides in `typography.css:310-316`.
@@ -348,8 +351,10 @@ background-only (tabs, some rows), which is the invisible-border defect.
   `tooltip-icon-button.tsx:26`, `PageTitleStrip.tsx:40`,
   `StatusBarQuickActions.tsx:45`) meet the 24px floor exactly — acceptable but
   at the boundary; do not shrink further.
-- **Reduced motion:** no handling anywhere. Must add a `prefers-reduced-motion`
-  branch for the new motion tokens.
+- **Reduced motion:** handled ad hoc per element (27 `motion-reduce:` branches,
+  mostly in vendored assistant-ui elements), not through a shared token. Give
+  the new motion tokens a single `prefers-reduced-motion` branch that collapses
+  them to zero.
 - **Tracking:** `--tracking-normal` is defined in 25 theme JSONs but consumed
   nowhere; components use literal `tracking-tight/wide/wider/widest`
   (`surfaces.tsx:44`, `context-menu.tsx:143`, `dropdown-menu.tsx:203`,

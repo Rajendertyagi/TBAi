@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { schedulerViewConfig } from "./config";
 import { useSchedulerStore, schedulerApi } from "./state/schedulerStore";
 import { useSettingsStore } from "@/features/providers/state/providersStore";
@@ -356,14 +357,16 @@ export function SchedulerPage() {
             className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
           >
             <span className="min-w-0 flex-1 break-words">{error}</span>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               type="button"
               onClick={() => setError(null)}
               aria-label={copy.dismissError}
-              className="shrink-0 rounded px-1 outline-none hover:bg-destructive/10 focus-visible:ring-1 focus-visible:ring-ring"
+              className="shrink-0 text-destructive hover:text-destructive"
             >
               <X aria-hidden="true" className="size-3.5" />
-            </button>
+            </Button>
           </div>
         </div>
       )}

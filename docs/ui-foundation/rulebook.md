@@ -130,9 +130,10 @@ icon rhythm consistent. The 24px target floor is documented, not lowered.
 
 **Why it is not a color:** durations and easing curves are not colors.
 
-**Why new tokens exist:** only one duration exists today, and there is no
-`prefers-reduced-motion` branch anywhere in `web/src`. The rulebook adds fast /
-base aliases and a reduced-motion branch that collapses both to zero. This
+**Why new tokens exist:** only one duration exists today, and reduced motion is
+handled ad hoc per element (27 `motion-reduce:` branches, mostly in vendored
+assistant-ui elements) rather than through a shared token. The rulebook adds fast
+/ base aliases and a reduced-motion branch that collapses both to zero. This
 mirrors OpenChamber's `--oc-motion-*` tokens (`design-system.css:100-104`).
 
 ## 8. Focus
@@ -162,8 +163,6 @@ indicator for accessibility.
 **Why new tokens exist:** a four-step scale mirrors OpenChamber's
 `--z-base/raised/overlay/modal` (`design-system.css:981-984`) and replaces magic
 numbers with named roles.
-
-## What to do with this file
 
 ## Additional reuse rules from the technical studies
 

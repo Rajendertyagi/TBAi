@@ -4,9 +4,9 @@ import type { ComponentProps } from "react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-export const paper = "bg-background border border-border/60 dark:bg-popover";
+export const paper = "bg-background border border-edge-default dark:bg-popover";
 
-export const floating = "bg-background border border-border/60 dark:bg-popover";
+export const floating = "bg-background border border-edge-default dark:bg-popover";
 
 export const field = "bg-foreground/[0.04] dark:bg-foreground/[0.06]";
 

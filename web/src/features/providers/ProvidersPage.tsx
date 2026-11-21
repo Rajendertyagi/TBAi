@@ -233,7 +233,7 @@ export function ProvidersPage() {
           if (!open) setDeleteTarget(null);
         }}
       >
-        <AlertDialogContent className="max-w-xs gap-6 rounded-4xl border-0 shadow-2xl ring-1 ring-border sm:max-w-md">
+        <AlertDialogContent className="max-w-xs gap-6 sm:max-w-md">
           <AlertDialogHeader className="items-center text-center sm:items-start sm:text-left">
             <AlertDialogTitle className="text-lg font-medium">Delete provider?</AlertDialogTitle>
             <AlertDialogDescription>

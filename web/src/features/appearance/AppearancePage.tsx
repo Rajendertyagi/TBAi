@@ -112,7 +112,7 @@ export function AppearancePage() {
                   className={cn(
                     "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                     selected
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-background text-foreground shadow-[var(--elevation-low)]"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
