@@ -121,7 +121,7 @@ This is not a decision to implement Dockview; it is a decision to spend a bounde
 1. **Runtime preservation across `moveTo()`** — the decisive question. Must be tested with real `DirectChatHost` and `OpenCodeChatHost`, active streams, composer text, and scroll. **[UNVERIFIED]**
 2. **React context through portals** — Dockview portals render from `DockviewReact`'s React-tree position. TBAi hosts use `AuiProvider extends={null}` internally, which should preserve isolation, but this must be verified with two hosts of each engine. **[SOURCE-DV / UNVERIFIED]**
 3. **`fromJSON()` and live runtimes** — `reuseExistingPanels` semantics are not fully documented; in-session restore/reset must not destroy active runtimes. **[UNVERIFIED]**
-4. **Hidden `always` panels continue work** — TBAi must pause streams/timers via `onDidVisibilityChange` or conditional inner rendering; otherwise hidden chats keep CPU/network active. **[OFFICIAL / INFERENCE]**
+4. **Hidden `always` panels continue work — but chat execution must NOT be paused.** Dockview's docs suggest pausing work via `onDidVisibilityChange` or conditional inner rendering; that guidance targets browser-driven visual work (CSS animations, `requestAnimationFrame`, autoplay media, iframes), **not** application execution. When a user switches to another panel, an active AI response or OpenCode operation **must continue**: streaming, tool continuations, session subscriptions, and runtime lifecycle work stay functional. Only unnecessary visual work and expensive UI updates (e.g. pausing a 30-second relative-time ticker, deferring non-critical re-renders) may be paused. Pausing a stream or a runtime subscription on hide would violate the product requirement that multiple chats run independently. **[OFFICIAL / DECISION]**
 5. **Panel id vs `chatTabs` identity** — Dockview panel ids must be derived from `hostId` (`conv:<conversationId>`), with `chatTabs` tabKey and content type in panel parameters. A conversation must not be mounted twice; Dockview's id uniqueness helps but the reconciler is still TBAi's job. **[INFERENCE]**
 6. **Activity indicators** — Dockview panel lifecycle events (`onDidAddPanel`, `onDidRemovePanel`, `onDidVisibilityChange`) can drive publisher registration, but execution status still comes from hosts and server-backed sources per `WORKSPACE_ARCHITECTURE_PLAN.md` §2.2. **[INFERENCE]**
 7. **Persistence versioning** — Dockview's serialized shape is library-owned; TBAi must wrap it with `version` + `migrate` and reconcile tab keys against `chatTabs` on load. **[INFERENCE]**
@@ -149,11 +149,15 @@ Chat Threads (persistent navigation)   DockviewReact (spatial layout owner)
    AuiProvider extends={null} + AssistantRuntimeProvider (per host)
 ```
 
-- **Dockview owns spatial layout only**: groups, splits, sizes, tab strips, DnD, floating, serialization. TBAi does not maintain a second layout tree. **[DECISION]**
-- **`chatTabs` remains canonical** for conversation identity and shared membership. Dockview panel ids are derived from `hostId`; panel parameters carry the `chatTabs` tabKey and content type. No second conversation store. **[DECISION]**
+- **One source of truth for conversations — explicit rule:** **[DECISION]**
+  - **`chatTabs` determines which conversations are open.** It remains the sole canonical identity and shared-membership system; opening or closing a conversation is a `chatTabs` operation.
+  - **Dockview determines where those conversations appear** — grouping, arrangement, split sizes, tab order, and which panel/tab is active. It owns spatial layout only; TBAi does not maintain a second layout tree.
+  - **On restoration, Dockview layout references are reconciled against `chatTabs`.** A serialized panel id that does not resolve to an open conversation in `chatTabs` is dropped; a conversation open in `chatTabs` but absent from the saved layout is placed in a default panel. Neither system independently creates a competing conversation identity.
+  - This prevents the duplicate tab-management problem the redesign set out to avoid: Dockview never becomes a second conversation store, and `chatTabs` never becomes a second layout store.
+- **Dockview panel ids** are derived from `hostId` (`conv:<conversationId>`, etc.); panel parameters carry the `chatTabs` tabKey and content type. **[DECISION]**
 - **Content hosts remain TBAi-owned** and are rendered as Dockview panel components. Direct and OpenCode execution systems stay separate; `AuiProvider extends={null}` is retained inside each host. **[DECISION]**
-- **Render mode:** all chat panels use `renderer: "always"`; pause work on `onDidVisibilityChange`. **[DECISION — POC to verify]**
-- **Persistence:** `toJSON()` payload wrapped in TBAi's versioned localStorage record; content identity refs stay in `sharedTabs`; `migrate` reconciles panel ids against `chatTabs`. **[DECISION]**
+- **Render mode:** all chat panels use `renderer: "always"`. `onDidVisibilityChange` may pause only unnecessary visual work (animations, expensive UI updates); it must **not** pause streaming, tool continuations, session subscriptions, or runtime lifecycle work — an active response continues when its panel is hidden. **[DECISION — POC to verify]**
+- **Persistence:** `toJSON()` payload wrapped in TBAi's versioned localStorage record; content identity refs stay in `sharedTabs`; `migrate` reconciles panel ids against `chatTabs` per the rule above. **[DECISION]**
 - **Activity:** Dockview lifecycle events register/unregister publishers; execution status and transport health come from hosts and server-backed sources as already specified. **[DECISION]**
 
 ---
@@ -178,7 +182,7 @@ Chat Threads (persistent navigation)   DockviewReact (spatial layout owner)
 ## 8. Risks, trade-offs, migration, rollback
 
 - **Risk:** runtime state loss on move — mitigated only by POC verification; if it fails, do not adopt.
-- **Risk:** hidden panels consuming CPU/network — mitigate with `onDidVisibilityChange` pausing.
+- **Risk:** hidden panels consuming CPU/network on unnecessary visual work — mitigate by pausing only that work via `onDidVisibilityChange`; never pause chat execution, streaming, or runtime subscriptions (§5 item 4).
 - **Risk:** `fromJSON()` destroying live runtimes — use `moveTo()`-based reconciliation for in-session changes; reserve `fromJSON()` for cold restore.
 - **Risk:** E2E-only testability — accept that DOM tests cannot cover Dockview internals; fund E2E coverage.
 - **Risk:** licence/feature creep — stay on MIT core; revisit only with an explicit ADR.
@@ -195,7 +199,7 @@ Chat Threads (persistent navigation)   DockviewReact (spatial layout owner)
 
 **POC-2 — Real OpenCode host + mixed arrangement.** Add a real `OpenCodeChatHost` panel alongside a Direct host. Verify session bootstrap, event subscription, and first-prompt handoff still work inside a Dockview panel. Exit: both runtimes mount, sends are independent, no cross-runtime interference (this closes the §2b.4/§2b.5 gap).
 
-**POC-3 — Hidden/visibility behavior.** Hide a panel with an active stream; verify `onDidVisibilityChange` fires and that pausing/resuming works. Exit: hidden panel does not keep unnecessary work running; state is intact on reveal.
+**POC-3 — Hidden/visibility behavior.** Hide a panel with an active stream (Direct) and an active OpenCode operation; verify `onDidVisibilityChange` fires. Confirm the stream and operation **continue to completion while hidden**, subscriptions stay live, and only optional visual work is paused. Exit: hidden panel does not stop chat execution; state is intact on reveal; no duplicate subscriptions.
 
 **POC-4 — Persistence.** `toJSON()` → `fromJSON()` across a simulated reload; verify layout restores and panel ids reconcile against `chatTabs`. Test in-session reset with `reuseExistingPanels` or `moveTo()`-based reconciliation. Exit: no live runtime destroyed by in-session layout change; cold restore produces fresh runtimes with correct identities.
 
@@ -210,7 +214,7 @@ Each phase must produce a written result with exact commands and observed behavi
 1. **Runtime preservation E2E:** two real Direct hosts, distinct reply markers, composer text, scroll, active stream; move between groups; assert instance identity and no state loss (record message parts individually per §2b.5).
 2. **Mixed-runtime E2E:** Direct + OpenCode panels, concurrent sends, distinct markers, isolated responses and lifecycle events, no cross-runtime interference.
 3. **OpenCode lifecycle in a panel:** session bootstrap, event subscription, recovery-epoch reconnect, first-prompt handoff, permissions/forms/terminal/diff still functional.
-4. **Visibility E2E:** hidden panel pauses work via `onDidVisibilityChange`; state intact on reveal; no duplicate subscriptions.
+4. **Visibility E2E:** hidden panel keeps an active Direct stream and OpenCode operation running to completion; only optional visual work is paused via `onDidVisibilityChange`; state intact on reveal; no duplicate subscriptions.
 5. **Persistence E2E:** versioned layout save/restore; corrupt payload falls back; in-session reset does not destroy live runtimes; panel ids reconcile with `chatTabs`.
 6. **Identity E2E:** a conversation cannot be mounted in two panels; two browser panels may show the same URL.
 7. **Activity E2E:** Sidebar running/stopping/terminal status and `lastMessageAt` remain correct with multiple isolated hosts.
