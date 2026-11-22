@@ -1,42 +1,17 @@
-import { useLocation } from "react-router";
-import { useAuiState } from "@assistant-ui/react";
-import { conversationIdFromPath } from "@/features/chat/state/chatTabs";
+import { useConversationExecution } from "@/features/chat/state/conversationActivity";
 import { cn } from "@/lib/utils";
 import { sidebarConfig } from "@/config/sidebar";
 
 /**
  * Live generation indicator and unread state for a sidebar conversation row.
  *
- * Derived from assistant-ui runtime state and unread indicators.
- * Permanently reserves a 6px slot (size-1.5) so that switching states
- * (running -> unread -> seen/idle) never reflows or jumps row titles.
+ * Derived from the centralized conversation-activity projection so the Sidebar
+ * does not depend on an ambient assistant-ui provider. Permanently reserves a
+ * 6px slot (size-1.5) so that switching states (running -> unread -> seen/idle)
+ * never reflows or jumps row titles.
  */
 export function useThreadListItemRunning(remoteId: string): boolean {
-  const { pathname } = useLocation();
-  const isOpenConversation = conversationIdFromPath(pathname) === remoteId;
-
-  // The open row reads the thread list item's running state from official API.
-  const openThreadRunning = useAuiState((state) => {
-    try {
-      return state.threadListItem.isRunning;
-    } catch {
-      return false;
-    }
-  });
-
-  // Any row: the thread list's own view.
-  const listItemRunning = useAuiState((state) => {
-    try {
-      const items = state.threads?.threadItems ?? [];
-      const match =
-        items.find((t) => t.remoteId === remoteId) ?? items.find((t) => t.id === remoteId);
-      return match?.isRunning === true;
-    } catch {
-      return false;
-    }
-  });
-
-  return isOpenConversation ? openThreadRunning : listItemRunning;
+  return useConversationExecution(remoteId) === "running";
 }
 
 export function ThreadRunningDot({
