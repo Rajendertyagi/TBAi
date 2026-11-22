@@ -365,18 +365,28 @@ describe("FirstPromptHandoff — structural boundary pins", () => {
     expect(source).toContain("return null");
   });
 
-  it("OpenCodeView hosts the boundary inside the provider with no competing consumer", async () => {
+  it("OpenCodeChatHost hosts the boundary inside the provider with no competing consumer", async () => {
+    // Phase 0 extracted the runtime composition from the route adapter into
+    // OpenCodeChatHost; the boundary now lives there.
     const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeChatHost.tsx"),
     ).text();
     expect(source).toContain("<FirstPromptHandoff");
     // The old racing effect is gone: exactly one first-prompt consumer.
     expect(source).not.toContain("claimPendingFirstMessage(conversationId)");
   });
 
-  it("recovery reconnects only on epoch change while mounted, never on stale mount", async () => {
+  it("the route adapter stays thin — it delegates the boundary to the host", async () => {
     const source = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+    ).text();
+    expect(source).toContain("<OpenCodeChatHost");
+    expect(source).not.toContain("<FirstPromptHandoff");
+  });
+
+  it("recovery reconnects only on epoch change while mounted, never on stale mount", async () => {
+    const source = await Bun.file(
+      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeChatHost.tsx"),
     ).text();
     // Previous-epoch ref + pure gate: mount records, transitions reconnect.
     expect(source).toContain("seenRecoveryEpochRef");

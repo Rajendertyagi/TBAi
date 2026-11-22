@@ -447,12 +447,22 @@ describe("FirstPromptHandoff settled boundary — source pins the production pat
     expect(source).not.toContain("unclaimPendingFirstMessage");
   });
 
-  it("OpenCodeView hosts the boundary inside the provider with no competing consumer", async () => {
+  it("OpenCodeChatHost hosts the boundary inside the provider with no competing consumer", async () => {
+    // Phase 0 extracted the runtime composition from the route adapter into
+    // OpenCodeChatHost; the boundary invariant follows its new owner.
     const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeChatHost.tsx"),
     ).text();
     expect(source).toContain("<FirstPromptHandoff");
     expect(source).not.toContain("claimPendingFirstMessage(conversationId)");
+  });
+
+  it("the route adapter stays thin — it delegates the boundary to the host", async () => {
+    const source = await Bun.file(
+      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+    ).text();
+    expect(source).toContain("<OpenCodeChatHost");
+    expect(source).not.toContain("<FirstPromptHandoff");
   });
 
   it("ChatShell binds through the owner record with the live snapshot as backstop", async () => {

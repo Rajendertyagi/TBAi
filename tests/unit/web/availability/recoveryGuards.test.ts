@@ -26,6 +26,9 @@ beforeAll(async () => {
     runtime: "web/src/runtime.ts",
     elicitation: "web/src/components/ElicitationModal.tsx",
     openCodeView: "web/src/features/opencode/OpenCodeView.tsx",
+    // Phase 0 extracted the recovery effect from the route adapter into the
+    // host; the invariant is pinned there, with a thin-adapter guard on the view.
+    openCodeChatHost: "web/src/features/opencode/OpenCodeChatHost.tsx",
     conversationsList: "web/src/features/sidebar/hooks/useConversationsList.ts",
     capabilities: "web/src/features/opencode/useOpenCodeCapabilities.ts",
     capabilitiesStore: "web/src/features/opencode/capabilitiesStore.ts",
@@ -201,7 +204,7 @@ describe("elicitation resolve failure contract (Phase 3.11)", () => {
 
 describe("OpenCode recovery reconnect (Phase 3.10)", () => {
   it("[P3-18a] bound session + epoch change calls the EXISTING reconnect once (never on stale mount)", () => {
-    const src = sources.openCodeView;
+    const src = sources.openCodeChatHost;
     // Previous-epoch ref + pure gate: only an epoch CHANGE while mounted
     // reconnects. A mount with an already-non-zero epoch must not rebuild
     // the client (that would swap the frozen thread-list adapter while the
@@ -211,6 +214,13 @@ describe("OpenCode recovery reconnect (Phase 3.10)", () => {
     expect(src).toContain("reconnect();");
     expect(src).toContain("}, [recoveryEpoch, sessionId, reconnect]);");
     expect(src).not.toContain("if (recoveryEpoch === 0 || !sessionId) return;");
+  });
+
+  it("[P3-18a-adapter] the route adapter delegates the lifecycle without owning recovery", () => {
+    const view = sources.openCodeView;
+    expect(view).toContain("<OpenCodeChatHost");
+    expect(view).not.toContain("seenRecoveryEpochRef");
+    expect(view).not.toContain("shouldReconnectForEpoch");
   });
 
   it("[P3-18b] epoch changes map to exactly one reconnect each (declared-deps simulation)", () => {

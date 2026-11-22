@@ -402,11 +402,23 @@ describe("the browser half of the link: the view posts to this exact route", () 
     expect(bootstrapModule).not.toContain("api/opencode/api/");
   });
 
-  it("is what the Code view actually calls to resolve its session", () => {
+  it("is what the Code surface actually calls to resolve its session", () => {
+    // Phase 0 extracted the full lifecycle out of the route adapter into
+    // OpenCodeChatHost. The invariant (bootstrap through the session seam,
+    // session id taken from that call) now lives with the host; the view is a
+    // thin adapter that only delegates to it.
+    const host = read("web/src/features/opencode/OpenCodeChatHost.tsx");
+    expect(host).toContain("bootstrapOpenCodeSession");
+    // The host takes its session id from that call, not from the V2 client.
+    expect(host).toContain("setSessionId(data.sessionId)");
+  });
+
+  it("keeps the route adapter thin — it delegates the lifecycle to the host", () => {
     const view = read("web/src/features/opencode/OpenCodeView.tsx");
-    expect(view).toContain("bootstrapOpenCodeSession");
-    // The view takes its session id from that call, not from the V2 client.
-    expect(view).toContain("setSessionId(data.sessionId)");
+    expect(view).toContain("<OpenCodeChatHost");
+    // No bootstrap/session logic in the route adapter itself.
+    expect(view).not.toContain("bootstrapOpenCodeSession");
+    expect(view).not.toContain("setSessionId(");
   });
 
   it("leaves model policy out of the view", () => {

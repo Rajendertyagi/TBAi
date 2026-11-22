@@ -1,14 +1,14 @@
-import { AuiConfig, AuiProvider, AssistantRuntimeProvider } from "@assistant-ui/react";
+import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { threadListAdapter } from "../../../app/adapter";
 import { useAppChatRuntime } from "../../../runtime";
 import { ChatWindow } from "../../../components/ChatWindow";
+import { ChatHeader } from "../../chat/components/ChatHeader";
+import { DirectDataUIs, DirectHostProvider } from "./directHost";
 
-// A fresh empty config so this runtime is a top-level one, not a child of the
-// ambient provider. `extends={null}` is the official assistant-ui isolation
-// contract (required because useRemoteThreadListRuntime throws when nested).
-const isolatedConfig = AuiConfig({});
 // Stable identity: a fresh closure each render can cause needless runtime
 // reconfiguration. Panel hosts never rebind their thread from the runtime.
+// Draft materialization is deliberately NOT done here — that belongs to the
+// Phase 5a draft-aware host, which wires resolveDraftId into this callback.
 const noopThreadIdChange = () => {};
 
 /**
@@ -16,11 +16,13 @@ const noopThreadIdChange = () => {};
  * multiple hosts can be live simultaneously and independently. The runtime's
  * lifetime is this component's lifetime — unmounting disposes only this host.
  *
- * The isolation boundary is inlined here via the official `AuiProvider` API
- * rather than importing the OpenCode feature's boundary — this is generic
- * assistant-ui isolation, not OpenCode-specific, and inlining avoids a
- * cross-feature dependency. The canonical shared `threadListAdapter` is used;
- * its cache/search/sort state is module-level, so a fresh instance adds nothing.
+ * Composition parity with the routed `ChatView`: `ChatHeader` + `ChatWindow`
+ * live inside the SAME per-host assistant-ui provider, and the shared Direct
+ * config/data-UI contract supplies tools, suggestions, progress and compaction
+ * (see `directHost.tsx`). `ChatHeader` receives the exact `threadId` this host
+ * is bound to, so its rename/archive/delete/copy-id/open-in-code/new-chat
+ * actions target the correct conversation. For a draft (`isDraft`) the header
+ * shows draft-appropriate actions and the runtime never materializes it.
  */
 export function DirectChatHost({
   threadId,
@@ -30,9 +32,9 @@ export function DirectChatHost({
   isDraft?: boolean;
 }) {
   return (
-    <AuiProvider extends={null} config={isolatedConfig}>
+    <DirectHostProvider>
       <DirectChatInner threadId={threadId} isDraft={isDraft} />
-    </AuiProvider>
+    </DirectHostProvider>
   );
 }
 
@@ -40,7 +42,20 @@ function DirectChatInner({ threadId, isDraft }: { threadId: string; isDraft: boo
   const runtime = useAppChatRuntime(threadListAdapter, threadId, noopThreadIdChange);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ChatWindow isDraft={isDraft} />
+      <DirectDataUIs />
+      <div
+        className="flex h-full min-h-0 flex-col"
+        data-testid="direct-chat-host"
+        data-thread-id={threadId}
+        data-is-draft={isDraft}
+      >
+        <div data-testid="direct-conversation-header" data-conversation-id={threadId}>
+          <ChatHeader threadId={threadId} />
+        </div>
+        <div className="min-h-0 flex-1">
+          <ChatWindow isDraft={isDraft} />
+        </div>
+      </div>
     </AssistantRuntimeProvider>
   );
 }
