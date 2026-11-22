@@ -3,24 +3,58 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 import path from "node:path";
 
 /**
- * OpenCodeView loading-surface guard (Phase 2 Step 1).
+ * OpenCode surface guards, split by ownership after the host extraction.
  *
- * The `!sessionId` branch must render the shared message-shaped boot skeleton
- * inside the normal content surface — never a full-viewport "Starting
- * OpenCode…" replacement. The error/retry branch and the session
- * creation/resume request path must stay untouched.
+ * `OpenCodeView` is now a THIN route adapter: it reads the route param, validates
+ * the tab, redirects a missing agent id, shows the boot skeleton, and delegates
+ * the full lifecycle to `OpenCodeChatHost`. The loading/error/bootstrap and
+ * composer-extras invariants therefore belong to the host's source, not the
+ * adapter's. Both files are guarded here so the extraction cannot silently drop
+ * a behavior.
  *
  * Source-guard convention (same as `CodeShell.test.tsx`): `web/` has no DOM
- * runner, so the loading/error branches are pinned against the source rather
- * than rendered.
+ * runner, so these branches are pinned against the source rather than rendered.
  */
-describe("OpenCodeView loading surface", () => {
+
+async function sourceOf(relativePath: string): Promise<string> {
+  return Bun.file(path.join(REPO_ROOT, relativePath)).text();
+}
+
+describe("OpenCodeView thin route adapter", () => {
   let source = "";
 
   beforeAll(async () => {
-    source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
-    ).text();
+    source = await sourceOf("web/src/features/opencode/OpenCodeView.tsx");
+  });
+
+  it("reads and validates the route param through the shared tab binding", () => {
+    expect(source).toContain("useParams");
+    expect(source).toContain('useConversationTab(agentId, "agent")');
+  });
+
+  it("redirects a missing agent id to the welcome draft", () => {
+    expect(source).toContain("navigate(ROUTES.CHAT_NEW");
+    expect(source).toContain("if (!agentId?.trim())");
+  });
+
+  it("renders the message-shaped boot skeleton while no agent is routed", () => {
+    expect(source).toContain("ThreadBootSkeleton");
+    expect(source).not.toContain("Loader2");
+  });
+
+  it("delegates the full lifecycle to OpenCodeChatHost with the conversation id", () => {
+    expect(source).toContain("<OpenCodeChatHost conversationId={agentId} />");
+    // The adapter owns no runtime/bootstrap/composer internals of its own.
+    expect(source).not.toContain("bootstrapOpenCodeSession");
+    expect(source).not.toContain("composerExtras");
+  });
+});
+
+describe("OpenCodeChatHost lifecycle and composer extras", () => {
+  let source = "";
+
+  beforeAll(async () => {
+    source = await sourceOf("web/src/features/opencode/OpenCodeChatHost.tsx");
   });
 
   it("renders the message-shaped boot skeleton while sessionId is unavailable", () => {
@@ -29,9 +63,6 @@ describe("OpenCodeView loading surface", () => {
   });
 
   it("does not render the 'Starting OpenCode…' replacement text", () => {
-    // The old centered spinner is gone: `Loader2` is no longer imported, so
-    // the loading branch can only render the skeleton. (Doc comments may
-    // still mention the old copy; they are not rendered.)
     expect(source).not.toContain("Loader2");
   });
 
@@ -44,8 +75,8 @@ describe("OpenCodeView loading surface", () => {
     expect(source).toContain("Retry");
   });
 
-  it("keeps the session creation/resume bootstrap path", () => {
-    expect(source).toContain("bootstrapOpenCodeSession(agentId)");
+  it("keeps the session creation/resume bootstrap path keyed by conversation id", () => {
+    expect(source).toContain("bootstrapOpenCodeSession(conversationId)");
     // The reuse flag is taken from the SAME bootstrap result as the session id,
     // because it describes that exact session.
     expect(source).toContain("setReusedExistingSession(data.reusedExistingSession)");

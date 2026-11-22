@@ -36,6 +36,17 @@ function baseProjection(overrides: Partial<V2LifecycleProjection> = {}): V2Lifec
     composerStopAvailable: false,
     composerStopOperation: { kind: "none" },
     hasActiveSessionWork: false,
+    lastOutcome: {
+      outcome: "none",
+      attribution: "unattributed",
+      binding: { kind: "unbound" },
+      evidence: {
+        serverEventId: null,
+        durableAggregateId: null,
+        durableSeq: null,
+        durableVersion: null,
+      },
+    },
     pendingLifecycle: { submissionPending: false, cancellationPending: false, reasons: [] },
     queuedPromptActions: [],
     capacity: {

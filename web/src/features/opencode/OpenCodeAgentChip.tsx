@@ -1,8 +1,8 @@
 "use client";
 
-import { useParams } from "react-router";
 import { Bot } from "lucide-react";
 import { welcomeConfig } from "@/config/welcome";
+import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import {
   useOpenCodeChipState,
   OpenCodeChipButton,
@@ -20,8 +20,8 @@ import {
  */
 export function OpenCodeAgentChip() {
   const copy = welcomeConfig.copy;
-  const { agentId } = useParams();
-  const conversationId = agentId ?? "";
+  const runtime = useOpenCodeRuntimeContext();
+  const conversationId = runtime?.conversationId ?? "";
   const { agents, isLoading, error, open, setOpen, currentAgent, persist } =
     useOpenCodeChipState(conversationId);
 

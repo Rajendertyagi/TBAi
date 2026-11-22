@@ -13,10 +13,13 @@ export function isCompactCommandText(text: string): boolean {
   return /^\/compact(?=\s|$)/.test(text.trimStart());
 }
 
+/** The minimal context surface compact admission needs: a session and its compact seam. */
+export type CompactContext = Pick<OpenCodeRuntimeContextValue, "sessionId" | "compact">;
+
 /** Whether the native compact admission callback is available on this surface. */
 export function shouldOfferCompact(
   isCodeSurface: boolean,
-  context: OpenCodeRuntimeContextValue | null | undefined,
+  context: CompactContext | null | undefined,
 ): boolean {
   return (
     isCodeSurface &&

@@ -15,6 +15,12 @@ import { createContext, useContext } from "react";
  * auto-approval runtime functions without one.
  */
 export interface OpenCodeRuntimeContextValue {
+  /**
+   * The canonical TBAi conversation id this runtime belongs to. Provided by the
+   * host (never read from the route) so session row and composer chips keep the
+   * correct identity inside a Dockview panel outside `/code/:agentId`.
+   */
+  conversationId: string;
   /** The OpenCode session that owns this runtime. */
   sessionId: string;
   /** The runtime's reconcile seam (from `useOpenCodeRuntime`). */

@@ -1,4 +1,5 @@
 ﻿import { create } from "zustand";
+import type { StreamStatus } from "./streamRecovery";
 
 /** Execution status derived from authoritative runtime/server evidence. */
 export type ConversationExecution =
@@ -24,7 +25,8 @@ export interface ConversationActivityEntry {
   engine: ConversationEngine;
 }
 
-type ConversationActivityPatch = Partial<Omit<ConversationActivityEntry, "updatedAt">> & {
+/** Fields a publisher may merge into a conversation's activity entry. */
+export type ConversationActivityPatch = Partial<Omit<ConversationActivityEntry, "updatedAt">> & {
   updatedAt?: number;
 };
 
@@ -78,4 +80,42 @@ export function useConversationExecution(
   conversationId: string,
 ): ConversationExecution | undefined {
   return useConversationActivityStore((state) => state.entries[conversationId]?.execution);
+}
+
+/**
+ * Maps the server's authoritative terminal run status to a projection execution
+ * state. Returns null when there is no terminal evidence (missing or streaming
+ * status), so callers never fabricate an idle/terminal state from `isRunning`.
+ */
+export function directExecutionFromTerminalStatus(
+  terminalKind: StreamStatus["terminalKind"],
+): ConversationExecution | null {
+  switch (terminalKind) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "cancelled":
+    case "interrupted":
+      return "cancelled";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Decides whether a terminal verdict still belongs to the current run.
+ *
+ * "Same generation wins, newer generation loses": a verdict fetched for the run
+ * that is currently published MUST be applied even while the projection shows
+ * `running` — that is the normal completion path, and blocking it leaves the
+ * projection stuck at `running` forever. Only a newer run that started while the
+ * status read was in flight invalidates the verdict. The check is synchronous,
+ * so no await can interleave between it and the publish that follows.
+ */
+export function shouldPublishTerminal(
+  generationAtStart: number,
+  currentGeneration: number,
+): boolean {
+  return generationAtStart === currentGeneration;
 }

@@ -13,7 +13,6 @@ export function ThreadLastMessageTime({
   fallback,
   className,
 }: {
-  remoteId: string;
   fallback?: Date | string;
   className?: string;
 }) {

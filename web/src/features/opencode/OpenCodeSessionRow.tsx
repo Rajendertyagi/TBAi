@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
 import { Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { welcomeConfig } from "@/config/welcome";
 import { probeConversation } from "@/features/chat/state/conversationExistence";
+import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 
 /**
  * Conversation identity fields this row consumes. These are the P1-extended
@@ -73,8 +73,8 @@ function useConversationIdentity(conversationId: string | undefined) {
  * Mounted as a sibling of ChatWindow (never inside it).
  */
 export function OpenCodeSessionRow() {
-  const { agentId } = useParams();
-  const identity = useConversationIdentity(agentId);
+  const runtime = useOpenCodeRuntimeContext();
+  const identity = useConversationIdentity(runtime?.conversationId);
   const folders = useFoldersStore((s) => s.folders);
   const loadFolders = useFoldersStore((s) => s.loadFolders);
 

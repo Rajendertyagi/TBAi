@@ -16,6 +16,7 @@ import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { shouldReconnectForEpoch } from "./recoveryEpoch";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
+import { OpenCodeActivityPublisher } from "./openCodeActivityPublisher";
 import { FirstPromptHandoff } from "./FirstPromptHandoff";
 import { bootstrapOpenCodeSession } from "./sessionBootstrap";
 import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
@@ -275,6 +276,7 @@ function AgentRuntime({
   // client; a reconnect rebuilds the client and updates it.
   const runtimeContext = useMemo(
     () => ({
+      conversationId,
       sessionId,
       reconcileAutoApprove,
       directory: eventDirectory,
@@ -289,13 +291,14 @@ function AgentRuntime({
           }
         : {}),
     }),
-    [sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
+    [conversationId, sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
   );
 
   return (
     <OpenCodeIsolationBoundary>
       <OpenCodeRuntimeContext.Provider value={runtimeContext}>
         <AssistantRuntimeProvider runtime={runtime} config={config}>
+          <OpenCodeActivityPublisher conversationId={conversationId} />
           <FirstPromptHandoff
             conversationId={conversationId}
             sessionId={sessionId}

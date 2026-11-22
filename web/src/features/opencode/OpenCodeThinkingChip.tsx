@@ -1,7 +1,7 @@
 "use client";
 
-import { useParams } from "react-router";
 import { Brain } from "lucide-react";
+import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import {
   useOpenCodeChipState,
   OpenCodeChipButton,
@@ -19,8 +19,8 @@ import { buildOpenCodeThinkingOptions } from "./useOpenCodeCapabilities";
  * declares no variants.
  */
 export function OpenCodeThinkingChip() {
-  const { agentId } = useParams();
-  const conversationId = agentId ?? "";
+  const runtime = useOpenCodeRuntimeContext();
+  const conversationId = runtime?.conversationId ?? "";
   const { isLoading, error, open, setOpen, currentVariant, currentModelInfo, persist } =
     useOpenCodeChipState(conversationId);
 

@@ -227,7 +227,6 @@ export function SidebarThreadRow({
 
             <div className="relative flex min-w-6 shrink-0 items-center justify-end">
               <ThreadLastMessageTime
-                remoteId={item.remoteId}
                 fallback={item.lastMessageAt}
                 className="text-2xs tabular-nums text-muted-foreground/60 transition-opacity duration-150 group-hover:opacity-0"
               />

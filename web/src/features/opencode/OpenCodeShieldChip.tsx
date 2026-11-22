@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
 import { Shield, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { welcomeConfig } from "@/config/welcome";
@@ -121,10 +120,9 @@ export function OpenCodeShieldButton({
  * state — never a false ON.
  */
 export function OpenCodeShieldChip() {
-  const { agentId } = useParams();
-  const conversationId = agentId ?? "";
-  const draft = !conversationId;
   const runtime = useOpenCodeRuntimeContext();
+  const conversationId = runtime?.conversationId ?? "";
+  const draft = !conversationId;
   const config = useOpenCodeConversationConfig(conversationId);
   const draftAutoApprove = useWelcomeEngineStore((s) => s.autoApprove);
   const setDraftAutoApprove = useWelcomeEngineStore((s) => s.setAutoApprove);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useChatRuntime, AssistantChatTransport } from "@assistant-ui/ai-sdk";
 import {
   lastAssistantMessageIsCompleteWithToolCalls,
@@ -6,6 +6,7 @@ import {
 } from "ai";
 import {
   useAui,
+  useAuiState,
   useRemoteThreadListRuntime,
   type RemoteThreadListAdapter,
 } from "@assistant-ui/react";
@@ -39,6 +40,11 @@ import {
   useStreamRecoveryStore,
   type StreamRecoveryState,
 } from "./features/chat/state/streamRecovery";
+import {
+  directExecutionFromTerminalStatus,
+  shouldPublishTerminal,
+  useConversationActivityStore,
+} from "./features/chat/state/conversationActivity";
 import { lastUserText } from "./lib/ui-messages";
 import { useAvailabilityStore } from "./features/availability/availabilityStore";
 import { getApiBaseUrl, resolveApiUrl } from "./lib/platform";
@@ -242,10 +248,26 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
    * clear never runs and the client re-resumes a dead stream on every state
    * change. A `streaming` row keeps its pointer — its producer is still alive.
    */
+  // Run generation per conversation. Incremented whenever a live run is observed
+  // so a terminal verdict fetched for an older run cannot overwrite a newer run's
+  // `running` state when the async status read finally resolves.
+  const runGenerationRef = useRef<Map<string, number>>(new Map());
+
   const reconcileRecovery = useCallback(
     async (threadId: string, prompt: string, assumeRun = false) => {
+      const generationAtStart = runGenerationRef.current.get(threadId) ?? 0;
       const { status } = await resolveStreamRecovery(threadId, prompt, { assumeRun });
       if (!status || status.status === "streaming") return;
+      // The server's durable terminal kind is the ONLY authoritative evidence
+      // for a Direct terminal state. Never derive one from `isRunning` alone.
+      // Same-generation verdicts (normal completion) are published even while
+      // the projection shows `running`; only a newer run invalidates them.
+      if (shouldPublishTerminal(generationAtStart, runGenerationRef.current.get(threadId) ?? 0)) {
+        const execution = directExecutionFromTerminalStatus(status.terminalKind);
+        if (execution) {
+          useConversationActivityStore.getState().publish(threadId, { execution, engine: "direct" });
+        }
+      }
       try {
         storage.clear(threadId);
         forgetRememberedStreamId(threadId);
@@ -316,6 +338,40 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     return item.remoteId ?? item.id ?? null;
   })();
   const historyWindowUi = useDirectHistoryWindowUi(activeConversationId);
+
+  // Activity projection publisher (Direct). `running` comes from the live
+  // assistant-ui thread state; a terminal state is published only after the
+  // server's authoritative status is read (see `reconcileRecovery`). Never
+  // publish `idle` here — a hidden/unmounted host may still be executing.
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const lastRunRef = useRef<{ conversationId: string; isRunning: boolean } | null>(null);
+  useEffect(() => {
+    const conversationId = activeConversationId;
+    if (!conversationId) return;
+    const previous = lastRunRef.current;
+    lastRunRef.current = { conversationId, isRunning };
+
+    if (isRunning) {
+      // A live run supersedes any terminal verdict an in-flight status read may
+      // still be about to publish for this conversation.
+      runGenerationRef.current.set(
+        conversationId,
+        (runGenerationRef.current.get(conversationId) ?? 0) + 1,
+      );
+      useConversationActivityStore.getState().publish(conversationId, {
+        execution: "running",
+        engine: "direct",
+      });
+      return;
+    }
+
+    // A true→false transition for the SAME conversation is the only honest
+    // signal that a run ended. Ask the server for the authoritative terminal
+    // status instead of guessing one from the client flag.
+    if (previous?.conversationId === conversationId && previous.isRunning) {
+      void reconcileRecovery(conversationId, promptFor());
+    }
+  }, [isRunning, activeConversationId, reconcileRecovery, promptFor]);
 
   const transport = useMemo(
     () =>

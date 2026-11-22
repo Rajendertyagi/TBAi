@@ -13,12 +13,12 @@ import { ThreadLastMessageTime } from "@web/components/ui/thread-last-message-ti
  */
 describe("ThreadLastMessageTime outside the runtime", () => {
   it("renders nothing when neither the runtime nor the fetched row has a timestamp", () => {
-    expect(renderToStaticMarkup(<ThreadLastMessageTime remoteId="thread-1" />)).toBe("");
+    expect(renderToStaticMarkup(<ThreadLastMessageTime />)).toBe("");
   });
 
   it("falls back to the timestamp the sidebar fetched", () => {
     const html = renderToStaticMarkup(
-      <ThreadLastMessageTime remoteId="thread-1" fallback={new Date(Date.now() - 5 * 60_000)} />,
+      <ThreadLastMessageTime fallback={new Date(Date.now() - 5 * 60_000)} />,
     );
     expect(html).toContain("5m ago");
   });

@@ -1,6 +1,6 @@
 import type { V2ThreadState } from "../v2Types";
 import type { PromptsInFlightSnapshot, V2PromptCapacitySnapshot } from "./promptsInFlight";
-import type { V2ExecutionFactsSnapshot } from "./executionFacts";
+import type { V2ExecutionFactsSnapshot, V2ExecutionOutcomeRecord } from "./executionFacts";
 import type { V2CancellationFactsSnapshot, V2CancellationIntent } from "./cancellationFacts";
 
 export type V2ComposerStopOperation =
@@ -61,6 +61,12 @@ export interface V2LifecycleProjection {
   readonly composerStopOperation: V2ComposerStopOperation;
   /** Actual session execution activity. */
   readonly hasActiveSessionWork: boolean;
+  /**
+   * The last server-evidenced execution outcome. Surfaced so the activity
+   * projection can publish a terminal state from authoritative evidence only —
+   * never inferred from an idle projection. `outcome: "none"` means no verdict.
+   */
+  readonly lastOutcome: V2ExecutionOutcomeRecord;
   /** Unresolved prompt submission/admission/reconciliation or cancellation. */
   readonly pendingLifecycle: V2PendingLifecycle;
   /** Independent queued prompt controls. */
@@ -201,6 +207,7 @@ export function projectLifecycle(input: V2LifecycleProjectionInput): V2Lifecycle
     composerStopAvailable,
     composerStopOperation,
     hasActiveSessionWork,
+    lastOutcome: execution.lastOutcome,
     pendingLifecycle: {
       submissionPending,
       cancellationPending,

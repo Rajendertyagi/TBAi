@@ -48,6 +48,11 @@ function truncateMiddle(str: string, maxLen = 34): string {
 }
 
 export function OpenCodeImportDialog({ open, onOpenChange }: OpenCodeImportDialogProps) {
+  // Route-independent by design: navigation targets are derived from the import
+  // result / clicked row (`ROUTES.code(conversationId)`), never from the current
+  // `useParams().agentId`. This only needs Router context (always present via the
+  // app's hash router), so it stays safe inside a Dockview panel outside
+  // `/code/:agentId`. Route→panel focus mapping is a later-phase concern.
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<ImportableSessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
