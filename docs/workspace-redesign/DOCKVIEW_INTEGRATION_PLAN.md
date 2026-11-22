@@ -121,6 +121,12 @@ Required work:
 - `onReady`: register panels from canonical open conversations; restore saved layout.
 - `onDidMovePanel`: relocation tracking only — never treat as close, never remove shared membership. Payload is `MovePanelEvent { panel, from, to }` (`dockviewComponent.d.ts:129-137`).
 - `onDidAddPanel`/`onDidRemovePanel`: **never infer a conversation close from these alone.** Official docs (https://dockview.dev/docs/core/events) state add/remove fire during moves (remove then add); the installed 8.9.1 bundle instead suppresses component-level add/remove forwarding while `_moving` is set in `movingLock` (`main.cjs.js` ~19000-19008, ~19600-19605). These two sources disagree — therefore: use `onDidMovePanel` for relocations, treat add/remove as structural signals only with idempotent reconciliation against canonical `chatTabs`, and add a **version-pinned regression test** against the resolved 8.9.1 behavior. Do not rely on either interpretation without that test.
+- **Definitive panel-close detection (blocking).** Never apply close semantics from `onDidRemovePanel` alone. Required procedure for every suspected close:
+  1. Identify relocations via `onDidMovePanel` and the settled layout mutation events (`onDidMutateLayout` with `kind: 'move'`); a move is never a close.
+  2. For a suspected close, wait until the structural mutation has settled (do not act on the intermediate add/remove pair emitted during a move).
+  3. Confirm the panel is **genuinely absent** from Dockview's current registry using `api.getPanel(id)` and `api.panels` (`component.api.d.ts:562,625`).
+  4. Only then apply the intended close behavior and reconcile with canonical `chatTabs`.
+  This protects conversations from being closed, or their runtimes disposed, merely because a panel was relocated. Add regression coverage for move-then-check and genuine-close paths.
 - `onDidLayoutChange`: persist layout. Payload is `{ reasons: ReadonlySet<'geometry'|'structure'|'activePanel'|'panelTitle'|'panelParameters'> }` (`types.d.ts:42-47`) — persist only relevant reasons, debounce/coalesce, and ignore writes while applying `fromJSON`. Use `onDidLayoutFromJSON` (`component.api.d.ts:416`) to clear the restore guard. Mutation boundary events `onWillMutateLayout`/`onDidMutateLayout` (with `kind` incl. `move`/`load`) are available if a transaction-aware guard is needed.
 - Visibility: there is **no** `DockviewApi.onDidVisibilityChange`. Use `panel.api.onDidVisibilityChange` (`panelApi.d.ts:20,80-82`) or `IContentRenderer.onShow/onHide` (`dockview/types.d.ts:34-36`) to pause only optional visual work; never pause execution, streaming, or subscriptions. Hidden `renderer: "always"` panels keep browser-driven work running unless explicitly paused.
 
@@ -160,8 +166,17 @@ Required work:
 
    Decide how `ChatShell`, `CodeShell`, `ChatView`, and `OpenCodeView` evolve: recommended — route views become thin focus/open triggers (no `ChatWindow` of their own), and `OpenCodeView` already delegates to `OpenCodeChatHost` (`OpenCodeView.tsx:43-47`). **Duplicate-mount guard:** a conversation id must resolve to exactly one host; the route-effect controller and Dockview panel registry must share the canonical tab key so a route view never creates a second runtime for an already-open panel. Phase 4 deep-link tests must trace this exact flow.
 7. **Workspace mount persistence across non-chat routes (blocking).** Today settings/scheduler render as `Outlet` children under `ChatShell` (`router.tsx:47-160`), and `AppShell` always mounts `<Outlet />` (`AppShell.tsx:271`) with the root provider at `:229`, so the Direct runtime survives route changes. Once the root provider is removed and runtimes become per-host (§4a/§5a), the Dockview workspace and its stable host layer **must remain mounted across non-chat routes** — only visibility/surface switching changes. Specify the mount point: a persistent AppShell-level layer outside route-swapped content, with route pages rendered as an alternate surface. Never unmount Dockview (or its hosts) on settings/scheduler navigation, or active streams, sessions, composers, and scroll state are destroyed. Add an E2E case: chat → settings/scheduler → chat, assert active stream/composer/scroll/runtime instance preserved.
+8. **Complete assistant-ui provider consumer audit (blocking).** Before the root `AssistantRuntimeProvider` is removed, produce a repository-wide inventory of every assistant-ui context consumer. Search `web/src` (and any other source tree) for: `useAui`, `useAuiState`, `useAssistantRuntime`, `useThreadListItem*` (all variants), `AuiProvider`, and `AssistantRuntimeProvider`. Include **indirect imports, dynamic `import()` calls, and conditionally mounted components** — a consumer that only renders on a specific path is exactly the one that would fail silently. Classify every relevant consumer:
 
-**Acceptance:** first-send draft materializes exactly once; `/chat/:id` and `/code/:id` deep links open/focus the correct panel; URL and focused conversation converge; no duplicate runtime for one conversation; Sidebar status still works with no ambient provider; no route view and Dockview panel render the same conversation simultaneously; Dockview hosts survive navigation to non-chat routes and back.
+   | Classification | Meaning |
+   |---|---|
+   | Ambient-dependent | Currently relies on AppShell's root provider |
+   | Host-isolated | Already has its own provider (e.g. OpenCode's `OpenCodeIsolationBoundary` / per-host `AuiProvider extends={null}`) |
+   | Optional/fallback | Can operate without the ambient provider |
+
+   **Gate:** the root provider must **not** be removed until every ambient-dependent consumer has a valid replacement provider or an explicitly verified fallback. Record the inventory and classification in the implementation report; add a test that fails if an ambient-dependent consumer is left without a provider after removal.
+
+**Acceptance:** first-send draft materializes exactly once; `/chat/:id` and `/code/:id` deep links open/focus the correct panel; URL and focused conversation converge; no duplicate runtime for one conversation; Sidebar status still works with no ambient provider; no route view and Dockview panel render the same conversation simultaneously; Dockview hosts survive navigation to non-chat routes and back; every ambient-dependent assistant-ui consumer has a replacement provider or verified fallback before root-provider removal.
 
 ### 5b. Navigation and state-ownership contract
 - **Authorities:** `chatTabs` = canonical conversation identity + shared membership + window-level URL selection (`localActiveKey`). Dockview = spatial layout + per-group active tab. One controller owns focus synchronization between them. No second global tab strip controls workspace tabs; `TabStrip` stays as Chat Threads navigation.
@@ -171,7 +186,7 @@ Required work:
   | TabStrip / Chat Threads select | Focus panel if open, else open via canonical tab key; set `localActiveKey` + URL | Create a second runtime for the same conversation |
   | Dockview active-panel change (`onDidActivePanelChange`, payload `{ panel, origin }` with `origin: 'user' / 'api'` — `dockviewComponent.d.ts:209-212`) | Set `localActiveKey` + URL for the focused conversation; use `origin` to avoid URL/focus feedback loops | Change active selection in unrelated groups |
   | Route change (`/chat/:id`, `/code/:id`) | Focus/open matching panel via route-effect controller | Bypass `useConversationTab` validation |
-  | Panel close (genuine remove) | Apply existing conversation-close + shared-membership semantics | Treat a move as a close; remove shared membership on move |
+  | Panel close (genuine remove) | Apply the definitive close procedure in §4b (settle mutation → confirm absent via `api.getPanel(id)`/`api.panels`), then apply conversation-close + shared-membership semantics | Treat a move as a close; remove shared membership on move; act on `onDidRemovePanel` alone |
   | Conversation closed elsewhere | Reconcile: remove stale panel, drop invalid layout ref | Invent a new conversation identity |
 - Per-group selection independent; switching tabs in one group does not change unrelated groups.
 - Closing a panel follows existing conversation-close and shared-membership semantics.
@@ -237,12 +252,12 @@ All tests under `tests/`. Critical scenarios must be Playwright E2E against real
 
 ## 8. Risks and unresolved items
 
-- **AppShell root-runtime removal (CRITICAL)** — Phase 5a design must be settled before code: draft materialization, route→panel mapping, URL/focus ownership, Sidebar activity source, and staged migration. Removing the root provider prematurely breaks draft/route/URL behavior.
+- **AppShell root-runtime removal (CRITICAL)** — Phase 5a design must be settled before code: draft materialization, route→panel mapping, URL/focus ownership, Sidebar activity source, staged migration, and the complete assistant-ui provider consumer audit (§5a.8). Removing the root provider prematurely breaks draft/route/URL behavior and leaves ambient-dependent consumers without a provider.
 - **OpenCode child route coupling (CRITICAL)** — five children read `useParams().agentId` (`OpenCodeSessionRow`, `OpenCodeAgentChip`, `OpenCodeModelChip`, `OpenCodeThinkingChip`, `OpenCodeShieldChip`); Phase 1b prerequisite. `OpenCodeImportDialog` uses `useNavigate` — review.
 - **Activity projection has no publishers** — Phase 1c blocking; without publishers Sidebar status regresses.
 - **Hidden-stream E2E** — POC could not drive a real send due to browser-tool focus limitation; must be covered by Playwright.
 - **Composer text preservation** — instance preservation proven; direct assertion still required.
-- **Dockview add/remove on move** — official docs say add/remove fire during moves (remove then add); installed 8.9.1 bundle suppresses component-level add/remove during `movingLock`. These disagree. Use `onDidMovePanel` for relocations, treat add/remove as structural signals with idempotent reconciliation, and add a **version-pinned regression test** against resolved 8.9.1 behavior before relying on either interpretation.
+- **Dockview add/remove on move** — official docs say add/remove fire during moves (remove then add); installed 8.9.1 bundle suppresses component-level add/remove during `movingLock`. These disagree. Use `onDidMovePanel` for relocations, treat add/remove as structural signals with idempotent reconciliation, and add a **version-pinned regression test** against resolved 8.9.1 behavior before relying on either interpretation. Apply the definitive close procedure in §4b: settle mutation → confirm absence via `api.getPanel(id)`/`api.panels` → only then close and reconcile with `chatTabs`.
 - **Renderer `always` hidden work** — hidden panels keep DOM and browser-driven work alive; pause only optional visual work via `panel.api.onDidVisibilityChange` / `onShow`/`onHide`, never execution. Measure many-panel memory.
 - **Memory with many panels** — measure; no LRU without evidence.
 - **Enterprise features** — none used; stay on MIT core.
@@ -322,5 +337,13 @@ Read-only study of the installed `dockview-react@8.9.1` / `dockview@8.9.1` / `do
 | `fromJSON` semantics | §4c — `reuseExistingPanels` is optional compatible-instance reuse, not a guarantee; stable ids/params required |
 | Focus sync | §5b — `onDidActivePanelChange` carries `origin: 'user' / 'api'`; use to avoid feedback loops |
 | Renderer `always` cost | §8 — hidden panels keep browser work alive; pause only visual work; measure memory |
+
+### Owner findings (2026-11-23) — two targeted corrections before implementation
+Owner verdict: Dockview architecture approved; these are targeted plan corrections, not a redesign. Once added and independently checked, the plan is ready for implementation approval.
+
+| Owner finding | Correction applied |
+|---|---|
+| Panel-close detection must be definitive — never treat `onDidRemovePanel` alone as a close; use `onDidMovePanel` + settled mutation events; confirm genuine absence via `api.getPanel(id)`/`api.panels` before close | §4b — explicit 4-step close procedure; §5b event-flow row references it; §8 risk updated |
+| Complete assistant-ui provider consumer audit before root-provider removal — inventory `useAui`, `useAuiState`, `useAssistantRuntime`, `useThreadListItem*`, `AuiProvider`, `AssistantRuntimeProvider`, including indirect/dynamic/conditional consumers; classify Ambient-dependent / Host-isolated / Optional-fallback; do not remove root provider until every ambient-dependent consumer has a replacement or verified fallback | §5a decision 8 — blocking audit with classification table and gate; §8 risk updated |
 
 No implementation was performed during planning beyond the foundation work already present in the working tree.
