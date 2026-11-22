@@ -50,6 +50,9 @@ import {
   type DirectHistoryWindowUi,
 } from "@web/features/chat/history/useDirectHistoryWindow.ts";
 
+/** Stable chat-content owner for these cases (Fix 4: WeakMap-keyed visits). */
+const OWNER = {};
+
 /**
  * `publishWindowUi` only reads `historical`/`hasMoreBefore`/`hasMoreAfter` from
  * the controller; a fresh controller answers all three with `false`. The
@@ -202,39 +205,39 @@ describe("K-I6 — loadFailed is part of the snapshot contract", () => {
  */
 describe("K-I1 — a new visit re-arms an exhausted recovery budget", () => {
   beforeEach(() => {
-    resetHistoryVisit();
+    resetHistoryVisit(OWNER);
   });
 
   it("the first arrival at a conversation is a new visit", () => {
-    expect(beginHistoryVisit(freshId())).toBe(true);
+    expect(beginHistoryVisit(OWNER, freshId())).toBe(true);
   });
 
   it("the recovery's own remount of the SAME conversation is not a new visit", () => {
     const id = freshId();
-    expect(beginHistoryVisit(id)).toBe(true);
+    expect(beginHistoryVisit(OWNER, id)).toBe(true);
     // The restart remounts this same conversation. If this reported a visit, the
     // budget would re-arm straight back into the retry loop it exists to stop.
-    expect(beginHistoryVisit(id)).toBe(false);
-    expect(beginHistoryVisit(id)).toBe(false);
+    expect(beginHistoryVisit(OWNER, id)).toBe(false);
+    expect(beginHistoryVisit(OWNER, id)).toBe(false);
   });
 
   it("arriving from a different conversation is a new visit", () => {
     const a = freshId();
     const b = freshId();
-    expect(beginHistoryVisit(a)).toBe(true);
-    expect(beginHistoryVisit(b)).toBe(true);
-    expect(beginHistoryVisit(a)).toBe(true);
+    expect(beginHistoryVisit(OWNER, a)).toBe(true);
+    expect(beginHistoryVisit(OWNER, b)).toBe(true);
+    expect(beginHistoryVisit(OWNER, a)).toBe(true);
   });
 
   it("resetHistoryVisit makes the next arrival a new visit again", () => {
     const id = freshId();
-    expect(beginHistoryVisit(id)).toBe(true);
-    expect(beginHistoryVisit(id)).toBe(false);
+    expect(beginHistoryVisit(OWNER, id)).toBe(true);
+    expect(beginHistoryVisit(OWNER, id)).toBe(false);
 
     // Coordinated recovery / full reset must not leave the surface permanently
     // indistinguishable from a restart remount.
-    resetHistoryVisit();
-    expect(beginHistoryVisit(id)).toBe(true);
+    resetHistoryVisit(OWNER);
+    expect(beginHistoryVisit(OWNER, id)).toBe(true);
   });
 
   it("the budget is spent by marking and restored only by clearing", () => {
@@ -338,8 +341,8 @@ describe("K-I1 — a new visit re-arms an exhausted recovery budget", () => {
 
     markHistoryRecoveryAttempted(id);
     // Arriving somewhere else and coming back IS a new visit...
-    expect(beginHistoryVisit(other)).toBe(true);
-    expect(beginHistoryVisit(id)).toBe(true);
+    expect(beginHistoryVisit(OWNER, other)).toBe(true);
+    expect(beginHistoryVisit(OWNER, id)).toBe(true);
     // ...but detecting it is not the same as acting on it. The caller clears the
     // budget in the same effect that spends it, so that no render can slip
     // between re-arming and consuming. Pinned here so the two responsibilities

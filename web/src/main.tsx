@@ -2,7 +2,6 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles/globals.css";
 import { installGlobalLogHooks } from "./lib/logger";
-import { installOperationHeaderFetch } from "./lib/operation";
 import { ThemeProvider } from "./components/theme-provider";
 import { AppToaster } from "./components/AppToaster";
 
@@ -31,6 +30,6 @@ createRoot(document.getElementById("root")!).render(
 
 // Capture otherwise-silent failures (unhandled rejections, window errors).
 installGlobalLogHooks();
-// Attach the active operationId to same-origin /api/* calls, so every request
-// one user action causes is correlated without editing each call site.
-installOperationHeaderFetch();
+// Operation ids are attached at each request boundary (Direct diagnosticFetch,
+// OpenCode session client) using the captured, scope-keyed id — never from a
+// global current operation, which would mis-correlate concurrent chats.

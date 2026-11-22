@@ -20,6 +20,19 @@
 /** Header carrying the operation id to the backend. */
 export const OPERATION_ID_HEADER = "X-TBAI-Operation-ID";
 
+/** Fallback scope key when a thread-list item has neither a remote nor local id. */
+export const UNKNOWN_THREAD_KEY = "unknown";
+
+/**
+ * Canonical operation-scope key for a thread-list item. Every send boundary
+ * (begin/attach/settle/finish/error) must derive the key this way, or a thread
+ * missing both ids would be registered under one key and ended under another —
+ * leaking the operation and dropping its correlation header.
+ */
+export function operationThreadKey(item: { remoteId?: string; id?: string } | undefined): string {
+  return item?.remoteId ?? item?.id ?? UNKNOWN_THREAD_KEY;
+}
+
 /** Longest id the backend accepts (`CORRELATION_ID_RE`). */
 const MAX_OPERATION_ID_LEN = 64;
 
@@ -46,28 +59,36 @@ interface ActiveOperation {
   name: string;
   startedAt: number;
   ended: boolean;
+  scopeKey?: string;
 }
 
 let current: ActiveOperation | null = null;
 /** Enclosing operations, so nesting restores correctly instead of clearing. */
 const enclosing: (ActiveOperation | null)[] = [];
+/**
+ * Scope-keyed operations. Concurrent chats (Direct threads, OpenCode sessions)
+ * each own one entry, keyed by conversation/thread/session id. This is the
+ * source of truth for concurrent requests — the single global `current` above
+ * is retained only for unscoped callers (tests, the logger fallback) and must
+ * never be relied on to correlate a concurrent send.
+ */
+const operationsByScope = new Map<string, OperationHandle>();
 
 /**
- * Start a meaningful user operation. Returns a handle whose `end()` restores
- * the previously active operation, so nested operations (a session bootstrap
- * inside a send) never leave the outer one uncorrelated.
+ * Start a meaningful user operation. When `scopeKey` is supplied the operation
+ * is registered under that key and is independent of every other scope; its
+ * `end()` removes only its own entry. Without a scope the legacy global
+ * current/nesting behavior is preserved.
  */
-export function startOperation(name: string, id?: string): OperationHandle {
-  const previous = current;
+export function startOperation(name: string, scopeKey?: string, id?: string): OperationHandle {
   const op: ActiveOperation = {
     id: (id ?? newOperationId()).slice(0, MAX_OPERATION_ID_LEN),
     name,
     startedAt: Date.now(),
     ended: false,
+    scopeKey,
   };
-  enclosing.push(previous);
-  current = op;
-  return {
+  const handle: OperationHandle = {
     id: op.id,
     name: op.name,
     startedAt: op.startedAt,
@@ -75,13 +96,14 @@ export function startOperation(name: string, id?: string): OperationHandle {
       void outcome;
       if (op.ended) return;
       op.ended = true;
-      // Only unwind if this operation is still the active one; a stale handle
-      // ending late must not clobber a newer operation.
+      if (scopeKey) {
+        // Only remove this scope's entry if it is still the one registered —
+        // a stale handle ending late must not remove a newer operation.
+        if (operationsByScope.get(scopeKey) === handle) operationsByScope.delete(scopeKey);
+        return;
+      }
+      // Legacy unscoped unwind (unchanged).
       if (current === op) {
-        // Restore the nearest ENCLOSING operation that is still live. An
-        // already-ended one is never restored: resurrecting it would put a
-        // finished operation back in scope and leak its id into every later
-        // event, which is the opposite of what this stack is for.
         current = null;
         while (enclosing.length > 0) {
           const candidate = enclosing.pop() ?? null;
@@ -97,11 +119,41 @@ export function startOperation(name: string, id?: string): OperationHandle {
       }
     },
   };
+  if (scopeKey) {
+    operationsByScope.set(scopeKey, handle);
+  } else {
+    const previous = current;
+    enclosing.push(previous);
+    current = op;
+  }
+  return handle;
 }
 
-/** The active operation id, or undefined when no operation is in flight. */
-export function currentOperationId(): string | undefined {
+/**
+ * The active operation id for a scope, or the unscoped global id when no scope
+ * is given. Concurrent callers MUST pass their scope key.
+ */
+export function currentOperationId(scopeKey?: string): string | undefined {
+  if (scopeKey) return operationsByScope.get(scopeKey)?.id;
   return current?.id;
+}
+
+/**
+ * End the operation registered for `scopeKey`. Returns the ended id (so callers
+ * can log it) or undefined when nothing matched. `expectedId` guards a late
+ * settle from ending a newer operation in the same scope.
+ */
+export function endOperation(
+  scopeKey: string,
+  outcome?: string,
+  expectedId?: string,
+): string | undefined {
+  const op = operationsByScope.get(scopeKey);
+  if (!op) return undefined;
+  if (expectedId !== undefined && op.id !== expectedId) return undefined;
+  operationsByScope.delete(scopeKey);
+  op.end(outcome);
+  return op.id;
 }
 
 /** The active operation's name (diagnostics only). */
@@ -119,6 +171,7 @@ export function operationHeaders(): Record<string, string> {
 export function resetOperationsForTests(): void {
   current = null;
   enclosing.length = 0;
+  operationsByScope.clear();
 }
 
 /** Resolve a fetch input to a URL, or null when it cannot be parsed. Pure. */
@@ -131,8 +184,6 @@ export function resolveRequestUrl(input: URL | RequestInfo, origin: string): URL
     return null;
   }
 }
-
-import { getApiBaseUrl } from "./platform";
 
 /**
  * Same-origin or verified-backend `/api/*` calls are the ones the backend can correlate;
@@ -148,8 +199,9 @@ export function isCorrelatableRequest(url: URL, origin: string, apiOrigin?: stri
  *
  * Pure, and returns `undefined` when nothing should change — no operation, a
  * non-correlatable target, an unparseable URL, or a header the caller already
- * set. The wrapper below is a two-line delegation, so the decision itself is
- * directly unit-testable without touching the global `fetch`.
+ * set. Each request boundary (Direct `diagnosticFetch`, OpenCode session client)
+ * calls this with its captured, scope-keyed id — there is deliberately no global
+ * fetch wrapper, which would mis-correlate concurrent chats.
  */
 export function operationInitFor(
   input: URL | RequestInfo,
@@ -167,31 +219,4 @@ export function operationInitFor(
   if (headers.has(OPERATION_ID_HEADER)) return undefined;
   headers.set(OPERATION_ID_HEADER, id);
   return { ...(init ?? {}), headers };
-}
-
-let fetchInstalled = false;
-
-/**
- * Install the operation-id header application-wide by wrapping `fetch` ONCE,
- * instead of editing every call site (which would silently miss new ones).
- *
- * Only `/api/*` requests aimed at this origin or the verified backend origin are touched,
- * and only when an operation is actually active — so probes, asset loads, and requests
- * made outside any user action keep their exact previous behavior. An explicit header
- * already set by a caller always wins.
- */
-export function installOperationHeaderFetch(): void {
-  if (fetchInstalled || typeof window === "undefined") return;
-  fetchInstalled = true;
-  const base = globalThis.fetch.bind(globalThis);
-  globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
-    const next = operationInitFor(
-      input,
-      init,
-      currentOperationId(),
-      window.location.origin,
-      getApiBaseUrl(),
-    );
-    return next ? base(input, next) : base(input, init);
-  }) as typeof globalThis.fetch;
 }

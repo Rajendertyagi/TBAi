@@ -12,7 +12,12 @@ import {
 import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "./lib/logger";
 import { classifyChatError } from "./lib/transport-errors";
-import { currentOperationId } from "./lib/operation";
+import {
+  currentOperationId,
+  operationInitFor,
+  operationThreadKey,
+  UNKNOWN_THREAD_KEY,
+} from "./lib/operation";
 import {
   attachSendOperation,
   beginSendOperation,
@@ -35,7 +40,7 @@ import {
 } from "./features/chat/state/streamRecovery";
 import { lastUserText } from "./lib/ui-messages";
 import { useAvailabilityStore } from "./features/availability/availabilityStore";
-import { resolveApiUrl } from "./lib/platform";
+import { getApiBaseUrl, resolveApiUrl } from "./lib/platform";
 import { useDirectHistoryWindowUi } from "./features/chat/history/useDirectHistoryWindow";
 
 /**
@@ -115,13 +120,13 @@ const ERROR_MARKER = '"type":"error"';
 // operation, a continuation re-opens the same one, and the response body
 // settling ends it.
 
-function makeIsFinishEvent(): (chunk: Uint8Array, accumulator: string) => boolean {
+function makeIsFinishEvent(threadId: string): (chunk: Uint8Array, accumulator: string) => boolean {
   let sawAbort = false;
   let reported = false;
   const report = (marker: string) => {
     if (reported) return;
     reported = true;
-    endSendOperation(marker);
+    endSendOperation(threadId, marker);
   };
   return (_chunk, accumulator) => {
     if (!sawAbort && accumulator.includes(ABORT_MARKER)) {
@@ -149,7 +154,7 @@ function diagnosticFetch(
     const startedAt = Date.now();
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const threadId = getThreadListItem()?.remoteId ?? getThreadListItem()?.id ?? "unknown";
+    const threadId = operationThreadKey(getThreadListItem());
     // Path only — never the query string, which can carry user data. This is
     // the browser half of the request pair the backend logs as
     // `http.request_start` / `http.request`.
@@ -159,29 +164,45 @@ function diagnosticFetch(
     } catch {
       /* keep the raw value if it is not a URL */
     }
-    // The operation this request belongs to, captured at issue time. A late
-    // settle of a superseded response must not end the operation that replaced
-    // it, so the id travels with the request instead of being re-read later.
-    const operationId = currentOperationId();
-    logger.info("chat", "request_sent", { path, threadId });
+    // The operation this request belongs to, captured at issue time from THIS
+    // thread's scope. A late settle of a superseded response must not end the
+    // operation that replaced it, so the id travels with the request instead of
+    // being re-read later. The header is added here, at the Direct request
+    // boundary, using the captured id — never from a global current operation.
+    const operationId = currentOperationId(threadId);
+    const requestInit =
+      operationInitFor(
+        input,
+        init,
+        operationId,
+        typeof window !== "undefined" ? window.location.origin : "http://localhost",
+        // In Tauri the API lives on a different origin (http://127.0.0.1:<port>).
+        // Pass it as the verified backend origin so the header is still attached
+        // there — the removed global wrapper did the same.
+        getApiBaseUrl(),
+      ) ?? init;
+    logger.info("chat", "request_sent", { path, threadId, operationId });
 
     try {
-      const res = await baseFetch(input, init);
+      const res = await baseFetch(input, requestInit);
       logger.info("chat", "request_completed", {
         path,
         status: res.status,
         durationMs: Date.now() - startedAt,
         threadId,
+        operationId,
       });
       if (!res.body) return res;
       return new Response(
-        observeBodySettled(res.body, () => endSendOperation("stream-settled", operationId)),
+        observeBodySettled(res.body, () =>
+          endSendOperation(threadId, "stream-settled", operationId),
+        ),
         { status: res.status, statusText: res.statusText, headers: res.headers },
       );
     } catch (err) {
       // The request never produced a body, so nothing will settle: release the
       // operation here or this failure path leaks it.
-      endSendOperation("request-failed", operationId);
+      endSendOperation(threadId, "request-failed", operationId);
       logger.error("chat", "request_failed", {
         path,
         durationMs: Date.now() - startedAt,
@@ -333,7 +354,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
         resumable: {
           storage,
           resumeApi: (streamId) => resolveApiUrl(`/api/chat/resume/${streamId}`),
-          isFinishEvent: makeIsFinishEvent(),
+          isFinishEvent: makeIsFinishEvent(activeConversationId ?? UNKNOWN_THREAD_KEY),
         },
         prepareSendMessagesRequest: async ({
           messages,
@@ -344,7 +365,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
         }) => {
           const s = useSettingsStore.getState();
           const item = aui.threadListItem.getState();
-          const threadKey = item.remoteId ?? item.id ?? "nothread";
+          const threadKey = operationThreadKey(item);
           // Dead-run recovery (Phase 3): every new send supersedes a previous
           // recovery notice, exactly as the composer's other strips do. Cleared
           // here, at the single funnel every send passes through, so no send path
@@ -366,8 +387,11 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // the row at initialize): revert so it cannot leak into a later
             // Direct draft. The Code surface never reads one-shot state.
             s.revertChatTarget();
-            logger.info("chat", "send.redirected_to_opencode", { threadId: threadKey });
-            endSendOperation("redirected");
+            logger.info("chat", "send.redirected_to_opencode", {
+              threadId: threadKey,
+              operationId: currentOperationId(threadKey),
+            });
+            endSendOperation(threadKey, "redirected");
             throw new OpencodeDraftRedirectError(threadKey);
           }
           // Conversation-owned default, projected from SQLite (source of truth).
@@ -406,7 +430,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // A fresh logical send (not a tool/approval continuation) opens the
             // operation; its id is snapshotted into the send config so every
             // continuation of THIS send re-opens the same one.
-            const operationId = beginSendOperation({
+            const operationId = beginSendOperation(threadKey, {
               trigger,
               threadId: threadKey,
               providerId: resolvedProviderId,
@@ -431,7 +455,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // The previous response settling may already have ended the
             // operation, so re-open the SAME id: the whole turn stays joinable
             // by one operationId instead of splitting into several.
-            attachSendOperation(sel.operationId);
+            attachSendOperation(threadKey, sel.operationId);
           }
           // Deliberately allowlist the Direct envelope. The transport may
           // provide system/tools/callSettings/config from its model context, but
@@ -450,7 +474,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
           };
         },
       }),
-    [aui, storage],
+    [aui, storage, activeConversationId],
   );
 
   return useChatRuntime({
@@ -487,11 +511,16 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     // model failed".
     onError: (error) => {
       const kind = classifyChatError(error);
+      const threadId = activeConversationId ?? UNKNOWN_THREAD_KEY;
+      // Capture the id BEFORE ending so this failure line stays correlated —
+      // scoped operations no longer populate the logger's unscoped fallback.
       logger.warn("chat", "send.failed", {
         kind,
         errorType: error instanceof Error ? error.name : typeof error,
+        threadId,
+        operationId: currentOperationId(threadId),
       });
-      endSendOperation("failed");
+      endSendOperation(threadId, "failed");
       // Dead-run recognition (Phase 3). This is the only live signal that a run
       // died: `makeRequest` never rejects, so `onResumeError` is unreachable,
       // while a failed reconnect (`ai/dist/index.js:19176`) and an errored replayed

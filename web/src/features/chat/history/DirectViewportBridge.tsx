@@ -46,7 +46,7 @@ import {
  * the message-state update goes through the public AI SDK chat API, and the
  * scroll compensation that follows a prepend is TanStack Virtual's.
  */
-export function DirectViewportBridge() {
+export function DirectViewportBridge({ owner }: { owner: object }) {
   const conversationId = useAuiState(
     (s) => (s.threadListItem as { remoteId?: string | null }).remoteId ?? null,
   );
@@ -125,7 +125,7 @@ export function DirectViewportBridge() {
     }
     // Consulted and consumed in the SAME effect, so no render can slip between
     // re-arming an exhausted budget and spending it.
-    const isNewVisit = beginHistoryVisit(conversationId);
+    const isNewVisit = beginHistoryVisit(owner, conversationId);
     logger.info("chat", "history.recovery_visit", { conversationId, isNewVisit, loadFailed });
 
     if (!loadFailed) {
@@ -158,7 +158,7 @@ export function DirectViewportBridge() {
       // The refresh itself failed; the failure signal stays set, and the next
       // visit into this conversation re-arms the budget and tries again.
     });
-  }, [aui, conversationId, loadFailed, isRunning]);
+  }, [aui, owner, conversationId, loadFailed, isRunning]);
 
   const onLoadEarlier = useCallback(async () => {
     if (busy) return;

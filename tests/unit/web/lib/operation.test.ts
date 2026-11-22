@@ -19,6 +19,9 @@ import {
   resetOperationsForTests,
   newOperationId,
   OPERATION_ID_HEADER,
+  operationThreadKey,
+  UNKNOWN_THREAD_KEY,
+  endOperation,
 } from "@web/lib/operation";
 
 const ORIGIN = "http://localhost:5173";
@@ -29,6 +32,46 @@ function headerOf(init: RequestInit | undefined, name: string): string | null {
 
 beforeEach(() => {
   resetOperationsForTests();
+});
+
+describe("canonical thread scope key", () => {
+  it("prefers remoteId, then id, then one shared fallback", () => {
+    expect(operationThreadKey({ remoteId: "remote-1", id: "local-1" })).toBe("remote-1");
+    expect(operationThreadKey({ id: "local-1" })).toBe("local-1");
+    expect(operationThreadKey(undefined)).toBe(UNKNOWN_THREAD_KEY);
+    expect(operationThreadKey({})).toBe(UNKNOWN_THREAD_KEY);
+  });
+});
+
+describe("scoped operation registry", () => {
+  it("keeps two scopes independent", () => {
+    const a = startOperation("chat.send", "conv-A");
+    const b = startOperation("chat.send", "conv-B");
+    expect(a.id).not.toBe(b.id);
+    expect(currentOperationId("conv-A")).toBe(a.id);
+    expect(currentOperationId("conv-B")).toBe(b.id);
+    // Scoped operations never touch the unscoped global slot.
+    expect(currentOperationId()).toBeUndefined();
+  });
+
+  it("endOperation ends only the named scope and honors expectedId", () => {
+    const a = startOperation("chat.send", "conv-A");
+    const b = startOperation("chat.send", "conv-B");
+    // Wrong id for A: nothing ends.
+    expect(endOperation("conv-A", "finish", b.id)).toBeUndefined();
+    expect(currentOperationId("conv-A")).toBe(a.id);
+    // Correct id: only A ends.
+    expect(endOperation("conv-A", "finish", a.id)).toBe(a.id);
+    expect(currentOperationId("conv-A")).toBeUndefined();
+    expect(currentOperationId("conv-B")).toBe(b.id);
+  });
+
+  it("a stale handle cannot end a newer operation in the same scope", () => {
+    const old = startOperation("chat.send", "conv-A");
+    const fresh = startOperation("chat.send", "conv-A");
+    old.end("late");
+    expect(currentOperationId("conv-A")).toBe(fresh.id);
+  });
 });
 
 describe("operation identity", () => {
@@ -170,6 +213,14 @@ describe("correlatable request decision", () => {
     expect(isCorrelatableRequest(new URL(`${ORIGIN}/assets/x.js`), ORIGIN)).toBe(false);
     expect(isCorrelatableRequest(new URL("https://example.com/api/chat"), ORIGIN)).toBe(false);
   });
+
+  it("correlates the verified backend origin (Tauri cross-origin API)", () => {
+    const apiOrigin = "http://127.0.0.1:4321";
+    expect(isCorrelatableRequest(new URL(`${apiOrigin}/api/chat`), ORIGIN, apiOrigin)).toBe(true);
+    // Without the verified origin it is still rejected — only the explicit
+    // apiOrigin argument opts a different origin in.
+    expect(isCorrelatableRequest(new URL(`${apiOrigin}/api/chat`), ORIGIN)).toBe(false);
+  });
 });
 
 describe("operation header injection", () => {
@@ -190,6 +241,19 @@ describe("operation header injection", () => {
     expect(
       operationInitFor("https://example.com/api/chat", undefined, op.id, ORIGIN),
     ).toBeUndefined();
+  });
+
+  it("adds the header to the verified backend origin (Tauri)", () => {
+    const op = startOperation("chat.send");
+    const apiOrigin = "http://127.0.0.1:4321";
+    const init = operationInitFor(
+      `${apiOrigin}/api/chat`,
+      { method: "POST" },
+      op.id,
+      ORIGIN,
+      apiOrigin,
+    );
+    expect(headerOf(init, OPERATION_ID_HEADER)).toBe(op.id);
   });
 
   it("never overwrites a header the caller set explicitly", () => {

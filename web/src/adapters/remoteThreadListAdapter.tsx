@@ -94,18 +94,25 @@ export function setThreadListSearchQuery(q: string): void {
 // Same module-var pattern as the search query; list() appends it as ?order=.
 let threadListSortOrder: "updated" | "created" = "updated";
 
-// Last-good thread-list projection (Phase 3.5: stale-state retention).
-// A failed list() returns the previous successful result instead of empty so
-// a backend outage renders stale-with-badge rather than zero conversations.
-// Only a CONFIRMED server response (ok, possibly []) replaces the cache.
-// Cleared by invalidateThreadListCache() during coordinated recovery so the
-// next read is authoritative. Module-level: shared by all runtime instances,
-// never a secret (titles/ids only).
-let lastGoodThreads: ThreadMetadata[] | null = null;
+// Last-good thread-list projections (Phase 3.5: stale-state retention).
+// A failed list() returns the previous successful result for THAT EXACT request
+// instead of empty, so a backend outage renders stale-with-badge rather than
+// zero conversations. The cache is keyed by the complete request URL (search,
+// sort and offset included) so a failure for one query can never return another
+// query's threads. Only a CONFIRMED server response (ok, possibly []) replaces
+// an entry. Bounded to a small fixed size; oldest entries are evicted first.
+// Module-level and shared by all runtime instances — this is application-wide
+// navigation data, never a secret (titles/ids only).
+interface CachedThreadList {
+  threads: ThreadMetadata[];
+  nextCursor?: string;
+}
+const THREAD_LIST_CACHE_LIMIT = 20;
+const threadListCache = new Map<string, CachedThreadList>();
 
-/** Drop the retained thread-list projection (recovery forces fresh reads). */
+/** Drop all retained thread-list projections (recovery forces fresh reads). */
 export function invalidateThreadListCache(): void {
-  lastGoodThreads = null;
+  threadListCache.clear();
 }
 
 /**
@@ -168,6 +175,14 @@ export function createRemoteThreadListAdapter(
         (q ? `&search=${encodeURIComponent(q)}` : "");
       const startMs = Date.now();
       logger.debug("opencode", "conversations.list.request", { url });
+      // Stale data is only ever returned for THIS exact URL. A failure on a
+      // different search/sort/page must not leak another query's threads.
+      const stale = () => {
+        const cached = threadListCache.get(url);
+        return cached
+          ? { threads: cached.threads, nextCursor: cached.nextCursor }
+          : { threads: [] };
+      };
       try {
         const res = await apiFetch(url);
         if (!res.ok) {
@@ -175,15 +190,22 @@ export function createRemoteThreadListAdapter(
             status: res.status,
             errorType: "upstream_http_error",
           });
-          // Temporary failure (or confirmed empty): a non-ok response carries
-          // no authoritative list, so retain the previous projection. An empty
-          // server response arrives as ok + [] and replaces the cache below —
-          // "could not be reached" never becomes "zero conversations".
-          return lastGoodThreads ? { threads: lastGoodThreads } : { threads: [] };
+          // A non-ok response carries no authoritative list: retain the last
+          // good projection for this URL only. An empty server response arrives
+          // as ok + [] and replaces the entry below — "could not be reached"
+          // never becomes "zero conversations".
+          return stale();
         }
         const data = await res.json();
         const threads = (data.threads as ConvDTO[]).map(toMetadata);
-        lastGoodThreads = threads;
+        const entry: CachedThreadList = { threads, nextCursor: data.nextCursor };
+        threadListCache.delete(url); // refresh insertion order before re-adding
+        threadListCache.set(url, entry);
+        while (threadListCache.size > THREAD_LIST_CACHE_LIMIT) {
+          const oldest = threadListCache.keys().next().value;
+          if (oldest === undefined) break;
+          threadListCache.delete(oldest);
+        }
         logger.debug("opencode", "conversations.list.success", {
           status: res.status,
           count: threads.length,
@@ -195,7 +217,7 @@ export function createRemoteThreadListAdapter(
           errorType: err instanceof Error ? err.name : typeof err,
           message: err instanceof Error ? err.message : String(err),
         });
-        return lastGoodThreads ? { threads: lastGoodThreads } : { threads: [] };
+        return stale();
       }
     },
 

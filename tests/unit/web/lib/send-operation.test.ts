@@ -1,12 +1,9 @@
 /**
- * The send operation's lifetime.
+ * The send operation's lifetime, now scoped by conversation/thread id.
  *
- * This is the defect the live browser run exposed: a FINISHED send kept its
- * operationId as the current one, so unrelated later browser errors (a
- * ResizeObserver notice on the Logs page, 27s later) inherited it. The rule
- * these tests pin: an operation ends on every terminal path — completion,
- * failure, and cancellation — and a superseded response can never end the
- * operation that replaced it.
+ * Two chats sending concurrently keep independent operation ids; a late settle
+ * from chat A cannot end chat B's operation. Every terminal path (completion,
+ * failure, cancellation) ends only the operation it belongs to.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { logger } from "@web/lib/logger.ts";
@@ -37,9 +34,6 @@ function capture(level: string, scope: string, event: string): void {
 
 beforeEach(() => {
   recorded = [];
-  // Both modules hold state: `operation.ts` owns the context stack, this module
-  // owns the send handle. Reset both so a test can never inherit the previous
-  // one's operation (which would itself be a stale-id leak).
   resetOperationsForTests();
   resetSendOperationForTests();
   logger.info = ((scope: string, event: string) =>
@@ -77,81 +71,114 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> 
   }
 }
 
-describe("send operation lifetime", () => {
-  it("starts an operation and makes it current", () => {
-    const id = beginSendOperation({ trigger: "submit-message" });
+const THREAD = "conv-A";
+
+describe("send operation lifetime (thread-scoped)", () => {
+  it("starts an operation and makes it current for its thread", () => {
+    const id = beginSendOperation(THREAD, { trigger: "submit-message" });
     expect(id).toMatch(/^op_/);
-    expect(currentOperationId()).toBe(id);
-    expect(activeSendOperationId()).toBe(id);
+    expect(currentOperationId(THREAD)).toBe(id);
+    expect(activeSendOperationId(THREAD)).toBe(id);
     expect(recorded.map((r) => r.event)).toContain("send.start");
   });
 
-  it("clears the context when the operation ends", () => {
-    beginSendOperation({});
-    endSendOperation("finish");
-    // No current operation ⇒ a later unrelated browser event cannot inherit an
-    // operationId (the logger attaches one only when an operation is active).
-    expect(currentOperationId()).toBeUndefined();
-    expect(activeSendOperationId()).toBeUndefined();
+  it("clears the thread's operation when it ends", () => {
+    beginSendOperation(THREAD, {});
+    endSendOperation(THREAD, "finish");
+    expect(currentOperationId(THREAD)).toBeUndefined();
+    expect(activeSendOperationId(THREAD)).toBeUndefined();
     expect(recorded.filter((r) => r.event === "send.stream_end")).toHaveLength(1);
   });
 
-  it("supersedes the previous operation when a new send starts", () => {
-    const first = beginSendOperation({});
-    const second = beginSendOperation({});
+  it("supersedes the previous operation in the SAME thread", () => {
+    const first = beginSendOperation(THREAD, {});
+    const second = beginSendOperation(THREAD, {});
     expect(second).not.toBe(first);
-    expect(currentOperationId()).toBe(second);
-    expect(activeSendOperationId()).toBe(second);
+    expect(currentOperationId(THREAD)).toBe(second);
+    expect(activeSendOperationId(THREAD)).toBe(second);
   });
 
   it("is idempotent when ended twice", () => {
-    beginSendOperation({});
-    endSendOperation("finish");
-    endSendOperation("finish");
+    beginSendOperation(THREAD, {});
+    endSendOperation(THREAD, "finish");
+    endSendOperation(THREAD, "finish");
     expect(recorded.filter((r) => r.event === "send.stream_end")).toHaveLength(1);
   });
 
   it("does nothing when ended with no active operation", () => {
-    endSendOperation("finish");
+    endSendOperation(THREAD, "finish");
     expect(recorded.filter((r) => r.event === "send.stream_end")).toHaveLength(0);
   });
 });
 
 describe("continuations keep one operation", () => {
   it("re-opens the SAME id after the first response settled", () => {
-    const id = beginSendOperation({});
-    // First response settles (a tool-call turn continues afterwards).
-    endSendOperation("stream-settled");
-    expect(currentOperationId()).toBeUndefined();
+    const id = beginSendOperation(THREAD, {});
+    endSendOperation(THREAD, "stream-settled");
+    expect(currentOperationId(THREAD)).toBeUndefined();
 
-    attachSendOperation(id);
-    expect(currentOperationId()).toBe(id);
-    // No second `send.start`: it is the same logical send continuing.
+    attachSendOperation(THREAD, id);
+    expect(currentOperationId(THREAD)).toBe(id);
     expect(recorded.filter((r) => r.event === "send.start")).toHaveLength(1);
   });
 
   it("is a no-op when the operation is already current", () => {
-    const id = beginSendOperation({});
-    attachSendOperation(id);
-    attachSendOperation(id);
-    expect(currentOperationId()).toBe(id);
+    const id = beginSendOperation(THREAD, {});
+    attachSendOperation(THREAD, id);
+    attachSendOperation(THREAD, id);
+    expect(currentOperationId(THREAD)).toBe(id);
   });
 });
 
 describe("the superseded-response race", () => {
   it("does not let a late settle end the operation that replaced it", () => {
-    const oldId = beginSendOperation({});
-    const newId = beginSendOperation({});
-    // The OLD response settles late, after a newer send took over.
-    endSendOperation("stream-settled", oldId);
-    expect(currentOperationId()).toBe(newId);
-    expect(activeSendOperationId()).toBe(newId);
+    const oldId = beginSendOperation(THREAD, {});
+    const newId = beginSendOperation(THREAD, {});
+    endSendOperation(THREAD, "stream-settled", oldId);
+    expect(currentOperationId(THREAD)).toBe(newId);
+    expect(activeSendOperationId(THREAD)).toBe(newId);
   });
 
   it("does end the operation when the id matches", () => {
-    const id = beginSendOperation({});
-    endSendOperation("stream-settled", id);
-    expect(currentOperationId()).toBeUndefined();
+    const id = beginSendOperation(THREAD, {});
+    endSendOperation(THREAD, "stream-settled", id);
+    expect(currentOperationId(THREAD)).toBeUndefined();
+  });
+});
+
+describe("concurrent threads are isolated", () => {
+  it("two threads keep distinct operation ids", () => {
+    const a = beginSendOperation("conv-A", {});
+    const b = beginSendOperation("conv-B", {});
+    expect(a).not.toBe(b);
+    expect(currentOperationId("conv-A")).toBe(a);
+    expect(currentOperationId("conv-B")).toBe(b);
+  });
+
+  it("ending thread A does not end thread B", () => {
+    const a = beginSendOperation("conv-A", {});
+    const b = beginSendOperation("conv-B", {});
+    endSendOperation("conv-A", "finish", a);
+    expect(currentOperationId("conv-A")).toBeUndefined();
+    expect(currentOperationId("conv-B")).toBe(b);
+    expect(activeSendOperationId("conv-B")).toBe(b);
+  });
+
+  it("a late settle from A cannot end B's operation", () => {
+    const a = beginSendOperation("conv-A", {});
+    const b = beginSendOperation("conv-B", {});
+    endSendOperation("conv-A", "stream-settled", b); // wrong id for A
+    expect(currentOperationId("conv-A")).toBe(a);
+    expect(currentOperationId("conv-B")).toBe(b);
+  });
+
+  it("a continuation in A does not supersede B", () => {
+    const a = beginSendOperation("conv-A", {});
+    const b = beginSendOperation("conv-B", {});
+    endSendOperation("conv-A", "stream-settled", a);
+    attachSendOperation("conv-A", a);
+    expect(currentOperationId("conv-A")).toBe(a);
+    expect(currentOperationId("conv-B")).toBe(b);
   });
 });
 
@@ -183,7 +210,6 @@ describe("observeBodySettled", () => {
 
   it("reports consumer cancellation once (the Stop / abandoned-stream path)", async () => {
     let settled = 0;
-    // A stream that never completes on its own: only cancellation ends it.
     const endless = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("partial"));

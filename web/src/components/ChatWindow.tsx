@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   ActionBarPrimitive,
@@ -188,6 +188,10 @@ export function ChatWindow({
   // so welcome/scope-chip are suppressed — only the message surface and
   // composer remain, reused verbatim. The boot skeleton is NOT suppressed:
   // an existing OpenCode conversation shows it while history loads.
+  // Stable owner identity for Direct history-recovery tracking. Created once
+  // per mounted chat content instance; a remount inside the same content keeps
+  // it, a different chat content gets its own, and closing content discards it.
+  const historyOwner = useRef<object>({}).current;
   const isEmpty = useAuiState((s) => s.thread.isEmpty);
   // Canonical history-loading signal: true from per-thread runtime mount
   // until ThreadHistoryAdapter.load() settles (success or failure).
@@ -283,7 +287,7 @@ export function ChatWindow({
             header={
               <>
                 {showBoot ? <ThreadBootSkeleton /> : null}
-                <DirectViewportBridge />
+                <DirectViewportBridge owner={historyOwner} />
               </>
             }
             overlay={<ScrollPill bottomOffset={composerInset} />}

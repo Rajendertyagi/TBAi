@@ -119,10 +119,20 @@ describe("lifecycle events required for reconstruction", () => {
 });
 
 describe("frontend correlation wiring", () => {
-  it("installs both the global hooks and the operation-header fetch", async () => {
+  it("installs the global log hooks but NOT a global operation-header fetch", async () => {
     const main = await sourceOf("web/src/main.tsx");
     expect(main).toContain("installGlobalLogHooks()");
-    expect(main).toContain("installOperationHeaderFetch()");
+    // Fix 2: operation ids are attached at each request boundary using the
+    // captured, scope-keyed id — never from one global current operation. A
+    // global fetch wrapper would mis-correlate concurrent chats.
+    expect(main).not.toContain("installOperationHeaderFetch()");
+  });
+
+  it("attaches the operation header at the Direct and OpenCode request boundaries", async () => {
+    const runtime = await sourceOf("web/src/runtime.ts");
+    expect(runtime).toContain("operationInitFor(");
+    const client = await sourceOf("web/src/features/opencode/v2Client.ts");
+    expect(client).toContain("operationInitFor(");
   });
 
   it("forwards every logged event to the backend transport", async () => {

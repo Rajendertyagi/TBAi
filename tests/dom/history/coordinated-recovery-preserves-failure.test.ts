@@ -27,14 +27,15 @@ import {
 
 describe("coordinated recovery preserves the failure record", () => {
   const id = "conv-recovery-preserve";
+  const owner = {};
 
   beforeEach(() => {
-    resetHistoryVisit();
+    resetHistoryVisit(owner);
   });
 
   afterEach(() => {
     dropWindowController(id);
-    resetHistoryVisit();
+    resetHistoryVisit(owner);
   });
 
   it("keeps isHistoryLoadFailed true across clearAllWindowControllers", () => {

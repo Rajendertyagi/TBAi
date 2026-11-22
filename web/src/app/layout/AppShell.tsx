@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { Outlet } from "react-router";
+import { PanelRightOpen } from "lucide-react";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -47,6 +48,8 @@ import { ProgressStages } from "../../components/assistant-ui/elements/progress-
 import { CompactionDivider } from "../../components/assistant-ui/elements/compaction-divider";
 import { DIRECT_COMPACT_DATA_NAME } from "../../features/chat/compactCommand";
 import { logger } from "../../lib/logger";
+import { WorkspaceSurface } from "../../features/workspace/components/WorkspaceSurface";
+import { useWorkspacePanels } from "../../features/workspace/state/workspacePanels";
 
 const TbaiProgressDataUI = makeAssistantDataUI({
   name: "tbai-progress",
@@ -117,6 +120,30 @@ export function AppShell() {
   }, []);
 
   const runtime = useAppChatRuntime(threadListAdapter, runtimeThreadId, handleThreadIdChange);
+
+  // Open a DIFFERENT bound chat in an optional workspace panel. The panel owns
+  // its own runtime host; the Primary Chat (Outlet) keeps the canonical shared
+  // runtime the Sidebar reads from. We deliberately never panel the tab currently
+  // bound to the primary runtime — that would create two live runtimes for the
+  // same threadId. A draft is excluded too: materializing it must run through the
+  // primary runtime's tab-store binding (resolveDraftId), which a panel host does
+  // not own. Code content keeps its dedicated OpenCode surface/runtime.
+  const openPanels = useWorkspacePanels(useShallow((s) => s.panels));
+  const panelCandidate = useMemo(() => {
+    const tabs = visibleTabs({ ...tabState, sharedTabs: sharedTabs ?? [] });
+    const opened = new Set(openPanels.map((p) => p.tabKey));
+    return tabs.find(
+      (t) =>
+        t.kind === "chat" &&
+        t.ref !== NEW_DRAFT_TAB_ID &&
+        t.key !== active?.key &&
+        !opened.has(t.key),
+    );
+  }, [tabState, sharedTabs, active?.key, openPanels]);
+  const openChatInPanel = useCallback(() => {
+    if (!panelCandidate) return;
+    useWorkspacePanels.getState().openPanel(panelCandidate.key);
+  }, [panelCandidate]);
 
   const { loadProviders } = useSettingsStore();
   useEffect(() => {
@@ -210,6 +237,18 @@ export function AppShell() {
                 />
               )}
               <TabStrip />
+              {/* Open another bound chat in an optional panel (stable runtime host). */}
+              <button
+                type="button"
+                onClick={openChatInPanel}
+                disabled={!panelCandidate}
+                title="Open another chat in a panel"
+                aria-label="Open another chat in a workspace panel"
+                data-testid="open-in-panel"
+                className="flex h-full w-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+              >
+                <PanelRightOpen className="size-4" />
+              </button>
               {/* Reserve the right overlay cluster + caption buttons (Tauri). */}
               <div
                 data-tauri-drag-region
@@ -220,7 +259,14 @@ export function AppShell() {
             {/* Page-level context menu is its own chrome component; the shell only
                 composes it around the routed content. */}
             <PageContextMenu>
-              <Outlet />
+              <div className="flex h-full min-h-0 flex-row">
+                {/* Primary Chat keeps the canonical shared runtime (Outlet). */}
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <Outlet />
+                </div>
+                {/* Optional panels: stable, keyed runtime hosts under one parent. */}
+                <WorkspaceSurface />
+              </div>
             </PageContextMenu>
           </main>
         </div>

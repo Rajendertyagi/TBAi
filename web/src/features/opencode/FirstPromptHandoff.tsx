@@ -56,18 +56,20 @@ export type FirstPromptHandoffOutcome = "skipped" | "none" | "sent" | "failed";
  * when the view that owns it goes away, which bounds it without pretending the
  * run is over the moment the text is handed over.
  */
-let handoffOperation: OperationHandle | null = null;
+const handoffOperations = new Map<string, OperationHandle>();
 
-function beginHandoffOperation(): void {
-  handoffOperation?.end("superseded");
-  handoffOperation = startOperation("opencode.first_prompt");
+function beginHandoffOperation(sessionId: string): string {
+  handoffOperations.get(sessionId)?.end("superseded");
+  const op = startOperation("opencode.first_prompt", sessionId);
+  handoffOperations.set(sessionId, op);
+  return op.id;
 }
 
-/** End the handoff operation (view unmount, session change, or failure). */
-export function endHandoffOperation(reason: string): void {
-  const op = handoffOperation;
+/** End the handoff operation for a session (view unmount, session change, or failure). */
+export function endHandoffOperation(sessionId: string, reason: string): void {
+  const op = handoffOperations.get(sessionId);
   if (!op) return;
-  handoffOperation = null;
+  handoffOperations.delete(sessionId);
   op.end(reason);
 }
 
@@ -115,8 +117,8 @@ export async function fireFirstPromptHandoff(args: {
     return "none";
   }
   const { text, messageId } = claimed;
-  beginHandoffOperation();
-  logger.info("opencode", "handoff.start", { conversationId, sessionId });
+  const operationId = beginHandoffOperation(sessionId);
+  logger.info("opencode", "handoff.start", { conversationId, sessionId, operationId });
   try {
     if (sendWithId) {
       await sendWithId(
@@ -147,14 +149,15 @@ export async function fireFirstPromptHandoff(args: {
     logger.warn("opencode", "handoff.failed", {
       conversationId,
       sessionId,
+      operationId,
       errorType: err instanceof Error ? err.name : typeof err,
     });
-    endHandoffOperation("failed");
+    endHandoffOperation(sessionId, "failed");
     return "failed";
   }
   clearPendingFirstMessage(conversationId);
   // Accepted, not finished: the operation stays open for the run it starts.
-  logger.info("opencode", "handoff.accepted", { conversationId, sessionId });
+  logger.info("opencode", "handoff.accepted", { conversationId, sessionId, operationId });
   return "sent";
 }
 
@@ -194,9 +197,9 @@ export function FirstPromptHandoff({
   }, [runtime, sendWithId, boundSessionId, conversationId, sessionId]);
 
   // Bound the handoff operation to the view that owns it, so a run it started
-  // stops inheriting the operation once the session surface is gone.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `sessionId` is not read because the effect body is ONLY a cleanup. Naming it is the point: the handoff must be ended when the view unmounts AND when it is pointed at a different session, and an empty dependency list would only cover the former.
-  useEffect(() => () => endHandoffOperation("view-unmounted"), [sessionId]);
+  // stops inheriting the operation once the session surface is gone. The cleanup
+  // ends the operation for THIS session, and re-runs when the session changes.
+  useEffect(() => () => endHandoffOperation(sessionId, "view-unmounted"), [sessionId]);
 
   return null;
 }

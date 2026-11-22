@@ -1,83 +1,85 @@
-# Interaction model — panels, context, persistence
+# Interaction model — generic panels, tabs, context, persistence
 
 ## 1. Permanent foundation
 
-- **Chat Threads** (left, ~272px): conversation list grouped by project, with search, filter, new-folder, new-chat. Bottom strip: Scheduler, Archived, Folders, Settings. Never removed.
-- **Primary Chat** (immediately right): the main conversation, its tab strip, context bar, transcript, composer. Never removed.
+- **Chat Threads** (left, ~272px): navigation for both Direct Chat conversations and OpenCode sessions, grouped by runtime with clear labels. Never removed.
+- **Primary Chat** (immediately right): a permanent **position** holding a tab (Direct or OpenCode). Never removed. Expands to all remaining width when no optional panels exist.
 
-Both remain in every scenario. The additional workspace region starts to the right of Primary Chat and is empty by default.
+Optional panels appear only when the user adds them, to the right of Primary Chat.
 
-## 2. Panel behavior
+## 2. Generic panel and tab behavior
+
+A panel is a generic container. It has a tab strip; each tab has a content type and identity.
 
 | Action | Behavior |
 |---|---|
-| Add panel | `+` in a panel's tab strip opens a menu of panel types (chat, files, viewer, browser, editor, assistant). A new panel is appended to the workspace region. |
-| Close panel | `×` on the panel. If it was the last tab, the panel disappears. |
-| Tabs | Each panel has its own tab strip with an active tab. `+` adds a tab to that panel. `×` closes a tab. |
-| Move tab | Drag a tab from one panel's strip to another. The source panel closes if it becomes empty. |
-| Split | `⧉` duplicates the active tab into a new panel beside it. |
-| Resize | Drag the divider between two panels. Minimum width ~220px. |
-| Collapse / reopen | A panel can be collapsed to its tab strip and reopened. |
-| Restore | Saved layouts restore panel types, order, sizes, and active tabs. |
+| Open a panel | `⊞` in a tab strip opens a menu of content types (Direct Chat, OpenCode Chat, File Tree, File Viewer, Browser). A new generic panel is created. |
+| Add a tab | `+` in a tab strip adds a tab of a chosen content type to that panel. |
+| Close tab / panel | `×` on a tab closes it; closing the last tab closes the panel. Primary Chat always keeps at least one tab. |
+| Activate tab | Click a tab to show its content. |
+| Move tab | Drag a tab to another panel's strip. The tab keeps its identity, runtime, and state. Source panel closes if empty. |
+| Reorder tab | Drag a tab within its strip. |
+| Split | `⧉` splits the panel right (row) or down (column), duplicating the active tab's content into a new generic panel. |
+| Resize | Drag a divider; minimum panel width ~200px. |
+| Save / Restore | Save the arrangement to localStorage; restore after reload. |
 
-## 3. Context association
+**Runtime independence:** moving a Direct Chat tab or an OpenCode Chat tab between panels never changes its runtime, creates a new conversation, or loses state. The panel is only a container.
 
-Every panel shows a context badge: project name, and conversation name when relevant.
+## 3. Context and identity model
 
-- A **file tree** shows the selected project's files, or the active conversation's resolved workspace.
-- A **file preview** keeps the project/thread relationship it was opened from.
-- A **second chat** keeps its own conversation identity and its own runtime.
-- Switching the Primary Chat does not change what another panel is showing, unless the user explicitly chooses "follow active conversation".
+Relationship: Application → Project (registered folder) → Conversation → Tab → Content.
 
-Open question: should panels "follow" the active conversation by default, or stay pinned? Recommendation: stay pinned; make following an explicit opt-in per panel.
+Verified identity chains (from source):
+- **Direct:** `conversations.id` → assistant-ui `remoteId` → tab `ref` → key `chat:<id>` → `/chat/<id>`.
+- **OpenCode:** `conversations.id` (= tab `ref`, key `agent:<id>`, `/code/<id>`) → bootstrap → `opencode_session_id` → scoped V2 client.
+
+Rules:
+- A tab stores IDs only (conversation id, project id, file id) — never absolute filesystem paths.
+- The backend resolves authorized roots via `resolveConversationWorkspace` + `resolveSafe`; it rejects paths outside the workspace.
+- Tabs are **pinned by default**; "follow active conversation" is an explicit opt-in.
+- Switching Primary Chat never silently changes an unrelated tab's context. A file tab whose file is absent in the new context shows an inline "not in this workspace" state.
+- Chat/message state stays in the assistant-ui runtime; never duplicate it in a client store.
 
 ## 4. Persistence
 
-Follow the existing three-tier rules (`docs/state-management.md`):
-
-| Data | Where | Why |
-|---|---|---|
-| Panel tree (types, order, sizes, active tabs) | Device-local localStorage via `useDesktopLayout` `persist` `partialize` | Geometry is device-specific; precedent: `sidebarWidth` |
-| Saved layout list (named arrangements) | SQLite preferences if portable across devices; localStorage if device-only | Open question — needs owner decision |
-| Conversation/message state | assistant-ui runtime only | Never duplicate in a client store |
-| Tab membership references | SQLite preferences (existing `sharedTabs` mirror) | Reconcile removal-only at boot |
-
-Do not create a new shared `web/src/stores/`. A panel store belongs in its owning feature's `state/` directory.
+Follow `docs/state-management.md` tiers:
+- Panel tree (types, order, sizes, active tabs) and Primary Chat tabs: device-local localStorage (prototype uses `tbai:workspace-prototype-layout`; production should extend `useDesktopLayout` `persist` `partialize`, precedent `sidebarWidth`).
+- Conversation/message state: assistant-ui runtime only.
+- Tab membership references: SQLite preferences (existing `sharedTabs` mirror), reconciled removal-only at boot.
+- No new shared `web/src/stores/`; a panel store belongs in its owning feature's `state/`.
 
 ## 5. Keyboard and accessibility
 
-- Visible focus rings on all interactive elements (already a project rule).
-- 24×24 minimum click targets.
-- Tab reordering: reuse dnd-kit KeyboardSensor (Space to start, arrows, Escape) from `TabStrip.tsx`.
-- Panel focus: a keyboard command to move focus between panels (to be specified).
+- Visible focus rings; 24×24 minimum targets.
+- Tab reordering: reuse dnd-kit KeyboardSensor (Space, arrows, Escape) from `TabStrip.tsx`.
+- Panel focus navigation: to be specified.
 - Reduced-motion support for panel animations.
 
 ## 6. Responsive behavior
 
-- At wide widths (≥1440px): all scenarios fit comfortably.
-- At 1280px: panels shrink toward their minimum; the Primary Chat keeps a minimum of ~360px.
-- At 1024px: additional panels become collapsible; at most one or two are visible at once; the user can switch between them.
-- Below that: the additional region becomes an overlay/drawer; the two permanent regions remain.
-
-The prototype demonstrates the wide layouts; narrow behavior is specified here, not yet prototyped.
+- ≥1280px: all arrangements fit; Primary Chat keeps a minimum width.
+- ≤960px: optional panels become a right-side overlay that stacks panels vertically so each stays readable; the two permanent regions remain. No horizontal overflow.
 
 ## 7. Empty, loading, error states
 
-- **Empty workspace region:** a subtle hint ("Use + to add a panel") — no large empty card grid.
-- **Panel loading:** a lightweight skeleton in the panel body.
-- **File access denied:** an inline message in the panel with the workspace name and a "choose project" action.
-- **Second chat unavailable:** if the isolated runtime cannot be created, show an inline error in that panel without affecting the Primary Chat.
+- No optional panels: Primary Chat simply fills the width (no empty column, no placeholder card).
+- Panel loading: lightweight skeleton.
+- File access denied: inline message with workspace name and "choose project" action.
+- Second chat runtime unavailable: inline error in that tab only, without affecting Primary Chat.
 
 ## 8. What the prototype demonstrates
 
-`prototype/index.html` is standalone and interactive:
+`prototype/index.html` is standalone and interactive. Scenario buttons are prototype-only (violet bar), not app navigation. Demonstrations:
+1. Default — Chat Threads + Primary Chat (Direct).
+2. Primary Chat displaying OpenCode Chat.
+3. Two Direct Chat conversations side by side.
+4. Two OpenCode sessions side by side.
+5. Mixed Direct + OpenCode side by side (both orders available via tabs/panels).
+6. Chat with file tools in optional panels (File Tree + File Viewer; Browser).
+7. Adding, closing, splitting, resizing, rearranging panels.
+8. Moving/reordering tabs, including mixed runtimes in one panel.
+9. Saving/restoring a user-created arrangement.
 
-1. **Default** — Chat Threads + Primary Chat only.
-2. **Two chats** — a second chat panel with its own tab strip and context badge.
-3. **Files** — File Tree + File Viewer panels.
-4. **Browser** — a conceptual browser panel (read-only; see technical-audit.md for why a real browser is high risk).
-5. **Development** — File Tree + Code Editor + OpenCode AI Assistant panels.
+Runtime badges: Direct = amber, OpenCode = blue. Chat type is visible in the tab and context bar, but never forces a panel position.
 
-Interactions: scenario switcher, `+` to add a tab/panel, drag dividers to resize, `⧉` to split, `×` to close, drag tabs between panels, dark/light theme toggle.
-
-The prototype is a design artifact only. It does not use production code or libraries and is isolated from production routes.
+Interactions verified by a scripted test: 15/15 PASS, zero console errors. Screenshots captured at 1440×900, 1280×800, 960×800 in `prototype/screenshots/`.

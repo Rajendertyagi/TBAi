@@ -347,7 +347,7 @@ export function clearAllWindowControllers(): void {
   if (staleCount > 0) {
     logger.info("chat", "history.controllers_staled", { count: staleCount });
   }
-  resetHistoryVisit();
+  resetAllHistoryVisits();
   for (const listener of uiListeners) listener();
 }
 
@@ -403,16 +403,29 @@ const loadFailures = new Set<string>();
  * nothing. The transcript simply rendered empty.
  *
  * A new visit has to be told apart from the restart's own remount, and it cannot
- * be read off this component's lifecycle. The Direct surface renders ONE window
- * bound to the ACTIVE thread (`ChatView`), so leaving a conversation UNMOUNTS it:
- * `isMain` never goes false in a live instance, and a mount that is already main
- * is indistinguishable from the restart's.
+ * be read off this component's lifecycle. Each chat content instance owns a
+ * stable owner object; a remount inside that owner is the runtime restarting
+ * under the user, while a different conversation in the same owner is a real
+ * visit. Multiple Direct surfaces mounted at once each have their own owner, so
+ * their recovery budgets are independent.
  *
- * What does distinguish them is which conversation was here last. The restart
- * remounts the SAME conversation, so it sees no change; arriving from somewhere
- * else sees a different id. That is a real user action, so it is the signal.
+ * What distinguishes them is which conversation the owner was showing last. The
+ * restart remounts the SAME conversation, so it sees no change; arriving from
+ * somewhere else sees a different id. That is a real user action, so it is the
+ * signal.
  */
-let lastMountedConversationId: string | null = null;
+// Keyed by a stable chat-content owner object, not by a single global slot.
+// Two Direct surfaces mounted at once each track their own last conversation;
+// a remount inside the same owner is still a remount, and closing content
+// discards the owner (the WeakMap entry is collectable — no strong-ref Set).
+// A coordinated full reset bumps a generation instead of iterating owners, so
+// every record is invalidated without retaining any owner.
+interface OwnerVisit {
+  conversationId: string;
+  generation: number;
+}
+const lastMountedByOwner = new WeakMap<object, OwnerVisit>();
+let visitGeneration = 0;
 
 /**
  * Record which conversation the Direct surface is now showing, and report
@@ -422,19 +435,26 @@ let lastMountedConversationId: string | null = null;
  * budget: the re-arm and the attempt have to happen in the same step so no render
  * can slip between clearing an exhausted budget and spending it.
  *
+ * @param owner - Stable chat-content owner object (one per mounted chat content).
  * @param conversationId - The conversation this surface just mounted for.
  * @returns True when the previous mount was a DIFFERENT conversation, i.e. the
  * user arrived here rather than the runtime restarting under them.
  */
-export function beginHistoryVisit(conversationId: string): boolean {
-  if (lastMountedConversationId === conversationId) return false;
-  lastMountedConversationId = conversationId;
+export function beginHistoryVisit(owner: object, conversationId: string): boolean {
+  const prev = lastMountedByOwner.get(owner);
+  if (prev?.generation === visitGeneration && prev.conversationId === conversationId) return false;
+  lastMountedByOwner.set(owner, { conversationId, generation: visitGeneration });
   return true;
 }
 
-/** Forget the last-mounted conversation (coordinated recovery / full reset). */
-export function resetHistoryVisit(): void {
-  lastMountedConversationId = null;
+/** Forget the last-mounted conversation for one owner. */
+export function resetHistoryVisit(owner: object): void {
+  lastMountedByOwner.delete(owner);
+}
+
+/** Invalidate every owner's record (coordinated full reset) without retaining owners. */
+function resetAllHistoryVisits(): void {
+  visitGeneration += 1;
 }
 
 /**

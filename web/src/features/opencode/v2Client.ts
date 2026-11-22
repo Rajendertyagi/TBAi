@@ -31,6 +31,7 @@ import type {
   V2Event,
 } from "@opencode/client";
 import { OPENCODE_PROXY_BASE_URL, OPENCODE_SESSION_HEADER } from "@/features/opencode/config";
+import { currentOperationId, operationInitFor } from "@/lib/operation";
 
 export const V2_GENERATION_BRAND = Symbol("tbai-opencode-v2-generation");
 export const V2_HISTORY_READER_BRAND = Symbol("tbai-opencode-v2-history-reader");
@@ -177,9 +178,18 @@ export function createOpenCodeV2Client(
   // deliberately not sent, because a caller-chosen directory is what let any
   // page on the origin read another workspace's session and event stream.
   const headers = { [OPENCODE_SESSION_HEADER]: scope.sessionId };
+  // Attach this session's operation id to each request at the client boundary.
+  // The handoff operation is scoped by session id, so concurrent sessions never
+  // share or overwrite each other's correlation id.
+  const baseFetch = options?.fetch ?? globalThis.fetch.bind(globalThis);
+  const fetchWithOperation = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const operationId = currentOperationId(scope.sessionId);
+    const next = operationInitFor(input, init, operationId, origin) ?? init;
+    return baseFetch(input, next);
+  }) as typeof globalThis.fetch;
   const officialClient: OpenCodeClient = OpenCode.make({
     baseUrl,
-    fetch: options?.fetch,
+    fetch: fetchWithOperation,
     headers,
   });
   let nextGenerationId = 0;

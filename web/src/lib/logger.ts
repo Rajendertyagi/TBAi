@@ -105,8 +105,9 @@ function emitLog(logLevel: LogLevel, scope: string, event: string, fields: LogFi
       scope,
       event,
       ts: Date.now(),
-      // The event's own operationId wins; otherwise the active operation is
-      // attached, so a call site never has to thread the id through.
+      // The event's own operationId wins. Send-related call sites pass it
+      // explicitly from their scope; the unscoped fallback covers legacy
+      // unscoped operations only (scoped ones do not populate `current`).
       operationId: asString(safe.operationId) ?? currentOperationId(),
       threadId: asString(safe.threadId),
       conversationId: asString(safe.conversationId),

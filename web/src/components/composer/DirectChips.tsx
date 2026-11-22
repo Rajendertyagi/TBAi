@@ -10,6 +10,10 @@ import type { ReasoningLevel } from "../../types";
 import { ModelOptionList } from "../chat/ModelOptionList";
 import { buildModelGroups, resolveModelOwner } from "../../lib/model-groups";
 import {
+  applyDirectModelSelection,
+  applyDirectReasoningSelection,
+} from "@/features/chat/state/directSelection";
+import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
@@ -68,27 +72,24 @@ export function ModelChip() {
   const label = currentModel?.label ?? currentModelId ?? composerConfig.copy.selectModel;
 
   const handleSelect = (providerId: string, modelId: string) => {
-    // Set the one-shot override for the NEXT message, AND persist it as this
-    // conversation's default (SQLite source of truth) so it survives reloads
-    // and is the baseline for subsequent messages. On a draft there is no
-    // server row yet: the one-shot plus the initialize() carry own the pick,
-    // so skip the PATCH (the SDK throws updateCustom on unbound threads).
-    selectChatTarget(providerId, modelId);
     let remoteId: string | null = null;
     try {
       remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
     } catch {
       remoteId = null;
     }
-    if (!remoteId) {
-      setOpen(false);
-      return;
-    }
     const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
-    aui.threadListItem.updateCustom({
-      ...base,
+    applyDirectModelSelection({
+      isDraft: !remoteId,
+      custom: base,
       providerId,
       modelId,
+      targets: {
+        setOneShotProviderModel: selectChatTarget,
+        updateCustom: (custom) => {
+          void aui.threadListItem.updateCustom(custom);
+        },
+      },
     });
     setOpen(false);
   };
@@ -160,20 +161,24 @@ export function ThinkingChip() {
 
   const handleSelect = (level: ReasoningLevel) => {
     setOpen(false);
-    // Persist the chosen level as the conversation default AND as the one-shot
-    // pick, so the very next message uses exactly what was chosen. Drafts have
-    // no server row yet (one-shot + initialize() carry own the pick), so skip
-    // the PATCH there — the SDK throws updateCustom on unbound threads.
-    useSettingsStore.getState().setSelectedReasoningLevel(level);
     let remoteId: string | null = null;
     try {
       remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
     } catch {
       remoteId = null;
     }
-    if (!remoteId) return;
     const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
-    aui.threadListItem.updateCustom({ ...base, reasoningLevel: level });
+    applyDirectReasoningSelection<ReasoningLevel>({
+      isDraft: !remoteId,
+      custom: base,
+      level,
+      targets: {
+        setOneShotReasoning: useSettingsStore.getState().setSelectedReasoningLevel,
+        updateCustom: (custom) => {
+          void aui.threadListItem.updateCustom(custom);
+        },
+      },
+    });
   };
 
   return (

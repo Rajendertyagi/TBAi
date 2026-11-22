@@ -1,73 +1,96 @@
 # TBAi — Unified Workspace Redesign (durable handoff)
 
-**This is the canonical handoff document.** A future agent with no access to the previous chat must read this file first.
+**This is the canonical handoff document and current source of truth.** A future agent with no access to the previous chat must read this file first.
 
-## Current status (2026-11-21)
+## Current status (2026-11-21, revision 4)
 
-- **Phase:** product architecture + feasibility + prototype complete. Awaiting owner review and approval.
+- **Phase:** architecture + prototype redesign complete. Awaiting owner review and approval. No production implementation.
 - **Production code:** NOT touched. No dependencies added. No behavior changed.
-- **Repository:** one checkout only, `D:\Temp\ai-chat-app`, branch `ui-foundation-upgrade`, HEAD `4c47acaea3311d48b326f5b4d13bc3a04a18f37e`. All pre-existing uncommitted/untracked work preserved. No commits, pushes, branch changes, resets, stashes or cleans.
-- **Prototype:** `prototype/index.html` — standalone, zero dependencies, interactive, dark + light.
+- **Repository baseline verified this task:** one checkout only, `D:\Temp\ai-chat-app`, branch `ui-foundation-upgrade`, HEAD `244b412aa85f67dd68f7678f7d1230a46d190dc5`. Working tree had prior uncommitted workspace-redesign changes, all preserved. No commits, pushes, branch changes, resets, stashes or cleans were made.
+- **Prototype:** `prototype/index.html` — standalone, zero dependencies, interactive, dark + light. Rebuilt in revision 4 around generic panels + content types. Interaction test: 16/16 PASS, zero console errors.
+- **Screenshots:** `prototype/screenshots/` — current `arch-*` renders at 1440×900, 1280×800, 960×800 (+ light), regenerated after the final chrome fix. Older non-`arch-*` images are retained as historical visual-revision reference.
 
 ## The core idea
 
+**The workspace provides layout infrastructure. The user decides which conversations and tools appear in which panels.**
+
 **One application. Multiple workspaces. Shared context.**
 
-Two regions are permanent and never disappear:
-1. **Chat Threads** — the conversation list on the left.
-2. **Primary Chat** — the main chat window immediately to its right.
+Two regions are permanent:
+1. **Chat Threads** — conversation navigation for both Direct Chat and OpenCode sessions, far left.
+2. **Primary Chat** — a permanent main conversation **position** immediately right. It is NOT a runtime; it can hold a Direct Chat or an OpenCode Chat.
 
-Everything else is an **optional panel** to the right of the Primary Chat. The user controls the arrangement: add, close, resize, split, move tabs, collapse, restore.
+Everything else is an optional **generic panel** to the right. Panels are containers, not features. A **tab** determines what content appears (Direct Chat, OpenCode Chat, File Tree, File Viewer, Browser). Direct Chat and OpenCode Chat are separate runtimes that may appear in any panel, side by side, or as tabs in the same panel.
 
 ## Confirmed decisions (owner-approved)
 
-1. The first two regions (Chat Threads + Primary Chat) are permanent in every layout.
-2. Additional panels are optional and appear to the right of the Primary Chat.
-3. Each panel has its own independent tabs.
-4. Panels can be added, closed, resized, split, and have tabs moved between them.
-5. Project and conversation context must be preserved and visible per panel.
-6. Direct Chat and OpenCode runtimes must NOT be merged — unify presentation, isolate execution.
-7. File access must stay workspace-scoped with path containment; do not repurpose `/api/folders/browse`.
-8. No new dependencies during this planning phase; library-first; assistant-ui train frozen.
-9. No production code changes until the architecture and prototype are reviewed and approved.
-10. Keep all existing uncommitted UI foundation work intact; build on it.
+1. Chat Threads and Primary Chat are permanent; Primary Chat is a position, not a runtime.
+2. Optional panels are generic containers, created only when the user adds them; no reserved empty column.
+3. Each panel has its own tabs; tabs can be added, closed, reordered, and moved between panels.
+4. Panels can be added, closed, resized, split, rearranged, and restored.
+5. Direct Chat and OpenCode Chat are separate runtimes — never merge them, never tie either to a fixed panel position.
+6. Users can arrange both chat types in any supported combination, including side by side and mixed in one panel.
+7. File tools and other features are optional content, not mandatory predefined columns.
+8. Project/conversation context and runtime isolation must remain intact; backend resolves all file paths.
+9. No new dependencies; library-first; assistant-ui train frozen.
+10. No production code changes until the architecture and prototype are approved.
+
+## Superseded / historical (do not treat as current requirements)
+
+- A mandatory "Development workflow" / three-column Code layout.
+- A dedicated "Code Workspace" or "AI Assistant panel"; treating OpenCode as a generic assistant panel.
+- Any rule assigning a runtime to a fixed panel position.
+- `docs/right-hand-workspace-audit.md` and `docs/right-hand-workspace-demo.html` — old single right-panel research, historical only.
+- `docs/ui-redesign/` — earlier visual redesign material; `application-shell.md` is an old rejected layout. Useful visual guidance only.
+- Earlier prototype scenarios named "Development", "Two chats", "Files", "Browser" as fixed arrangements — replaced by generic content-type scenarios.
+
+## Verified facts (from source, 2026-11-21)
+
+- The tab store already unifies both chat types via `kind: "chat" | "agent"` with `ref` = conversation id (`chatTabs.ts:20-27`); engine comes from the conversation row, not the tab.
+- Direct identity: `conversations.id` → `remoteId` → tab `ref` → `chat:<id>` → `/chat/<id>`.
+- OpenCode identity: `conversations.id` (= tab `ref`, `agent:<id>`, `/code/<id>`) → bootstrap → `opencode_session_id` → scoped V2 client.
+- One Direct runtime provider in AppShell bound to one active thread; OpenCode has its own isolated provider (`AuiProvider extends={null}`). Two simultaneously live Direct tabs require new isolation work and decisions on module-level shared state.
+- Sidebar already shows both types with engine icons; no engine grouping today.
 
 ## Recommendations (not yet approved)
 
-- Build the panel foundation before adding capabilities (files, editor, browser).
-- Ship a read-only file preview before any real editor (no editor library is installed).
-- Treat an interactive browser panel as a later, high-risk capability; start with a read-only screenshot viewer from the existing browser tool.
-- Extend `useDesktopLayout` for device-local panel geometry; use SQLite preferences only if layout must be portable across devices.
-- Reuse the existing `SidebarResizeHandle` pointer pattern and dnd-kit tab reordering; do not add a split-pane library without an ADR.
-
-## Assumptions (need owner confirmation)
-
-- "Layouts" means saved arrangements of panels (e.g. Default, Files, Development), not per-conversation layouts. Whether layouts should be global, per-project, or per-conversation is an open question (see technical-audit.md).
-- The Code workspace's file tree belongs on the LEFT of the editor, not in the right panel. The right panel in Chat is for previews/artifacts.
-- A real code editor is out of scope for the first implementation; read-only preview is enough to prove the workflow.
+- Build the generic panel foundation before adding chat panels; prove runtime isolation with a spike first.
+- Ship file tree + read-only viewer first (lowest risk); chat panels after isolation is proven.
+- Defer writable editor (no editor library; needs ADR) and interactive browser (CSP/webview security).
+- Saved layouts: device-wide first (localStorage, like `sidebarWidth`); per-project later.
+- Keep the existing unified tab store; do not introduce a second tab-management system.
 
 ## Unresolved questions
 
-1. Should saved layouts be global, per-project, per-conversation, or a combination?
-2. Is an interactive browser panel required, or is a read-only screenshot viewer acceptable for v1?
-3. Is a writable editor required in v1, or is read-only preview acceptable?
-4. Should the permanent Primary Chat be a single fixed thread, or a tabbed area with its own tabs?
-5. Which panel types ship in the first release (chat, files, viewer, browser, editor, assistant)?
+1. Should saved layouts be global, per-project, or per-conversation? (Recommendation: device-wide first.)
+2. Is a writable editor or interactive browser required in v1? (Recommendation: defer both.)
+3. How should two simultaneously live Direct chat tabs be isolated? (Needs a spike; highest risk.)
+4. Should Chat Threads group by runtime? (Prototype does; production is a UI change needing flow verification.)
 
 ## Documents
 
-- `product-architecture.md` — product structure and workspace model.
-- `technical-audit.md` — verified findings, source references, capabilities and gaps.
-- `interaction-model.md` — panel behavior, context ownership, persistence, keyboard, responsive.
+- `multi-chat-architecture-audit.md` — **implementation-ready plan** for multiple live Direct runtimes. Runtime ownership follows chat content (not panel position); the canonical thread-list adapter stays shared and the real cache fix is query-keyed. Also covers operation context, provider overrides and history recovery. Start here for implementation planning.
+- `product-architecture.md` — concept model, permanent structure, chat types as content, context/isolation, superseded concepts.
+- `technical-audit.md` — verified findings, chat identity/runtime facts, feasibility, official API links, quality gates.
+- `interaction-model.md` — generic panel/tab behavior, context model, persistence, responsive, prototype demos.
 - `prototype/index.html` — interactive visual prototype (open directly in a browser).
+- `prototype/screenshots/` — current architecture renders (`arch-*`):
+  - Default: [1440×900](prototype/screenshots/arch-default-1440x900.png) · [1280×800](prototype/screenshots/arch-default-1280x800.png) · [960×800](prototype/screenshots/arch-default-960x800.png) · [light](prototype/screenshots/arch-default-light-1440x900.png)
+  - Primary OpenCode: [1440×900](prototype/screenshots/arch-primary-opencode-1440x900.png) · [1280×800](prototype/screenshots/arch-primary-opencode-1280x800.png) · [960×800](prototype/screenshots/arch-primary-opencode-960x800.png)
+  - Two Direct: [1440×900](prototype/screenshots/arch-two-direct-1440x900.png) · [1280×800](prototype/screenshots/arch-two-direct-1280x800.png) · [960×800](prototype/screenshots/arch-two-direct-960x800.png)
+  - Two OpenCode: [1440×900](prototype/screenshots/arch-two-opencode-1440x900.png) · [1280×800](prototype/screenshots/arch-two-opencode-1280x800.png) · [960×800](prototype/screenshots/arch-two-opencode-960x800.png)
+  - Mixed runtimes: [1440×900](prototype/screenshots/arch-mixed-1440x900.png) · [1280×800](prototype/screenshots/arch-mixed-1280x800.png) · [960×800](prototype/screenshots/arch-mixed-960x800.png)
+  - Chat + Files: [1440×900](prototype/screenshots/arch-chat-files-1440x900.png) · [1280×800](prototype/screenshots/arch-chat-files-1280x800.png) · [960×800](prototype/screenshots/arch-chat-files-960x800.png)
+  - Chat + Browser: [1440×900](prototype/screenshots/arch-chat-browser-1440x900.png) · [1280×800](prototype/screenshots/arch-chat-browser-1280x800.png) · [960×800](prototype/screenshots/arch-chat-browser-960x800.png)
 
-## Historical / related (do not treat as current spec)
+## Recommended next implementation phase (not authorized)
 
-- `docs/right-hand-workspace-audit.md` — OLD single right-panel proposal, unapproved. Useful ideas, but superseded by the multi-panel requirement.
-- `docs/right-hand-workspace-demo.html` — OLD single-panel demo. Historical reference only.
-- `docs/ui-redesign/IMPLEMENTATION-PLAN.md` — earlier authoritative plan for the visual redesign; this workspace spec supersedes its panel model but preserves its constraints.
-- `docs/ui-redesign/requirements.md` — 21 earlier preferences; historical record.
+1. Finalize workspace model and interactions (this document set).
+2. Establish permanent two-region layout + generic panel foundation (reuse `useDesktopLayout`, Sidebar resize handle, dnd-kit).
+3. Add layout persistence (device-local first).
+4. Add secure project file browsing + read-only preview (conversation-scoped endpoint with `resolveSafe`).
+5. Spike: validate two isolated Direct runtimes and two OpenCode sessions before adding chat panels.
+6. Add further content types only after their technical requirements are proven.
+7. Apply the broader visual redesign consistently last.
 
-## Next approved step
-
-Owner reviews the prototype and the three documents, answers the unresolved questions, and approves (or rejects) the architecture. Only then may implementation planning begin, with an ADR in `docs/decisions.md` for the panel layout model and any new dependency.
+Owner must review and approve before any implementation. An ADR in `docs/decisions.md` is required for the panel layout model and any new dependency.

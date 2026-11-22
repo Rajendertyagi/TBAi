@@ -3,195 +3,222 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>TBAi — Unified Workspace Prototype</title>
+<title>TBAi — Unified Workspace</title>
 <style>
-  /* ============ THEME TOKENS (oklch, hairline borders, layered elevation) ============ */
-  :root{
-    --bg:oklch(.972 .006 80); --surface:oklch(1 0 0); --surface-2:oklch(.966 .007 80);
-    --surface-3:oklch(.941 .009 80); --surface-4:oklch(.915 .011 80);
-    --sidebar:oklch(.979 .005 80); --panel:oklch(.958 .008 80); --code:oklch(.955 .008 80);
-    --text:oklch(.26 .016 70); --text-2:oklch(.49 .014 70); --text-3:oklch(.63 .012 70);
-    --border:oklch(.26 .016 70 / .10); --border-strong:oklch(.26 .016 70 / .18);
-    --accent:oklch(.64 .135 72); --accent-soft:oklch(.64 .135 72 / .12); --accent-text:oklch(.52 .14 72);
-    --success:oklch(.62 .13 150); --success-soft:oklch(.62 .13 150 / .13);
-    --info:oklch(.60 .11 250); --info-soft:oklch(.60 .11 250 / .12);
-    --danger:oklch(.60 .17 25); --danger-soft:oklch(.60 .17 25 / .12);
-    --shadow-xs:0 1px 2px oklch(.2 .02 70 / .05);
-    --shadow-sm:0 1px 2px oklch(.2 .02 70 / .05),0 2px 8px -3px oklch(.2 .02 70 / .08);
-    --shadow-md:0 1px 2px oklch(.2 .02 70 / .05),0 8px 20px -8px oklch(.2 .02 70 / .14);
-    --shadow-lg:0 1px 2px oklch(.2 .02 70 / .06),0 14px 36px -14px oklch(.2 .02 70 / .20);
-    --radius:9px; --radius-lg:13px; --chrome-h:38px; --status-h:26px; --title-h:40px;
-    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
-    --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
-  }
-  html[data-theme="dark"]{
-    --bg:oklch(.165 .008 70); --surface:oklch(.205 .010 70); --surface-2:oklch(.245 .012 70);
-    --surface-3:oklch(.285 .014 70); --surface-4:oklch(.325 .016 70);
-    --sidebar:oklch(.19 .009 70); --panel:oklch(.225 .011 70); --code:oklch(.185 .009 70);
-    --text:oklch(.94 .012 80); --text-2:oklch(.73 .014 75); --text-3:oklch(.56 .014 75);
-    --border:oklch(1 0 0 / .09); --border-strong:oklch(1 0 0 / .16);
-    --accent:oklch(.79 .135 78); --accent-soft:oklch(.79 .135 78 / .15); --accent-text:oklch(.86 .12 78);
-    --success:oklch(.78 .12 150); --success-soft:oklch(.78 .12 150 / .15);
-    --info:oklch(.76 .10 250); --info-soft:oklch(.76 .10 250 / .14);
-    --danger:oklch(.72 .15 25); --danger-soft:oklch(.72 .15 25 / .14);
-    --shadow-xs:0 1px 2px oklch(0 0 0 / .3);
-    --shadow-sm:0 1px 2px oklch(0 0 0 / .35),0 2px 8px -3px oklch(0 0 0 / .4);
-    --shadow-md:0 1px 2px oklch(0 0 0 / .4),0 8px 20px -8px oklch(0 0 0 / .55);
-    --shadow-lg:0 1px 2px oklch(0 0 0 / .45),0 14px 36px -14px oklch(0 0 0 / .7);
-  }
-  *{box-sizing:border-box}
-  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-  html,body{margin:0;padding:0;height:100%}
-  body{font-family:var(--font);font-size:13px;color:var(--text);background:var(--bg);overflow:hidden;-webkit-font-smoothing:antialiased}
+/* ============================================================
+   TBAi visual system — warm dark, oklch tokens, hairline edges,
+   layered elevation. Matches the real application's language.
+   ============================================================ */
+:root{
+  --bg:oklch(.155 .008 70); --surface:oklch(.20 .010 70); --surface-2:oklch(.235 .012 70);
+  --surface-3:oklch(.27 .014 70); --surface-4:oklch(.31 .016 70);
+  --sidebar:oklch(.185 .009 70); --panel:oklch(.215 .011 70); --code:oklch(.18 .009 70);
+  --text:oklch(.95 .010 80); --text-2:oklch(.72 .014 75); --text-3:oklch(.54 .014 75);
+  --border:oklch(1 0 0 / .08); --border-strong:oklch(1 0 0 / .15);
+  --accent:oklch(.78 .14 75); --accent-soft:oklch(.78 .14 75 / .14); --accent-text:oklch(.86 .12 78);
+  --info:oklch(.76 .10 250); --info-soft:oklch(.76 .10 250 / .14);
+  --success:oklch(.78 .12 150); --success-soft:oklch(.78 .12 150 / .14);
+  --danger:oklch(.72 .15 25); --danger-soft:oklch(.72 .15 25 / .14);
+  --shadow-xs:0 1px 2px oklch(0 0 0 / .3);
+  --shadow-sm:0 1px 2px oklch(0 0 0 / .35),0 2px 8px -3px oklch(0 0 0 / .4);
+  --shadow-md:0 1px 2px oklch(0 0 0 / .4),0 8px 20px -8px oklch(0 0 0 / .55);
+  --shadow-lg:0 1px 2px oklch(0 0 0 / .45),0 14px 36px -14px oklch(0 0 0 / .7);
+  --radius:9px; --radius-lg:13px; --title-h:40px; --status-h:26px; --strip-h:38px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+html[data-theme="light"]{
+  --bg:oklch(.975 .005 80); --surface:oklch(1 0 0); --surface-2:oklch(.968 .007 80);
+  --surface-3:oklch(.943 .009 80); --surface-4:oklch(.917 .011 80);
+  --sidebar:oklch(.981 .005 80); --panel:oklch(.96 .008 80); --code:oklch(.957 .008 80);
+  --text:oklch(.26 .016 70); --text-2:oklch(.49 .014 70); --text-3:oklch(.63 .012 70);
+  --border:oklch(.26 .016 70 / .10); --border-strong:oklch(.26 .016 70 / .18);
+  --accent:oklch(.64 .135 72); --accent-soft:oklch(.64 .135 72 / .12); --accent-text:oklch(.52 .14 72);
+  --info:oklch(.60 .11 250); --info-soft:oklch(.60 .11 250 / .12);
+  --success:oklch(.62 .13 150); --success-soft:oklch(.62 .13 150 / .13);
+  --danger:oklch(.60 .17 25); --danger-soft:oklch(.60 .17 25 / .12);
+  --shadow-xs:0 1px 2px oklch(.2 .02 70 / .05);
+  --shadow-sm:0 1px 2px oklch(.2 .02 70 / .05),0 2px 8px -3px oklch(.2 .02 70 / .08);
+  --shadow-md:0 1px 2px oklch(.2 .02 70 / .05),0 8px 20px -8px oklch(.2 .02 70 / .14);
+  --shadow-lg:0 1px 2px oklch(.2 .02 70 / .06),0 14px 36px -14px oklch(.2 .02 70 / .20);
+}
+*{box-sizing:border-box}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+html,body{margin:0;padding:0;height:100%}
+body{font-family:var(--font);font-size:13px;color:var(--text);background:var(--bg);overflow:hidden;-webkit-font-smoothing:antialiased;line-height:1.5}
 
-  /* ============ APP SHELL ============ */
-  .app{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg)}
-  .titlebar{height:var(--title-h);flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--surface);box-shadow:0 1px 0 var(--border);z-index:20}
-  .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
-  .brand .logo{width:20px;height:20px;border-radius:6px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px}
-  .proj-pick{display:flex;align-items:center;gap:7px;padding:4px 10px;border-radius:7px;background:var(--surface-2);font-size:11.5px;color:var(--text-2);cursor:pointer;box-shadow:inset 0 0 0 1px var(--border)}
-  .proj-pick .dot{width:8px;height:8px;border-radius:3px;background:#a8701c}
-  .titlebar .spacer{flex:1}
-  .tbtn{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-2);cursor:pointer;font-size:14px}
-  .tbtn:hover{background:var(--surface-2);color:var(--text)}
-  .win-ctrls{display:flex;align-items:center;margin-left:6px}
-  .win-ctrl{width:38px;height:var(--title-h);border:0;background:transparent;color:var(--text-3);display:flex;align-items:center;justify-content:center;cursor:pointer}
-  .win-ctrl:hover{background:var(--surface-2);color:var(--text)}
-  .win-ctrl.close:hover{background:#c42b1c;color:#fff}
+/* ---------- APP SHELL ---------- */
+.app{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg)}
+.titlebar{height:var(--title-h);flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--surface);box-shadow:0 1px 0 var(--border);z-index:20}
+.brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:13px;letter-spacing:-.01em}
+.brand .logo{width:22px;height:22px;border-radius:7px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.proj-pick{display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:8px;background:var(--surface-2);font-size:11.5px;color:var(--text-2);cursor:pointer;box-shadow:inset 0 0 0 1px var(--border)}
+.proj-pick .dot{width:8px;height:8px;border-radius:3px;background:#a8701c}
+.titlebar .spacer{flex:1}
+.tbtn{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-2);cursor:pointer;font-size:15px}
+.tbtn:hover{background:var(--surface-2);color:var(--text)}
+.win-ctrls{display:flex;align-items:center;margin-left:8px}
+.win-ctrl{width:40px;height:var(--title-h);border:0;background:transparent;color:var(--text-3);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.win-ctrl:hover{background:var(--surface-2);color:var(--text)}
+.win-ctrl.close:hover{background:#c42b1c;color:#fff}
+.body{flex:1;min-height:0;display:flex;overflow:hidden}
 
-  .body{flex:1;min-height:0;display:flex;overflow:hidden}
+/* ---------- ACTIVITY BAR ---------- */
+.activity{width:46px;flex:none;background:var(--sidebar);display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 0;box-shadow:1px 0 0 var(--border)}
+.act-ic{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:17px;cursor:pointer;position:relative}
+.act-ic:hover{background:var(--surface-2);color:var(--text)}
+.act-ic.on{background:var(--accent-soft);color:var(--accent)}
+.act-ic.on::before{content:"";position:absolute;left:-6px;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--accent)}
+.activity .spacer{flex:1}
 
-  /* ============ PERMANENT REGION 1: CHAT THREADS ============ */
-  .threads{width:272px;flex:none;background:var(--sidebar);display:flex;flex-direction:column;min-height:0}
-  .th-head{padding:10px 12px 6px}
-  .th-row{display:flex;align-items:center;gap:4px;height:28px}
-  .th-row .spacer{flex:1}
-  .th-ic{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-2);cursor:pointer;flex:none}
-  .th-ic:hover{background:var(--surface-2);color:var(--text)}
-  .th-search{display:flex;align-items:center;gap:9px;margin-top:4px;padding:5px 6px;color:var(--text-3);font-size:12.5px;cursor:pointer;border-radius:7px}
-  .th-search:hover{background:var(--surface-2);color:var(--text)}
-  .th-scroll{flex:1;overflow:auto;padding:8px}
-  .th-group{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-3);padding:12px 8px 6px;display:flex;justify-content:space-between}
-  .th-item{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;color:var(--text-2);font-size:12px;cursor:pointer;margin:1px 0}
-  .th-item:hover{background:var(--surface-2);color:var(--text)}
-  .th-item.on{background:var(--accent-soft);color:var(--accent-text)}
-  .th-item .ic{width:14px;text-align:center;color:var(--text-3);flex:none;font-size:12px}
-  .th-item .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .th-item .meta{font-size:10px;color:var(--text-3)}
-  .th-item .dot{width:6px;height:6px;border-radius:50%;background:var(--success)}
-  .th-proj{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;color:var(--text);font-size:12.5px;font-weight:500;cursor:pointer}
-  .th-proj .tile{width:16px;height:16px;border-radius:5px;flex:none}
-  .th-proj .cnt{margin-left:auto;font-size:10px;color:var(--text-3)}
-  .th-bottom{height:var(--chrome-h);flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;background:var(--surface-2)}
-  .th-bottom .bi{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:15px;cursor:pointer}
-  .th-bottom .bi:hover{background:var(--surface-3);color:var(--text)}
+/* ---------- CHAT THREADS (permanent region 1) ---------- */
+.threads{width:272px;flex:none;background:var(--sidebar);display:flex;flex-direction:column;min-height:0}
+.th-head{padding:12px 12px 8px}
+.th-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin-bottom:10px}
+.th-title .spacer{flex:1}
+.th-ic{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer;font-size:14px}
+.th-ic:hover{background:var(--surface-2);color:var(--text)}
+.th-search{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;background:var(--surface);color:var(--text-3);font-size:12px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--border)}
+.th-scroll{flex:1;overflow:auto;padding:6px 8px 12px}
+.th-group{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);padding:14px 8px 6px;display:flex;justify-content:space-between;align-items:center}
+.th-group .rt{font-size:9px;letter-spacing:0;text-transform:none;opacity:.8}
+.th-item{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;color:var(--text-2);font-size:12px;cursor:pointer;margin:1px 0}
+.th-item:hover{background:var(--surface-2);color:var(--text)}
+.th-item.on{background:var(--accent-soft);color:var(--accent-text)}
+.th-item .ic{width:15px;text-align:center;flex:none;font-size:12px}
+.th-item .ic.direct{color:var(--accent)}
+.th-item .ic.opencode{color:var(--info)}
+.th-item .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.th-item .meta{font-size:10px;color:var(--text-3);flex:none}
+.th-item .dot{width:6px;height:6px;border-radius:50%;background:var(--success);flex:none}
+.th-bottom{height:var(--strip-h);flex:none;display:flex;align-items:center;gap:2px;padding:0 10px;background:var(--surface-2);box-shadow:0 -1px 0 var(--border)}
+.th-bottom .bi{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:14px;cursor:pointer}
+.th-bottom .bi:hover{background:var(--surface-3);color:var(--text)}
 
-  /* ============ PERMANENT REGION 2: PRIMARY CHAT ============ */
-  .primary{flex:1;min-width:360px;display:flex;flex-direction:column;background:var(--bg);position:relative}
-  .pstrip{height:var(--chrome-h);flex:none;display:flex;align-items:stretch;gap:2px;padding:0 10px;background:var(--surface-2)}
-  .pstrip .tab{position:relative;display:flex;align-items:center;gap:7px;padding:0 11px;min-width:120px;max-width:200px;font-size:11.5px;color:var(--text-2);cursor:pointer;border-radius:8px 8px 0 0}
-  .pstrip .tab.on{background:var(--bg);color:var(--text)}
-  .pstrip .tab.on::before{content:"";position:absolute;top:0;left:10px;right:10px;height:2px;border-radius:2px;background:var(--accent)}
-  .pstrip .tab .ic{font-size:13px;color:var(--accent)}
-  .pstrip .tab .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pstrip .add{width:30px;min-width:30px;justify-content:center;color:var(--text-3);font-size:16px}
-  .pstrip .spacer{flex:1}
-  .pstrip .act{width:30px;align-self:center;height:26px;border:0;background:transparent;color:var(--text-3);cursor:pointer;border-radius:6px;font-size:14px}
-  .pstrip .act:hover{background:var(--surface-3);color:var(--text)}
-  .ctxbar{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 16px;font-size:11px;color:var(--text-3);background:var(--surface)}
-  .ctxbar .badge{font-size:10px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent-text)}
-  .chat-scroll{flex:1;overflow:auto;padding:22px 0}
-  .chat-inner{max-width:720px;margin:0 auto;padding:0 22px}
-  .day{text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);margin:6px 0 20px}
-  .msg{display:flex;gap:11px;margin-bottom:22px}
-  .av{width:27px;height:27px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
-  .av.u{background:var(--surface-3);color:var(--text-2)}
-  .av.a{background:var(--accent);color:#fff}
-  .msg-body{flex:1;min-width:0}
-  .msg-name{font-size:11px;color:var(--text-3);margin-bottom:5px;font-weight:500}
-  .msg-text{font-size:13px;line-height:1.65;color:var(--text)}
-  .msg-text p{margin:0 0 9px}
-  .composer-wrap{padding:0 20px 16px}
-  .composer{max-width:720px;margin:0 auto;background:var(--surface);border-radius:var(--radius-lg);padding:11px 13px;box-shadow:var(--shadow-md)}
-  .composer .ph{color:var(--text-3);font-size:12.5px;padding:2px 0 10px}
-  .composer .ph .hint{opacity:.7;font-size:11px}
-  .composer-bar{display:flex;align-items:center;justify-content:space-between;padding-top:9px}
-  .c-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-  .c-ic{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer;flex:none}
-  .c-ic:hover{background:var(--surface-2);color:var(--text)}
-  .c-ic.disabled{opacity:.4;pointer-events:none}
-  .chip{font-size:11px;padding:5px 10px;border-radius:7px;color:var(--text-2);background:var(--surface-3);cursor:pointer}
-  .send{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px}
+/* ---------- GENERIC PANEL CHROME (Primary Chat + optional panels) ---------- */
+.primary{flex:1;min-width:240px;display:flex;flex-direction:column;background:var(--bg);position:relative}
+.pstrip{height:var(--strip-h);flex:none;display:flex;align-items:stretch;gap:2px;padding:0 10px;background:var(--surface-2);box-shadow:0 1px 0 var(--border)}
+.ptab{position:relative;display:flex;align-items:center;gap:8px;padding:0 12px;min-width:120px;max-width:210px;font-size:11.5px;color:var(--text-2);cursor:pointer;border-radius:8px 8px 0 0}
+.ptab.on{background:var(--bg);color:var(--text)}
+.ptab.on::before{content:"";position:absolute;top:0;left:12px;right:12px;height:2px;border-radius:2px;background:var(--tab-accent,var(--accent))}
+.ptab .ic{font-size:13px;color:var(--tab-accent,var(--accent))}
+.ptab .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ptab .x{font-size:11px;color:var(--text-3);opacity:0}
+.ptab:hover .x,.ptab.on .x{opacity:1}
+.pstrip .add{width:30px;min-width:30px;justify-content:center;color:var(--text-3);font-size:17px}
+.pstrip .spacer{flex:1}
+.pstrip .act{width:30px;align-self:center;height:26px;border:0;background:transparent;color:var(--text-3);cursor:pointer;border-radius:7px;font-size:15px}
+.pstrip .act:hover{background:var(--surface-3);color:var(--text)}
+.ctxbar{height:30px;flex:none;display:flex;align-items:center;gap:9px;padding:0 18px;font-size:11px;color:var(--text-3);background:var(--surface)}
+.ctxbar .badge{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:500}
+.ctxbar .badge.direct{background:var(--accent-soft);color:var(--accent-text)}
+.ctxbar .badge.opencode{background:var(--info-soft);color:var(--info)}
+.ctxbar .sep{opacity:.5}
+.pbody{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 
-  /* ============ ADDITIONAL WORKSPACE REGION (panels) ============ */
-  .workspace{flex:none;display:flex;min-width:0;background:var(--bg)}
-  .workspace:empty{display:none}
-  .vdiv{width:5px;flex:none;cursor:col-resize;position:relative;z-index:6}
-  .vdiv::after{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--border)}
-  .vdiv:hover::after,.vdiv.drag::after{background:var(--accent);width:2px}
-  .panel{display:flex;flex-direction:column;min-width:220px;background:var(--panel);min-height:0;position:relative}
-  .ptabs{height:var(--chrome-h);flex:none;display:flex;align-items:stretch;gap:2px;padding:0 8px;background:var(--surface-2)}
-  .ptab{position:relative;display:flex;align-items:center;gap:6px;padding:0 10px;min-width:70px;max-width:160px;font-size:11px;color:var(--text-2);cursor:pointer;border-radius:7px 7px 0 0}
-  .ptab.on{background:var(--panel);color:var(--text)}
-  .ptab.on::before{content:"";position:absolute;top:0;left:8px;right:8px;height:2px;border-radius:2px;background:var(--accent)}
-  .ptab .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ptab .x{font-size:10px;color:var(--text-3);opacity:0}
-  .ptab:hover .x,.ptab.on .x{opacity:1}
-  .ptabs .padd{width:26px;min-width:26px;justify-content:center;color:var(--text-3);font-size:15px;align-self:center;height:26px;border-radius:6px;cursor:pointer}
-  .ptabs .padd:hover{background:var(--surface-3);color:var(--text)}
-  .pctx{height:26px;flex:none;display:flex;align-items:center;gap:6px;padding:0 12px;font-size:10px;color:var(--text-3);background:var(--panel)}
-  .pctx .tag{padding:1px 7px;border-radius:999px;background:var(--surface-3);color:var(--text-2)}
-  .pbody{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
-  .pbody.hidden{display:none}
-  .pact{position:absolute;top:5px;right:8px;display:flex;gap:2px;z-index:8}
-  .pact button{width:24px;height:24px;border-radius:6px;border:0;background:var(--surface-2);color:var(--text-3);cursor:pointer;font-size:12px}
-  .pact button:hover{background:var(--surface-3);color:var(--text)}
+/* ---------- CHAT CONTENT (shared by Direct + OpenCode tabs) ---------- */
+.chat-scroll{flex:1;overflow:auto;padding:26px 0 12px}
+.chat-inner{max-width:760px;margin:0 auto;padding:0 28px}
+.day{text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--text-3);margin:4px 0 26px}
+.msg{display:flex;gap:13px;margin-bottom:26px}
+.av{width:28px;height:28px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
+.av.u{background:var(--surface-3);color:var(--text-2)}
+.av.a{background:var(--accent);color:#fff}
+.av.code{background:var(--info);color:#fff}
+.msg-body{flex:1;min-width:0}
+.msg-name{font-size:11px;color:var(--text-3);margin-bottom:6px;font-weight:500}
+.msg-text{font-size:13px;line-height:1.7;color:var(--text)}
+.msg-text p{margin:0 0 10px}
+.code{margin:12px 0;border-radius:var(--radius);background:var(--code);overflow:hidden;box-shadow:inset 0 0 0 1px var(--border)}
+.code-h{display:flex;justify-content:space-between;padding:8px 13px;font-size:10.5px;color:var(--text-3);background:var(--surface-2)}
+.code pre{margin:0;padding:12px 14px;font-family:var(--mono);font-size:11.5px;line-height:1.7;overflow:auto;color:var(--text)}
+.kw{color:var(--danger)}.fn{color:var(--info)}.str{color:var(--success)}
+.tool{margin:12px 0;border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:10px;background:var(--surface-2);box-shadow:var(--shadow-xs)}
+.tool .badge{font-size:9.5px;padding:2px 8px;border-radius:5px;background:var(--success-soft);color:var(--success);font-weight:600}
+.tool .tn{font-size:11.5px;color:var(--text)}
+.tool .tm{font-size:10px;color:var(--text-3);margin-left:auto}
+.composer-wrap{padding:8px 28px 20px;background:linear-gradient(to top,var(--bg) 70%,transparent)}
+.composer{max-width:760px;margin:0 auto;background:var(--surface);border-radius:var(--radius-lg);padding:13px 15px;box-shadow:var(--shadow-md),0 0 0 1px var(--border)}
+.composer .ph{color:var(--text-3);font-size:13px;padding:2px 0 14px;min-height:24px}
+.composer-bar{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.c-tools{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.c-ic{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer;flex:none}
+.c-ic:hover{background:var(--surface-2);color:var(--text)}
+.c-ic.disabled{opacity:.4;pointer-events:none}
+.chip{font-size:11px;padding:6px 11px;border-radius:8px;color:var(--text-2);background:var(--surface-2);cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.chip:hover{background:var(--surface-3)}
+.chip.direct{background:var(--accent-soft);color:var(--accent-text)}
+.chip.opencode{background:var(--info-soft);color:var(--info)}
+.send{width:32px;height:32px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
 
-  /* panel content: file tree */
-  .tree{padding:8px 10px;font-size:11.5px;color:var(--text-2)}
-  .tree .r{padding:5px 8px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:7px}
-  .tree .r:hover{background:var(--surface-2);color:var(--text)}
-  .tree .r.i1{padding-left:20px}.tree .r.i2{padding-left:34px}.tree .r.i3{padding-left:48px}
-  .tree .fi{color:var(--info)}
-  /* panel content: file viewer / editor */
-  .filehead{padding:10px 14px;font-size:11px;color:var(--text-3);display:flex;justify-content:space-between;align-items:center}
-  .code{padding:0 0 14px;font-family:var(--mono);font-size:11px;line-height:1.7;overflow:auto}
-  .code .ln{display:flex;padding:0 12px;white-space:pre}
-  .code .ln:hover{background:var(--surface-2)}
-  .code .n{width:26px;text-align:right;color:var(--text-3);margin-right:14px;user-select:none;flex:none}
-  .kw{color:var(--danger)}.fn{color:var(--info)}.str{color:var(--success)}.cm{color:var(--text-3)}
-  /* panel content: browser */
-  .browser{display:flex;flex-direction:column;height:100%}
-  .bbar{display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--surface-2)}
-  .bbar .nav{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer}
-  .bbar .url{flex:1;padding:5px 10px;border-radius:7px;background:var(--surface);font-size:11px;color:var(--text-2);box-shadow:inset 0 0 0 1px var(--border)}
-  .bpage{flex:1;padding:26px 22px;overflow:auto}
-  .bpage h3{font-size:18px;margin:0 0 8px}
-  .bpage p{font-size:12px;line-height:1.7;color:var(--text-2);max-width:520px}
-  .bcard{margin-top:18px;padding:14px;border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-xs);max-width:520px}
-  /* panel content: assistant */
-  .assistant .msg{margin-bottom:16px}
-  .assistant .composer-wrap{padding:0 12px 12px}
-  .assistant .composer{max-width:none}
+/* ---------- OPTIONAL PANELS ---------- */
+.workspace{flex:none;display:flex;min-width:0;background:var(--bg)}
+.workspace:empty{display:none}
+.vdiv{width:5px;flex:none;cursor:col-resize;position:relative;z-index:6;background:var(--bg)}
+.vdiv::after{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--border)}
+.vdiv:hover::after,.vdiv.drag::after{background:var(--accent);width:2px}
+.hdiv{height:5px;flex:none;cursor:row-resize;position:relative;z-index:6;background:var(--bg)}
+.hdiv::after{content:"";position:absolute;top:2px;left:0;right:0;height:1px;background:var(--border)}
+.hdiv:hover::after,.hdiv.drag::after{background:var(--accent);height:2px}
+.split{display:flex;min-width:0;min-height:0;flex:1}
+.split.row{flex-direction:row}.split.col{flex-direction:column}
+.panel{display:flex;flex-direction:column;min-width:240px;min-height:120px;background:var(--bg);position:relative;overflow:hidden}
 
-  /* ============ STATUS BAR ============ */
-  .statusbar{height:var(--status-h);flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:var(--surface);font-size:10.5px;color:var(--text-3);box-shadow:0 -1px 0 var(--border)}
+/* panel content: file tree / viewer / editor / browser */
+.tree{padding:8px 8px;font-size:11.5px;color:var(--text-2)}
+.tree .r{padding:6px 8px;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:8px}
+.tree .r:hover{background:var(--surface-2);color:var(--text)}
+.tree .r.sel{background:var(--accent-soft);color:var(--accent-text)}
+.tree .r.i1{padding-left:22px}.tree .r.i2{padding-left:38px}
+.tree .fi{color:var(--info)}
+.filehead{padding:10px 14px;font-size:11px;color:var(--text-3);display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 0 var(--border)}
+.filehead .path{font-family:var(--mono);font-size:10.5px}
+.code-lines{padding:10px 0 16px;font-family:var(--mono);font-size:11px;line-height:1.75;overflow:auto}
+.code-lines .ln{display:flex;padding:0 14px;white-space:pre}
+.code-lines .ln:hover{background:var(--surface-2)}
+.code-lines .n{width:24px;text-align:right;color:var(--text-3);margin-right:16px;user-select:none;flex:none}
+.browser{display:flex;flex-direction:column;height:100%}
+.bbar{display:flex;align-items:center;gap:6px;padding:9px 10px;background:var(--surface-2);box-shadow:0 1px 0 var(--border)}
+.bbar .nav{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer;font-size:14px}
+.bbar .url{flex:1;padding:6px 12px;border-radius:8px;background:var(--surface);font-size:11px;color:var(--text-2);box-shadow:inset 0 0 0 1px var(--border);display:flex;align-items:center;gap:7px}
+.bpage{flex:1;padding:28px 24px;overflow:auto}
+.bpage h2{font-size:20px;margin:0 0 10px;letter-spacing:-.01em}
+.bpage p{font-size:12px;line-height:1.75;color:var(--text-2);max-width:560px}
+.bcard{margin-top:20px;padding:16px;border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-xs);max-width:560px}
+.bcard h4{margin:0 0 6px;font-size:12px}
+.bcard p{margin:0;font-size:11.5px}
 
-  /* ============ PROTOTYPE CONTROLS (outside app) ============ */
-  .switcher{position:fixed;top:5px;left:50%;transform:translateX(-50%);z-index:100;display:flex;gap:4px;background:var(--surface);border-radius:9px;padding:3px;box-shadow:var(--shadow-md)}
-  .switcher button{font:inherit;font-size:11.5px;padding:6px 12px;border:0;border-radius:7px;background:transparent;color:var(--text-2);cursor:pointer;white-space:nowrap}
-  .switcher button.on{background:var(--accent-soft);color:var(--accent-text)}
-  .proto-tip{position:fixed;bottom:34px;left:50%;transform:translateX(-50%);z-index:100;font-size:10.5px;color:var(--text-3);background:var(--surface);padding:5px 12px;border-radius:8px;box-shadow:var(--shadow-sm);pointer-events:none}
-  .addmenu{position:fixed;z-index:200;min-width:180px;background:var(--surface);border-radius:9px;box-shadow:var(--shadow-lg);padding:5px;display:none}
-  .addmenu.on{display:block}
-  .addmenu .mi{padding:7px 9px;border-radius:6px;font-size:12px;color:var(--text-2);cursor:pointer;display:flex;align-items:center;gap:9px}
-  .addmenu .mi:hover{background:var(--surface-2);color:var(--text)}
-  .hidden{display:none!important}
+/* ---------- STATUS BAR ---------- */
+.statusbar{height:var(--status-h);flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:var(--surface);font-size:10.5px;color:var(--text-3);box-shadow:0 -1px 0 var(--border)}
+.statusbar .left,.statusbar .right{display:flex;align-items:center;gap:14px}
+
+/* ---------- PROTOTYPE CONTROLS (visually separate) ---------- */
+.proto{position:fixed;top:5px;left:50%;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:6px;padding:4px 7px 4px 11px;border-radius:9px;background:oklch(.28 .06 260 / .96);box-shadow:var(--shadow-md),0 0 0 1px oklch(.7 .1 260 / .3);font-size:11px;color:oklch(.93 .02 260)}
+.proto .lbl{font-weight:700;letter-spacing:.08em;font-size:9.5px;opacity:.8;text-transform:uppercase}
+.proto .sep{width:1px;height:16px;background:oklch(1 0 0 / .2)}
+.proto button{font:inherit;font-size:11px;padding:5px 9px;border:0;border-radius:7px;background:transparent;color:oklch(.85 .02 260);cursor:pointer;white-space:nowrap}
+.proto button:hover{background:oklch(1 0 0 / .1);color:#fff}
+.proto button.on{background:oklch(.9 .08 260 / .9);color:oklch(.25 .06 260);font-weight:600}
+.menu{position:fixed;z-index:200;min-width:200px;background:var(--surface);border-radius:10px;box-shadow:var(--shadow-lg);padding:5px;display:none}
+.menu.on{display:block}
+.menu .mi{padding:8px 10px;border-radius:7px;font-size:12px;color:var(--text-2);cursor:pointer;display:flex;align-items:center;gap:10px}
+.menu .mi:hover{background:var(--surface-2);color:var(--text)}
+.menu .mh{padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3)}
+.hidden{display:none!important}
+
+@media (max-width:1280px){ .threads{width:248px} .panel,.primary{min-width:200px} .chat-inner{padding:0 22px} }
+@media (max-width:960px){
+  .threads{width:220px} .activity{width:42px}
+  .workspace{position:absolute;right:0;top:var(--title-h);bottom:var(--status-h);width:min(42vw,380px);box-shadow:var(--shadow-lg);z-index:15;flex-direction:column}
+  .workspace > .split.row{flex-direction:column}
+  .workspace > .split.row > .vdiv{display:none}
+  .panel,.primary{min-width:180px}
+  .proto{left:auto;right:12px;transform:none;top:5px;max-width:60vw;overflow:auto}
+}
 </style>
 </head>
 <body>
 <div class="app">
-  <!-- TITLE BAR -->
   <div class="titlebar">
     <div class="brand"><span class="logo">T</span> TBAi</div>
     <div class="proj-pick"><span class="dot"></span> ai-chat-app <span style="opacity:.6">▾</span></div>
@@ -206,31 +233,35 @@
   </div>
 
   <div class="body">
-    <!-- PERMANENT REGION 1: CHAT THREADS -->
+    <div class="activity">
+      <div class="act-ic on" title="Chat">◷</div>
+      <div class="act-ic" title="Scheduler">◴</div>
+      <div class="act-ic" title="Folders">▤</div>
+      <div class="act-ic" title="MCP">◈</div>
+      <div class="spacer"></div>
+      <div class="act-ic" title="Settings">⚙</div>
+    </div>
+
+    <!-- PERMANENT REGION 1: CHAT THREADS (both runtimes, clearly labelled) -->
     <aside class="threads">
       <div class="th-head">
-        <div class="th-row">
-          <span class="th-ic" title="Hide sidebar">▤</span>
-          <span style="font-weight:600;font-size:13px">Chats</span>
-          <span class="spacer"></span>
+        <div class="th-title">Chats <span class="spacer"></span>
           <span class="th-ic" title="Filter">≡</span>
-          <span class="th-ic" title="New folder">▣</span>
           <span class="th-ic" title="New chat">✎</span>
         </div>
-        <div class="th-search">⌕ &nbsp; Search</div>
+        <div class="th-search">⌕ &nbsp; Search conversations</div>
       </div>
       <div class="th-scroll">
-        <div class="th-group"><span>Projects</span><span>+</span></div>
-        <div class="th-proj"><span class="tile" style="background:#a8701c"></span> ai-chat-app <span class="cnt">3</span></div>
-        <div class="th-item on"><span class="ic">◆</span><span class="t">Refactor Auth API</span><span class="dot"></span></div>
-        <div class="th-item"><span class="ic">◇</span><span class="t">Fix build pipeline</span><span class="meta">5m</span></div>
-        <div class="th-item"><span class="ic">◇</span><span class="t">Streaming phase notes</span><span class="meta">1w</span></div>
-        <div class="th-proj"><span class="tile" style="background:#4a6fa5"></span> MarketHub <span class="cnt">2</span></div>
-        <div class="th-item"><span class="ic">◇</span><span class="t">Q4 Marketing Plan</span><span class="meta">1m</span></div>
-        <div class="th-item"><span class="ic">◇</span><span class="t">Store download section</span><span class="meta">3d</span></div>
-        <div class="th-group"><span>Simple chats</span><span>+</span></div>
-        <div class="th-item"><span class="ic">◷</span><span class="t">Hi greeting - DeepSeek</span><span class="meta">8h</span></div>
-        <div class="th-item"><span class="ic">◷</span><span class="t">Spell check review</span><span class="meta">5d</span></div>
+        <div class="th-group"><span>Direct chats</span><span class="rt">TBAi runtime</span></div>
+        <div class="th-item on" data-open="direct:Refactor Auth API"><span class="ic direct">◷</span><span class="t">Refactor Auth API</span><span class="dot"></span></div>
+        <div class="th-item" data-open="direct:Q4 Marketing Plan"><span class="ic direct">◷</span><span class="t">Q4 Marketing Plan</span><span class="meta">1m</span></div>
+        <div class="th-item" data-open="direct:Hi greeting"><span class="ic direct">◷</span><span class="t">Hi greeting - DeepSeek</span><span class="meta">8h</span></div>
+        <div class="th-group"><span>OpenCode sessions</span><span class="rt">OpenCode runtime</span></div>
+        <div class="th-item" data-open="opencode:Fix build pipeline"><span class="ic opencode">⌘</span><span class="t">Fix build pipeline</span><span class="meta">5m</span></div>
+        <div class="th-item" data-open="opencode:Add auth tests"><span class="ic opencode">⌘</span><span class="t">Add auth tests</span><span class="meta">1h</span></div>
+        <div class="th-group"><span>Projects</span></div>
+        <div class="th-item"><span class="ic" style="color:#a8701c">▣</span><span class="t">ai-chat-app</span><span class="meta">3</span></div>
+        <div class="th-item"><span class="ic" style="color:#4a6fa5">▣</span><span class="t">MarketHub</span><span class="meta">2</span></div>
       </div>
       <div class="th-bottom">
         <div class="bi" title="Scheduler">◴</div>
@@ -240,299 +271,287 @@
       </div>
     </aside>
 
-    <!-- PERMANENT REGION 2: PRIMARY CHAT -->
-    <section class="primary">
-      <div class="pstrip">
-        <div class="tab on"><span class="ic">&lt;/&gt;</span><span class="ttl">Refactor Auth API</span></div>
-        <div class="add" title="New chat">+</div>
-        <div class="spacer"></div>
-        <button class="act" title="More">⋯</button>
-      </div>
-      <div class="ctxbar"><span class="badge">ai-chat-app</span> Refactor Auth API · Direct</div>
-      <div class="chat-scroll"><div class="chat-inner">
-        <div class="day">Today</div>
-        <div class="msg"><div class="av u">Y</div><div class="msg-body"><div class="msg-name">You</div><div class="msg-text"><p>Can you refactor the login flow to use the new session helper?</p></div></div></div>
-        <div class="msg"><div class="av a">✦</div><div class="msg-body"><div class="msg-name">Assistant · agnes-3.0-flash</div><div class="msg-text"><p>I found three places to update. Here's the main change:</p>
-          <div class="code" style="border-radius:var(--radius);background:var(--code);margin:11px 0"><div style="padding:7px 12px;font-size:10.5px;color:var(--text-3);display:flex;justify-content:space-between"><span>src/lib/session.ts</span><span>READ ONLY</span></div><pre style="margin:0;padding:0 12px 12px;font-family:var(--mono);font-size:11px;line-height:1.65"><span class="kw">export async function</span> <span class="fn">login</span>(email: <span class="kw">string</span>) {
-  <span class="kw">const</span> session = <span class="kw">await</span> createSession({ email })
-  <span class="kw">if</span> (!session) <span class="kw">throw new</span> Error(<span class="str">"Invalid credentials"</span>)
-  <span class="kw">return</span> session
-}</pre></div>
-          <p>2 files changed · tests passing · no schema or dependency changes.</p>
-        </div></div></div>
-      </div></div>
-      <div class="composer-wrap"><div class="composer">
-        <div class="ph">Send a message… <span class="hint">(Enter to send)</span></div>
-        <div class="composer-bar">
-          <div class="c-ic" title="Attach"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></div>
-          <div class="c-tools">
-            <span class="chip">◐ Medium</span><span class="chip">◉ agnes-3.0-flash</span>
-            <span class="c-ic disabled" title="Voice not available"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg></span>
-            <div class="send">↑</div>
-          </div>
-        </div>
-      </div></div>
-    </section>
+    <!-- PERMANENT REGION 2: PRIMARY CHAT (a position, not a runtime) -->
+    <section class="primary" id="primary"></section>
 
-    <!-- ADDITIONAL WORKSPACE REGION (rendered by JS) -->
+    <!-- OPTIONAL GENERIC PANELS -->
     <div class="workspace" id="workspace"></div>
   </div>
 
-  <div class="statusbar"><span>● Local · 3015</span><span id="layout-label">Layout: Default</span></div>
+  <div class="statusbar">
+    <div class="left"><span>● Local · 3015</span></div>
+    <div class="right"><span id="layout-label">Default</span><span>agnes · agnes-3.0-flash</span></div>
+  </div>
 </div>
 
-<!-- PROTOTYPE CONTROLS -->
-<div class="switcher" id="switcher">
-  <button class="on" data-scenario="default">Default</button>
-  <button data-scenario="twochat">Two chats</button>
-  <button data-scenario="files">Files</button>
-  <button data-scenario="browser">Browser</button>
-  <button data-scenario="dev">Development</button>
+<div class="proto" id="proto">
+  <span class="lbl">Prototype</span><span class="sep"></span>
+  <button data-scenario="default" class="on">Default</button>
+  <button data-scenario="primary-opencode">Primary: OpenCode</button>
+  <button data-scenario="two-direct">Two Direct</button>
+  <button data-scenario="two-opencode">Two OpenCode</button>
+  <button data-scenario="mixed">Mixed</button>
+  <button data-scenario="chat-files">Chat + Files</button>
+  <button data-scenario="chat-browser">Chat + Browser</button>
+  <span class="sep"></span>
+  <button onclick="saveLayout()" title="Save arrangement">Save</button>
+  <button onclick="restoreLayout()" title="Restore arrangement">Restore</button>
 </div>
-<div class="proto-tip">Click a scenario above · use + to add panels · drag the divider to resize · ⋮ to split · × to close</div>
-<div class="addmenu" id="addmenu"></div>
+<div class="menu" id="menu"></div>
 
 <script>
-/* ================= STATE ================= */
-const TYPES = {
-  chat:      { label:'Chat',          icon:'◷' },
-  files:     { label:'File Tree',     icon:'▤' },
-  viewer:    { label:'File Viewer',   icon:'▣' },
-  browser:   { label:'Browser',       icon:'◈' },
-  editor:    { label:'Code Editor',   icon:'⌘' },
-  assistant: { label:'AI Assistant',  icon:'✦' },
+/* ============================================================
+   ARCHITECTURE
+   - Primary Chat is a permanent POSITION holding tabs.
+   - Optional panels are GENERIC containers holding tabs.
+   - A tab has a content type (direct | opencode | files | viewer |
+     editor | browser) and an identity (conversation/session id).
+   - The runtime belongs to the tab content, never to the panel.
+   ============================================================ */
+const CONTENT = {
+  direct:   { label:'Direct Chat',    icon:'◷', runtime:'Direct',   accent:'var(--accent)' },
+  opencode: { label:'OpenCode Chat',  icon:'⌘', runtime:'OpenCode', accent:'var(--info)' },
+  files:    { label:'File Tree',      icon:'▤' },
+  viewer:   { label:'File Viewer',    icon:'▣' },
+  editor:   { label:'Code Editor',    icon:'✎' },
+  browser:  { label:'Browser',        icon:'◈' },
 };
-const SCENARIOS = {
-  default: { label:'Default',     panels:[] },
-  twochat: { label:'Two chats',   panels:[{type:'chat', title:'Q4 Marketing Plan'}] },
-  files:   { label:'Files',       panels:[{type:'files'},{type:'viewer'}] },
-  browser: { label:'Browser',     panels:[{type:'browser'}] },
-  dev:     { label:'Development', panels:[{type:'files'},{type:'editor'},{type:'assistant'}] },
-};
-let uid = 0;
-let panels = [];
-let scenario = 'default';
+const CHAT_TYPES = ['direct','opencode'];
 
-function makePanel(type, title){
-  const t = TYPES[type];
-  return {
-    id: 'p'+(++uid),
-    type,
-    tabs: [{ id:'t'+(++uid), title: title || t.label, type }],
-    active: 0,
-    width: type==='files' ? 240 : type==='editor' ? 420 : 360,
-  };
+let seq=0; const nid=p=>p+(++seq);
+function makeTab(type,title,identity){
+  return { id:nid('t'), type, title:title||CONTENT[type].label, identity:identity||nid('id') };
 }
 
-/* ================= CONTENT RENDERERS ================= */
-function contentFor(type){
-  switch(type){
-    case 'chat': return `
-      <div class="ctxbar"><span class="badge">MarketHub</span> Q4 Marketing Plan · Direct</div>
-      <div class="chat-scroll"><div class="chat-inner" style="max-width:none;padding:0 14px">
-        <div class="msg"><div class="av u">Y</div><div class="msg-body"><div class="msg-name">You</div><div class="msg-text"><p>Summarize the Q4 marketing plan.</p></div></div></div>
-        <div class="msg"><div class="av a">✦</div><div class="msg-body"><div class="msg-name">Assistant</div><div class="msg-text"><p>Here are the key milestones and owners for Q4.</p></div></div></div>
-      </div></div>
-      <div class="composer-wrap" style="padding:0 12px 12px"><div class="composer" style="max-width:none">
-        <div class="ph">Send a message…</div>
-        <div class="composer-bar"><div class="c-tools"><span class="chip">◐ Medium</span><span class="chip">◉ agnes-3.0-flash</span></div><div class="send">↑</div></div>
-      </div></div>`;
-    case 'files': return `
-      <div class="ctxbar"><span class="badge">ai-chat-app</span> Project files</div>
-      <div class="tree">
-        <div class="r">▾ &nbsp; src</div>
-        <div class="r i1">▾ &nbsp; lib</div>
-        <div class="r i2"><span class="fi">◻</span> session.ts</div>
-        <div class="r i2"><span class="fi">◻</span> auth.ts</div>
-        <div class="r i1">▾ &nbsp; routes</div>
-        <div class="r i2"><span class="fi">◻</span> chat.ts</div>
-        <div class="r i1"><span class="fi">◻</span> index.ts</div>
-        <div class="r">▸ &nbsp; public</div>
-        <div class="r"><span class="fi">◈</span> package.json</div>
-        <div class="r"><span class="fi">◈</span> tsconfig.json</div>
-      </div>`;
-    case 'viewer': return `
-      <div class="filehead"><span>src/lib/session.ts</span><span>READ ONLY</span></div>
-      <div class="code">
-        <div class="ln"><span class="n">1</span><span class="kw">import</span> { createSession } <span class="kw">from</span> <span class="str">"@/lib/session"</span></div>
-        <div class="ln"><span class="n">2</span></div>
-        <div class="ln"><span class="n">3</span><span class="kw">export async function</span> <span class="fn">login</span>(email: <span class="kw">string</span>) {</div>
-        <div class="ln"><span class="n">4</span>  <span class="kw">const</span> session = <span class="kw">await</span> createSession({ email })</div>
-        <div class="ln"><span class="n">5</span>  <span class="kw">if</span> (!session) <span class="kw">throw new</span> Error(<span class="str">"Invalid credentials"</span>)</div>
-        <div class="ln"><span class="n">6</span>  <span class="kw">return</span> session</div>
-        <div class="ln"><span class="n">7</span>}</div>
-      </div>`;
-    case 'editor': return `
-      <div class="filehead"><span>src/lib/session.ts</span><span style="color:var(--accent)">● unsaved</span></div>
-      <div class="code">
-        <div class="ln"><span class="n">1</span><span class="kw">import</span> { createSession } <span class="kw">from</span> <span class="str">"@/lib/session"</span></div>
-        <div class="ln"><span class="n">2</span></div>
-        <div class="ln"><span class="n">3</span><span class="kw">export async function</span> <span class="fn">login</span>(email: <span class="kw">string</span>) {</div>
-        <div class="ln"><span class="n">4</span>  <span class="kw">const</span> session = <span class="kw">await</span> createSession({ email })</div>
-        <div class="ln"><span class="n">5</span>  <span class="kw">if</span> (!session) <span class="kw">throw new</span> Error(<span class="str">"Invalid credentials"</span>)</div>
-        <div class="ln"><span class="n">6</span>  <span class="kw">return</span> session</div>
-        <div class="ln"><span class="n">7</span>}</div>
-      </div>`;
-    case 'browser': return `
-      <div class="browser">
-        <div class="bbar">
-          <div class="nav">‹</div><div class="nav">›</div><div class="nav">⟳</div>
-          <div class="url">🔒 docs.example.com/guide</div>
-        </div>
-        <div class="bpage">
-          <h3>Getting Started</h3>
-          <p>This is a conceptual browser panel. In the web build it would be constrained by browser framing rules; in the Tauri desktop build it could use a native webview. A browser tool's text result is different from an interactive browser panel.</p>
-          <div class="bcard"><strong>Why this matters</strong><p style="margin:6px 0 0">The workspace can host a real page alongside the conversation, without leaving TBAi.</p></div>
-        </div>
-      </div>`;
-    case 'assistant': return `
-      <div class="assistant">
-        <div class="ctxbar"><span class="badge">OpenCode</span> Code assistant · agent</div>
-        <div class="chat-scroll"><div class="chat-inner" style="max-width:none;padding:0 14px">
-          <div class="msg"><div class="av a">✦</div><div class="msg-body"><div class="msg-name">Assistant · OpenCode</div><div class="msg-text"><p>I updated the session helper and its callers. Run the tests to verify.</p></div></div></div>
-        </div></div>
-        <div class="composer-wrap" style="padding:0 12px 12px"><div class="composer" style="max-width:none">
-          <div class="ph">Ask the agent…</div>
-          <div class="composer-bar"><div class="c-tools"><span class="chip">◈ Agent</span><span class="chip">◉ model</span></div><div class="send">↑</div></div>
-        </div></div>
-      </div>`;
+/* Primary Chat tabs (permanent position) */
+let primaryTabs=[makeTab('direct','Refactor Auth API','conv-refactor')];
+let primaryActive=0;
+
+/* Optional panel tree */
+let layout=null;
+function panel(tab){return {kind:'panel',id:nid('p'),tabs:[tab],active:0,size:1};}
+function split(dir,children){return {kind:'split',id:nid('s'),dir,children,sizes:children.map(()=>1)};}
+
+/* Scenarios are EXAMPLES, not fixed layouts. They just seed tabs. */
+const SCENARIOS={
+  default:        {label:'Default', build:()=>({primary:[makeTab('direct','Refactor Auth API','conv-refactor')],panels:null})},
+  'primary-opencode':{label:'Primary: OpenCode', build:()=>({primary:[makeTab('opencode','Fix build pipeline','sess-fix')],panels:null})},
+  'two-direct':   {label:'Two Direct', build:()=>({primary:[makeTab('direct','Refactor Auth API','conv-refactor')],panels:split('row',[panel(makeTab('direct','Q4 Marketing Plan','conv-q4'))])})},
+  'two-opencode': {label:'Two OpenCode', build:()=>({primary:[makeTab('opencode','Fix build pipeline','sess-fix')],panels:split('row',[panel(makeTab('opencode','Add auth tests','sess-auth'))])})},
+  mixed:          {label:'Mixed runtimes', build:()=>({primary:[makeTab('direct','Refactor Auth API','conv-refactor')],panels:split('row',[panel(makeTab('opencode','Fix build pipeline','sess-fix'))])})},
+  'chat-files':   {label:'Chat + Files', build:()=>({primary:[makeTab('direct','Refactor Auth API','conv-refactor')],panels:split('row',[panel(makeTab('files')),panel(makeTab('viewer'))])})},
+  'chat-browser': {label:'Chat + Browser', build:()=>({primary:[makeTab('direct','Refactor Auth API','conv-refactor')],panels:split('row',[panel(makeTab('browser'))])})},
+};
+const STORAGE_KEY='tbai:workspace-prototype-layout';
+let scenario='default';
+
+/* ---------- tree helpers ---------- */
+function findPanel(n,id){if(!n)return null;if(n.kind==='panel')return n.id===id?n:null;for(const c of n.children){const r=findPanel(c,id);if(r)return r;}return null;}
+function findSplit(n,id){if(!n||n.kind!=='split')return null;if(n.id===id)return n;for(const c of n.children){const r=findSplit(c,id);if(r)return r;}return null;}
+function countPanels(n){if(!n)return 0;if(n.kind==='panel')return 1;return n.children.reduce((a,c)=>a+countPanels(c),0);}
+function removeNode(n,id){if(!n||n.kind!=='split')return false;const i=n.children.findIndex(c=>c.id===id);if(i>=0){n.children.splice(i,1);n.sizes.splice(i,1);normalize(n);return true;}for(const c of n.children)if(removeNode(c,id))return true;return false;}
+function normalize(n){if(n.kind!=='split')return;n.children.forEach(normalize);if(n.children.length===1){const o=n.children[0];o.size=n.size;Object.keys(n).forEach(k=>delete n[k]);Object.assign(n,o);}}
+function replaceNode(n,id,r){if(!n||n.kind!=='split')return false;const i=n.children.findIndex(c=>c.id===id);if(i>=0){n.children[i]=r;return true;}for(const c of n.children)if(replaceNode(c,id,r))return true;return false;}
+function appendPanel(tab){const p=panel(tab);if(!layout){layout=split('row',[p]);}else if(layout.kind==='split'&&layout.dir==='row'){layout.children.push(p);layout.sizes.push(1);}else{layout=split('row',[layout,p]);}}
+
+/* ---------- content renderers ---------- */
+function chatContent(tab){
+  const c=CONTENT[tab.type], isCode=tab.type==='opencode';
+  const avClass=isCode?'code':'a';
+  const name=isCode?'Assistant · OpenCode':'Assistant · agnes-3.0-flash';
+  const chips=isCode
+    ? '<span class="chip opencode">⌘ Agent</span><span class="chip">◉ opencode-model</span>'
+    : '<span class="chip">◐ Medium</span><span class="chip">◉ agnes-3.0-flash</span>';
+  const body=isCode
+    ? `<p>I updated the session helper and its callers. Run the tests to verify.</p>
+       <div class="tool"><span class="badge">✓ DONE</span><span class="tn">edit · src/lib/session.ts</span><span class="tm">0.3s</span></div>`
+    : `<p>I found three places to update. Here's the main change:</p>
+       <div class="code"><div class="code-h"><span>src/lib/session.ts</span><span>READ ONLY</span></div><pre><span class="kw">import</span> { <span class="fn">createSession</span> } <span class="kw">from</span> <span class="str">"@/lib/session"</span>
+
+<span class="kw">export async function</span> <span class="fn">login</span>(email: <span class="kw">string</span>) {
+  <span class="kw">const</span> session = <span class="kw">await</span> <span class="fn">createSession</span>({ email })
+  <span class="kw">if</span> (!session) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">"Invalid credentials"</span>)
+  <span class="kw">return</span> session
+}</pre></div>
+       <div class="tool"><span class="badge">✓ DONE</span><span class="tn">read_file · src/lib/session.ts</span><span class="tm">0.2s</span></div>
+       <p>2 files changed · tests passing · no schema or dependency changes.</p>`;
+  return `
+    <div class="ctxbar"><span class="badge ${tab.type}">${c.runtime}</span> ${tab.title} <span class="sep">·</span> ${tab.identity}</div>
+    <div class="chat-scroll"><div class="chat-inner">
+      <div class="day">Today</div>
+      <div class="msg"><div class="av u">Y</div><div class="msg-body"><div class="msg-name">You</div><div class="msg-text"><p>${isCode?'Refactor the login flow and add tests.':'Can you refactor the login flow to use the new session helper and show me the change before applying it?'}</p></div></div></div>
+      <div class="msg"><div class="av ${avClass}">${isCode?'⌘':'✦'}</div><div class="msg-body"><div class="msg-name">${name}</div><div class="msg-text">${body}</div></div></div>
+    </div></div>
+    <div class="composer-wrap"><div class="composer">
+      <div class="ph">Send a message… <span style="opacity:.6;font-size:11px">(Enter to send)</span></div>
+      <div class="composer-bar">
+        <div class="c-ic" title="Attach"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></div>
+        <div class="c-tools">${chips}<div class="send">↑</div></div>
+      </div>
+    </div></div>`;
+}
+function contentFor(tab){
+  if(CHAT_TYPES.includes(tab.type)) return chatContent(tab);
+  switch(tab.type){
+    case 'files':return `<div class="ctxbar"><span class="badge direct">ai-chat-app</span> Project files</div><div class="tree">
+      <div class="r">▾ &nbsp; src</div><div class="r i1">▾ &nbsp; lib</div>
+      <div class="r i2 sel"><span class="fi">◻</span> session.ts</div><div class="r i2"><span class="fi">◻</span> auth.ts</div>
+      <div class="r i1">▾ &nbsp; routes</div><div class="r i2"><span class="fi">◻</span> chat.ts</div>
+      <div class="r i1"><span class="fi">◻</span> index.ts</div><div class="r">▸ &nbsp; public</div>
+      <div class="r"><span class="fi">◈</span> package.json</div></div>`;
+    case 'viewer':case 'editor':return `<div class="filehead"><span class="path">src / lib / session.ts</span><span>${tab.type==='editor'?'<span style="color:var(--accent)">● unsaved</span>':'READ ONLY'}</span></div><div class="code-lines">
+      <div class="ln"><span class="n">1</span><span class="kw">import</span> { createSession } <span class="kw">from</span> <span class="str">"@/lib/session"</span></div>
+      <div class="ln"><span class="n">2</span></div>
+      <div class="ln"><span class="n">3</span><span class="kw">export async function</span> <span class="fn">login</span>(email: <span class="kw">string</span>) {</div>
+      <div class="ln"><span class="n">4</span>  <span class="kw">const</span> session = <span class="kw">await</span> createSession({ email })</div>
+      <div class="ln"><span class="n">5</span>  <span class="kw">if</span> (!session) <span class="kw">throw new</span> Error(<span class="str">"Invalid credentials"</span>)</div>
+      <div class="ln"><span class="n">6</span>  <span class="kw">return</span> session</div>
+      <div class="ln"><span class="n">7</span>}</div></div>`;
+    case 'browser':return `<div class="browser"><div class="bbar"><div class="nav">‹</div><div class="nav">›</div><div class="nav">⟳</div><div class="url">🔒 docs.example.com/guide/getting-started</div></div>
+      <div class="bpage"><h2>Getting Started</h2><p>Build production-ready retrieval-augmented generation with a step-by-step guide.</p>
+      <div class="bcard"><h4>1. Prepare your documents</h4><p>Split source files into chunks and generate embeddings.</p></div>
+      <div class="bcard"><h4>2. Configure retrieval</h4><p>Connect a vector store and tune similarity thresholds.</p></div></div></div>`;
   }
   return '';
 }
 
-/* ================= RENDER ================= */
+/* ---------- tab strip renderer (shared by Primary + panels) ---------- */
+function tabStripHTML(tabs,active,container){
+  return tabs.map((t,i)=>{
+    const c=CONTENT[t.type];
+    return `<div class="ptab ${i===active?'on':''}" style="--tab-accent:${c.accent||'var(--accent)'}" draggable="true" data-container="${container}" data-tab="${i}" onclick="activateTab('${container}',${i})">
+      <span class="ic">${c.icon}</span><span class="ttl">${t.title}</span><span class="x" onclick="event.stopPropagation();closeTab('${container}',${i})">×</span></div>`;
+  }).join('');
+}
+
+/* ---------- render ----------
+   ONE chrome for every chat position. Primary Chat and optional panels are
+   identical containers; only the tab content (and its runtime badge) differs. */
+function panelChromeHTML(tabs,active,container){
+  const t=tabs[active];
+  return `<div class="pstrip">${tabStripHTML(tabs,active,container)}
+    <div class="add" title="New tab" onclick="openMenu(event,'newtab','${container}')">+</div>
+    <div class="spacer"></div><button class="act" title="Panel actions" onclick="openMenu(event,'panelmenu','${container}')">⋯</button></div>
+    <div class="pbody">${t?contentFor(t):''}</div>`;
+}
+function renderPrimary(){
+  document.getElementById('primary').innerHTML=panelChromeHTML(primaryTabs,primaryActive,'primary');
+}
+function renderNode(node){
+  if(node.kind==='panel'){
+    const el=document.createElement('div');el.className='panel';el.dataset.id=node.id;el.style.flex=node.size+' 1 0';
+    el.innerHTML=panelChromeHTML(node.tabs,node.active,node.id);
+    return el;
+  }
+  const el=document.createElement('div');el.className='split '+node.dir;el.dataset.id=node.id;
+  node.children.forEach((c,i)=>{
+    if(i>0){const d=document.createElement('div');d.className=node.dir==='row'?'vdiv':'hdiv';d.dataset.parent=node.id;d.dataset.index=i;el.appendChild(d);}
+    const child=renderNode(c);child.style.flex=node.sizes[i]+' 1 0';el.appendChild(child);
+  });
+  return el;
+}
 function render(){
-  const ws = document.getElementById('workspace');
-  ws.innerHTML = '';
-  panels.forEach((p, i) => {
-    if(i>0){
-      const d = document.createElement('div');
-      d.className = 'vdiv';
-      d.dataset.index = i;
-      ws.appendChild(d);
-    }
-    const el = document.createElement('div');
-    el.className = 'panel';
-    el.style.width = p.width + 'px';
-    el.dataset.id = p.id;
-
-    const tabs = p.tabs.map((t, ti) => `
-      <div class="ptab ${ti===p.active?'on':''}" draggable="true" data-panel="${p.id}" data-tab="${ti}">
-        <span>${TYPES[t.type].icon}</span><span class="ttl">${t.title}</span><span class="x" onclick="closeTab('${p.id}',${ti})">×</span>
-      </div>`).join('');
-
-    el.innerHTML = `
-      <div class="ptabs">${tabs}<div class="padd" title="Add tab" onclick="openAddMenu(event,'${p.id}')">+</div></div>
-      <div class="pctx"><span class="tag">ai-chat-app</span> ${TYPES[p.tabs[p.active].type].label}</div>
-      <div class="pbody">${contentFor(p.tabs[p.active].type)}</div>
-      <div class="pact">
-        <button title="Split panel" onclick="splitPanel('${p.id}')">⧉</button>
-        <button title="Close panel" onclick="closePanel('${p.id}')">×</button>
-      </div>`;
-    ws.appendChild(el);
-  });
-  bindResize();
-  bindTabDrag();
-  document.getElementById('layout-label').textContent = 'Layout: ' + SCENARIOS[scenario].label + (panels.length? ' + '+panels.length+' panel'+(panels.length>1?'s':''):'');
+  renderPrimary();
+  const ws=document.getElementById('workspace');ws.innerHTML='';
+  if(layout&&countPanels(layout)>0)ws.appendChild(renderNode(layout));
+  bindResize();bindTabDrag();
+  document.getElementById('layout-label').textContent=SCENARIOS[scenario]?SCENARIOS[scenario].label:'Custom arrangement';
 }
 
-/* ================= INTERACTIONS ================= */
-function loadScenario(name){
-  scenario = name;
-  panels = SCENARIOS[name].panels.map(p => makePanel(p.type, p.title));
-  document.querySelectorAll('#switcher button').forEach(b => b.classList.toggle('on', b.dataset.scenario===name));
+/* ---------- interactions ---------- */
+function getTabs(container){return container==='primary'?primaryTabs:findPanel(layout,container)?.tabs;}
+function getActive(container){return container==='primary'?primaryActive:findPanel(layout,container)?.active;}
+function setActive(container,i){if(container==='primary')primaryActive=i;else{const p=findPanel(layout,container);if(p)p.active=i;}}
+function activateTab(container,i){setActive(container,i);render();}
+function closeTab(container,i){
+  if(container==='primary'){if(primaryTabs.length<=1)return;primaryTabs.splice(i,1);if(primaryActive>=primaryTabs.length)primaryActive=primaryTabs.length-1;}
+  else{const p=findPanel(layout,container);if(!p)return;p.tabs.splice(i,1);if(!p.tabs.length){closePanel(container);return;}if(p.active>=p.tabs.length)p.active=p.tabs.length-1;}
   render();
 }
-function closePanel(id){ panels = panels.filter(p=>p.id!==id); render(); }
-function closeTab(pid, ti){
-  const p = panels.find(x=>x.id===pid); if(!p) return;
-  p.tabs.splice(ti,1);
-  if(p.tabs.length===0){ closePanel(pid); return; }
-  if(p.active>=p.tabs.length) p.active=p.tabs.length-1;
-  render();
+function closePanel(id){if(layout&&layout.kind==='panel'&&layout.id===id)layout=null;else removeNode(layout,id);if(layout&&layout.kind==='split'&&!layout.children.length)layout=null;render();}
+function addTabTo(container,type){
+  const tab=makeTab(type);
+  if(container==='primary'){primaryTabs.push(tab);primaryActive=primaryTabs.length-1;}
+  else{const p=findPanel(layout,container);if(!p)return;p.tabs.push(tab);p.active=p.tabs.length-1;}
+  closeMenu();render();
 }
-function splitPanel(id){
-  const i = panels.findIndex(p=>p.id===id); if(i<0) return;
-  const src = panels[i];
-  const copy = makePanel(src.tabs[src.active].type, src.tabs[src.active].title+' (copy)');
-  copy.width = Math.max(240, Math.round(src.width/2));
-  src.width = Math.max(240, Math.round(src.width/2));
-  panels.splice(i+1,0,copy);
-  render();
+function addPanel(type){appendPanel(makeTab(type));closeMenu();render();}
+function splitPanel(id,dir){
+  const p=findPanel(layout,id);if(!p)return;
+  const t=p.tabs[p.active];const copy=panel(makeTab(t.type,t.title+' (copy)',t.identity+'-copy'));copy.size=p.size;
+  const s=split(dir,[p,copy]);if(layout&&layout.id===id)layout=s;else replaceNode(layout,id,s);closeMenu();render();
 }
-function openAddMenu(e, pid){
-  e.stopPropagation();
-  const m = document.getElementById('addmenu');
-  m.innerHTML = Object.entries(TYPES).map(([k,v])=>`<div class="mi" onclick="addTab('${pid}','${k}')">${v.icon} &nbsp; ${v.label}</div>`).join('');
-  m.style.left = Math.min(e.clientX, window.innerWidth-190)+'px';
-  m.style.top = Math.min(e.clientY, window.innerHeight-220)+'px';
-  m.classList.add('on');
-  m.dataset.pid = pid;
+function openMenu(e,kind,id){
+  e.stopPropagation();const m=document.getElementById('menu');
+  const chatItems=`<div class="mh">Chat (each keeps its own runtime)</div>
+    <div class="mi" onclick="addTabTo('${id}','direct')">◷ &nbsp; Direct Chat conversation</div>
+    <div class="mi" onclick="addTabTo('${id}','opencode')">⌘ &nbsp; OpenCode Chat session</div>`;
+  const toolItems=`<div class="mh">Tools</div>
+    <div class="mi" onclick="addTabTo('${id}','files')">▤ &nbsp; File Tree</div>
+    <div class="mi" onclick="addTabTo('${id}','viewer')">▣ &nbsp; File Viewer</div>
+    <div class="mi" onclick="addTabTo('${id}','browser')">◈ &nbsp; Browser</div>`;
+  if(kind==='panel')m.innerHTML=`<div class="mh">Open a generic panel</div>`+Object.entries(CONTENT).map(([k,v])=>`<div class="mi" onclick="addPanel('${k}')">${v.icon} &nbsp; ${v.label}</div>`).join('');
+  else if(kind==='newtab')m.innerHTML=chatItems+toolItems;
+  else if(kind==='panelmenu')m.innerHTML=`<div class="mh">Panel actions</div>
+    <div class="mi" onclick="openMenu(event,'panel')">⊞ &nbsp; Open another panel</div>
+    <div class="mi" onclick="splitPanel('${id}','row')">⧉ &nbsp; Split right</div>
+    <div class="mi" onclick="splitPanel('${id}','col')">⧉ &nbsp; Split down</div>
+    ${id!=='primary'?`<div class="mi" onclick="closePanel('${id}')">× &nbsp; Close panel</div>`:''}`;
+  m.style.left=Math.min(e.clientX,window.innerWidth-210)+'px';m.style.top=Math.min(e.clientY,window.innerHeight-260)+'px';m.classList.add('on');
 }
-function addTab(pid, type){
-  const p = panels.find(x=>x.id===pid); if(!p) return;
-  p.tabs.push({ id:'t'+(++uid), title:TYPES[type].label, type });
-  p.active = p.tabs.length-1;
-  document.getElementById('addmenu').classList.remove('on');
-  render();
-}
-document.addEventListener('click', ()=>document.getElementById('addmenu').classList.remove('on'));
+function closeMenu(){document.getElementById('menu').classList.remove('on');}
+document.addEventListener('click',closeMenu);
+function toggleTheme(){const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';}
 
-function toggleTheme(){
-  const r = document.documentElement;
-  r.dataset.theme = r.dataset.theme==='dark' ? 'light' : 'dark';
-}
+/* open a conversation from Chat Threads into Primary Chat */
+document.querySelectorAll('.th-item[data-open]').forEach(it=>it.addEventListener('click',()=>{
+  const [type,...rest]=it.dataset.open.split(':');const title=rest.join(':');
+  primaryTabs=[makeTab(type,title,type+':'+title)];primaryActive=0;scenario='custom';
+  document.querySelectorAll('.proto button[data-scenario]').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.th-item').forEach(x=>x.classList.toggle('on',x===it));
+  render();
+}));
 
-/* resize dividers */
 function bindResize(){
-  document.querySelectorAll('.vdiv').forEach(d=>{
-    d.addEventListener('pointerdown', e=>{
-      e.preventDefault();
-      const idx = +d.dataset.index;
-      const left = panels[idx-1], right = panels[idx];
-      const startX = e.clientX, lw = left.width, rw = right.width;
-      d.classList.add('drag');
-      const move = ev=>{
-        const dx = ev.clientX-startX;
-        left.width = Math.max(220, lw+dx);
-        right.width = Math.max(220, rw-dx);
-        document.querySelectorAll('.panel')[idx-1].style.width = left.width+'px';
-        document.querySelectorAll('.panel')[idx].style.width = right.width+'px';
-      };
-      const up = ()=>{ d.classList.remove('drag'); window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); };
-      window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
-    });
-  });
+  document.querySelectorAll('.vdiv,.hdiv').forEach(d=>d.addEventListener('pointerdown',e=>{
+    e.preventDefault();const pid=d.dataset.parent,idx=+d.dataset.index,node=findSplit(layout,pid);if(!node)return;
+    const a=node.children[idx-1],b=node.children[idx],horiz=node.dir==='row',host=d.parentElement.getBoundingClientRect();
+    const totalPx=(horiz?host.width:host.height)-(node.children.length-1)*5,start=horiz?e.clientX:e.clientY,sa=a.size,sb=b.size,total=sa+sb,minW=(200/totalPx)*total;
+    d.classList.add('drag');
+    const move=ev=>{let dw=((horiz?ev.clientX:ev.clientY)-start)/totalPx*total;dw=Math.max(minW-total+sb,Math.min(sa-minW,dw));a.size=sa+dw;b.size=sb-dw;const sibs=d.parentElement.children;let ci=0;for(let k=0;k<sibs.length;k++){if(sibs[k].classList.contains('vdiv')||sibs[k].classList.contains('hdiv'))continue;if(ci===idx-1)sibs[k].style.flex=a.size+' 1 0';if(ci===idx)sibs[k].style.flex=b.size+' 1 0';ci++;}};
+    const up=()=>{d.classList.remove('drag');window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);};
+    window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);
+  }));
 }
-
-/* drag tabs between panels */
 function bindTabDrag(){
   document.querySelectorAll('.ptab').forEach(tab=>{
-    tab.addEventListener('dragstart', e=>{
-      e.dataTransfer.setData('text/plain', JSON.stringify({panel:tab.dataset.panel, tab:+tab.dataset.tab}));
-    });
+    tab.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',JSON.stringify({container:tab.dataset.container,tab:+tab.dataset.tab}));e.dataTransfer.effectAllowed='move';});
+    tab.addEventListener('dragover',e=>e.preventDefault());
+    tab.addEventListener('drop',e=>{e.preventDefault();let d;try{d=JSON.parse(e.dataTransfer.getData('text/plain'));}catch{return;}moveTab(d,tab.dataset.container,+tab.dataset.tab);});
   });
-  document.querySelectorAll('.ptabs').forEach(strip=>{
-    strip.addEventListener('dragover', e=>e.preventDefault());
-    strip.addEventListener('drop', e=>{
-      e.preventDefault();
-      let data; try{ data=JSON.parse(e.dataTransfer.getData('text/plain')); }catch{ return; }
-      const targetPanel = strip.parentElement.dataset.id;
-      if(data.panel===targetPanel) return;
-      const src = panels.find(p=>p.id===data.panel);
-      const dst = panels.find(p=>p.id===targetPanel);
-      if(!src||!dst) return;
-      const [t] = src.tabs.splice(data.tab,1);
-      if(src.tabs.length===0){ panels = panels.filter(p=>p.id!==src.id); }
-      else if(src.active>=src.tabs.length) src.active=src.tabs.length-1;
-      dst.tabs.push(t); dst.active=dst.tabs.length-1;
-      render();
-    });
-  });
+  document.querySelectorAll('.pstrip').forEach(strip=>strip.addEventListener('drop',e=>{if(e.target.closest('.ptab'))return;e.preventDefault();let d;try{d=JSON.parse(e.dataTransfer.getData('text/plain'));}catch{return;}const c=strip.parentElement.id||strip.parentElement.dataset.id;moveTab(d,c,-1);}));
 }
+function moveTab(d,to,index){
+  const from=d.container;if(from===to)return;
+  const src=getTabs(from);if(!src)return;const dst=getTabs(to);if(!dst)return;
+  const [t]=src.splice(d.tab,1);
+  if(from==='primary'&&!src.length){src.push(makeTab('direct','New chat'));primaryActive=0;}
+  else if(from!=='primary'&&!src.length){closePanel(from);}
+  else if(from==='primary'&&primaryActive>=src.length)primaryActive=src.length-1;
+  else if(from!=='primary'){const p=findPanel(layout,from);if(p&&p.active>=p.tabs.length)p.active=p.tabs.length-1;}
+  if(index<0)dst.push(t);else dst.splice(index,0,t);
+  if(to==='primary')primaryActive=dst.length-1;else{const p=findPanel(layout,to);if(p)p.active=p.tabs.length-1;}
+  render();
+}
+function saveLayout(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify({primaryTabs,primaryActive,layout}));}catch{}}
+function restoreLayout(){try{const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return;const s=JSON.parse(raw);primaryTabs=s.primaryTabs;primaryActive=s.primaryActive;layout=s.layout;scenario='custom';document.querySelectorAll('.proto button[data-scenario]').forEach(b=>b.classList.remove('on'));render();}catch{}}
 
-/* switcher */
-document.querySelectorAll('#switcher button').forEach(b=>b.addEventListener('click',()=>loadScenario(b.dataset.scenario)));
+function loadScenario(name){
+  scenario=name;seq=0;const s=SCENARIOS[name].build();primaryTabs=s.primary;primaryActive=0;layout=s.panels;
+  document.querySelectorAll('.proto button[data-scenario]').forEach(b=>b.classList.toggle('on',b.dataset.scenario===name));
+  render();
+}
+document.querySelectorAll('.proto button[data-scenario]').forEach(b=>b.addEventListener('click',()=>loadScenario(b.dataset.scenario)));
 loadScenario('default');
 </script>
 </body>

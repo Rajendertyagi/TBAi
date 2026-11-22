@@ -21,55 +21,53 @@
  */
 
 import { logger } from "./logger";
-import { startOperation, type OperationHandle } from "./operation";
+import { currentOperationId, endOperation, startOperation } from "./operation";
 
-/** The send whose responses are currently in flight, if any. */
-let activeSendOperation: OperationHandle | null = null;
+/**
+ * Direct sends are tracked by conversation/thread id, never by one global
+ * slot. Two chats sending concurrently keep independent operation ids; a late
+ * settle from chat A cannot end chat B's operation. The scope registry lives
+ * in `operation.ts`; this module owns the send-specific semantics and logging.
+ */
 
-/** Mint the operation for a fresh logical send. Returns its id. */
-export function beginSendOperation(fields: Record<string, unknown>): string {
-  activeSendOperation?.end("superseded");
-  const op = startOperation("chat.send");
-  activeSendOperation = op;
-  logger.info("chat", "send.start", fields);
+/** Mint the operation for a fresh logical send in `threadId`. Returns its id. */
+export function beginSendOperation(threadId: string, fields: Record<string, unknown>): string {
+  endOperation(threadId, "superseded");
+  const op = startOperation("chat.send", threadId);
+  logger.info("chat", "send.start", { threadId, operationId: op.id, ...fields });
   return op.id;
 }
 
 /**
  * Re-open the SAME operation for a continuation of one logical send (a tool
- * result or an approval resend). Without this the id would be lost as soon as
- * the first response settled, leaving the tool/approval half of the turn
- * uncorrelated.
+ * result or an approval resend) in `threadId`. Without this the id would be
+ * lost as soon as the first response settled, leaving the tool/approval half
+ * of the turn uncorrelated.
  */
-export function attachSendOperation(operationId: string): void {
-  if (activeSendOperation?.id === operationId) return;
-  activeSendOperation?.end("superseded");
-  activeSendOperation = startOperation("chat.send", operationId);
+export function attachSendOperation(threadId: string, operationId: string): void {
+  if (currentOperationId(threadId) === operationId) return;
+  endOperation(threadId, "superseded");
+  startOperation("chat.send", threadId, operationId);
 }
 
 /**
- * End the send operation. `expectedId` guards the race that matters: a
- * SUPERSEDED response settling late must not end the operation that replaced
- * it. Omit it only for a caller that means "end whatever is current".
+ * End the send operation for `threadId`. `expectedId` guards the race that
+ * matters: a SUPERSEDED response settling late must not end the operation that
+ * replaced it. Only the matching scope's operation is ended.
  */
-export function endSendOperation(outcome: string, expectedId?: string): void {
-  const op = activeSendOperation;
-  if (!op) return;
-  if (expectedId !== undefined && op.id !== expectedId) return;
-  activeSendOperation = null;
-  // Logged BEFORE end() so the line still inherits the operation id.
-  logger.info("chat", "send.stream_end", { outcome });
-  op.end(outcome);
+export function endSendOperation(threadId: string, outcome: string, expectedId?: string): void {
+  const id = endOperation(threadId, outcome, expectedId);
+  if (id) logger.info("chat", "send.stream_end", { threadId, operationId: id, outcome });
 }
 
-/** The active send's id, or undefined. Diagnostics and tests. */
-export function activeSendOperationId(): string | undefined {
-  return activeSendOperation?.id;
+/** The active send's id for a thread, or undefined. Diagnostics and tests. */
+export function activeSendOperationId(threadId?: string): string | undefined {
+  return currentOperationId(threadId);
 }
 
-/** Test-only reset. */
+/** Test-only reset (the scope registry is cleared by resetOperationsForTests). */
 export function resetSendOperationForTests(): void {
-  activeSendOperation = null;
+  // No module-local send state remains; operation.ts owns the scope registry.
 }
 
 /**
