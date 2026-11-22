@@ -21,6 +21,7 @@ import {
 import {
   attachSendOperation,
   beginSendOperation,
+  createFinishPredicate,
   endSendOperation,
   observeBodySettled,
 } from "./lib/send-operation";
@@ -106,45 +107,11 @@ export class OpencodeDraftRedirectError extends Error {
   }
 }
 
-/** Detects terminal stream markers so Stop / errors / natural finish clear the
- *  stored resume id (preventing a reload from resuming a dead stream, which
- *  would 404 against the server's store). Markers match raw SSE text only —
- *  message content is JSON-escaped, so user/model text can never trip them. */
-const ABORT_MARKER = '"type":"abort"';
-const FINISH_MARKER = '"type":"finish"';
-const ERROR_MARKER = '"type":"error"';
-
-// The send operation's lifetime, its lifecycle events, and the guaranteed
-// release live in `lib/send-operation.ts` (extracted so the rules are testable
-// without a DOM). This file only wires them: a fresh logical send opens the
-// operation, a continuation re-opens the same one, and the response body
-// settling ends it.
-
-function makeIsFinishEvent(threadId: string): (chunk: Uint8Array, accumulator: string) => boolean {
-  let sawAbort = false;
-  let reported = false;
-  const report = (marker: string) => {
-    if (reported) return;
-    reported = true;
-    endSendOperation(threadId, marker);
-  };
-  return (_chunk, accumulator) => {
-    if (!sawAbort && accumulator.includes(ABORT_MARKER)) {
-      sawAbort = true;
-      report("abort");
-      return true;
-    }
-    if (accumulator.includes(FINISH_MARKER)) {
-      report("finish");
-      return true;
-    }
-    if (accumulator.includes(ERROR_MARKER)) {
-      report("error");
-      return true;
-    }
-    return false;
-  };
-}
+// The send operation's lifetime, its lifecycle events, the finish predicate,
+// and the guaranteed release live in `lib/send-operation.ts` (extracted so the
+// rules are testable without a DOM). This file only wires them: a fresh logical
+// send opens the operation, a continuation re-opens the same one, and the
+// response body settling ends it.
 
 function diagnosticFetch(
   getThreadListItem: () => { remoteId?: string; id?: string } | undefined,
@@ -192,7 +159,11 @@ function diagnosticFetch(
         threadId,
         operationId,
       });
-      if (!res.body) return res;
+      if (!res.body) {
+        // No stream to settle: release the operation with its captured id.
+        endSendOperation(threadId, "no-body", operationId);
+        return res;
+      }
       return new Response(
         observeBodySettled(res.body, () =>
           endSendOperation(threadId, "stream-settled", operationId),
@@ -354,7 +325,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
         resumable: {
           storage,
           resumeApi: (streamId) => resolveApiUrl(`/api/chat/resume/${streamId}`),
-          isFinishEvent: makeIsFinishEvent(activeConversationId ?? UNKNOWN_THREAD_KEY),
+          isFinishEvent: createFinishPredicate(),
         },
         prepareSendMessagesRequest: async ({
           messages,
@@ -474,7 +445,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
           };
         },
       }),
-    [aui, storage, activeConversationId],
+    [aui, storage],
   );
 
   return useChatRuntime({
@@ -512,15 +483,24 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     onError: (error) => {
       const kind = classifyChatError(error);
       const threadId = activeConversationId ?? UNKNOWN_THREAD_KEY;
-      // Capture the id BEFORE ending so this failure line stays correlated —
-      // scoped operations no longer populate the logger's unscoped fallback.
+      // Capture the id for the log line BEFORE the request-boundary settle can
+      // clear it — scoped operations no longer populate the logger's unscoped
+      // fallback. Do NOT end the operation here: `diagnosticFetch`'s
+      // `observeBodySettled` ends it with the id captured at request time on
+      // every path that reaches the fetch (body end, error, cancel, no body,
+      // failed fetch). Ending here would re-read the CURRENT scope id, so a
+      // late error from a superseded send could end the operation that replaced
+      // it. A failure strictly before the fetch can leave the op current, but
+      // the next send supersedes it and no other request reads this scope in
+      // the gap — so ending here would trade a benign stale id for a real
+      // mis-association.
+      const failedOperationId = currentOperationId(threadId);
       logger.warn("chat", "send.failed", {
         kind,
         errorType: error instanceof Error ? error.name : typeof error,
         threadId,
-        operationId: currentOperationId(threadId),
+        operationId: failedOperationId,
       });
-      endSendOperation(threadId, "failed");
       // Dead-run recognition (Phase 3). This is the only live signal that a run
       // died: `makeRequest` never rejects, so `onResumeError` is unreachable,
       // while a failed reconnect (`ai/dist/index.js:19176`) and an errored replayed

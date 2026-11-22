@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppendMessage } from "@assistant-ui/react";
 import { attachV2PromptMessageId } from "./v2ThreadController";
 import { useAuiState } from "@assistant-ui/react";
@@ -48,13 +48,13 @@ export function isSessionThreadBound(
 export type FirstPromptHandoffOutcome = "skipped" | "none" | "sent" | "failed";
 
 /**
- * The handoff as ONE operation.
+ * The handoff as ONE operation, bounded to the FIRST run it starts.
  *
- * Deliberately NOT ended when the prompt is accepted: the accepted prompt is
- * what triggers the session's first run, so the requests that follow (session
- * bootstrap, prompt dispatch, SSE) belong to the same user action. It is ended
- * when the view that owns it goes away, which bounds it without pretending the
- * run is over the moment the text is handed over.
+ * It stays active through the first run's requests (bootstrap, dispatch, SSE)
+ * and is ended as soon as that run settles (isRunning true → false). It must
+ * NOT stay active until unmount: `v2Client` attaches the session's current
+ * operation id to every request, so a long-lived handoff id would be inherited
+ * by later, unrelated prompts in the same session.
  */
 const handoffOperations = new Map<string, OperationHandle>();
 
@@ -184,6 +184,17 @@ export function FirstPromptHandoff({
   const boundSessionId = useAuiState(
     (s) => s.threadListItem.externalId ?? s.threadListItem.remoteId,
   );
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  // The watcher is armed by STATE, not a ref: a ref write does not re-render,
+  // so a watcher reading only refs never re-evaluates `isRunning` after dispatch
+  // and misses the true→false settle (the original defect). The state carries
+  // the session id so a session switch re-arms with a fresh value (a boolean
+  // would stay `true` and skip the re-render), and stale state from a previous
+  // session cannot end the new session's just-started operation.
+  const [armedSession, setArmedSession] = useState<string | null>(null);
+  const runObserved = useRef(false);
+  const currentSessionRef = useRef(sessionId);
+  currentSessionRef.current = sessionId;
 
   useEffect(() => {
     if (boundSessionId !== sessionId) return;
@@ -193,12 +204,32 @@ export function FirstPromptHandoff({
       boundSessionId: boundSessionId ?? undefined,
       append: (text) => runtime.thread.append(text),
       sendWithId,
+    }).then((outcome) => {
+      if (outcome !== "sent") return;
+      // A dispatch from a session we have since left must not arm the watcher.
+      if (currentSessionRef.current !== sessionId) return;
+      runObserved.current = false;
+      setArmedSession(sessionId);
     });
   }, [runtime, sendWithId, boundSessionId, conversationId, sessionId]);
 
-  // Bound the handoff operation to the view that owns it, so a run it started
-  // stops inheriting the operation once the session surface is gone. The cleanup
-  // ends the operation for THIS session, and re-runs when the session changes.
+  // End the handoff operation when the first run it started settles, so later
+  // prompts in the same session do not inherit its id. `armedSession` is a
+  // dependency so arming re-runs the watcher with the CURRENT isRunning value.
+  useEffect(() => {
+    if (armedSession !== sessionId) return;
+    if (isRunning) {
+      runObserved.current = true;
+      return;
+    }
+    if (runObserved.current) {
+      setArmedSession(null);
+      endHandoffOperation(sessionId, "first-run-complete");
+    }
+  }, [isRunning, sessionId, armedSession]);
+
+  // Safety net: if the view goes away before the run settles, end the operation
+  // for THIS session so it cannot outlive its owner.
   useEffect(() => () => endHandoffOperation(sessionId, "view-unmounted"), [sessionId]);
 
   return null;

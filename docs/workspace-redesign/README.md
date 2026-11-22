@@ -2,13 +2,13 @@
 
 **This is the canonical handoff document and current source of truth.** A future agent with no access to the previous chat must read this file first.
 
-## Current status (2026-11-21, revision 4)
+## Current status (2026-11-22, revision 5)
 
-- **Phase:** architecture + prototype redesign complete. Awaiting owner review and approval. No production implementation.
-- **Production code:** NOT touched. No dependencies added. No behavior changed.
-- **Repository baseline verified this task:** one checkout only, `D:\Temp\ai-chat-app`, branch `ui-foundation-upgrade`, HEAD `244b412aa85f67dd68f7678f7d1230a46d190dc5`. Working tree had prior uncommitted workspace-redesign changes, all preserved. No commits, pushes, branch changes, resets, stashes or cleans were made.
+- **Phase:** the five confirmed multi-chat fixes from `multi-chat-architecture-audit.md` are implemented and verified. The full generic panel/tab redesign remains a future phase awaiting owner approval.
+- **Production code:** the five fixes are implemented across production files (thread-list cache, operation ownership, Direct model/reasoning selection, history visit ownership, stable workspace panel hosts). The current uncommitted diff touches 6 production files; earlier fixes in this effort were committed separately. No dependencies were added. See `docs/decisions.md` for the `features/workspace/` ownership decision.
+- **Verification:** typecheck, build, lint, format, test-locations all exit 0; unit 4999 pass / 3 skip / 0 fail, integration 1037 pass / 85 skip / 0 fail, DOM 828 pass / 0 fail. No live browser/Tauri E2E was run.
 - **Prototype:** `prototype/index.html` — standalone, zero dependencies, interactive, dark + light. Rebuilt in revision 4 around generic panels + content types. Interaction test: 16/16 PASS, zero console errors.
-- **Screenshots:** `prototype/screenshots/` — current `arch-*` renders at 1440×900, 1280×800, 960×800 (+ light), regenerated after the final chrome fix. Older non-`arch-*` images are retained as historical visual-revision reference.
+- **Screenshots:** the `arch-*` renders were review artifacts and are NOT committed to the repository (removed in a follow-up commit). They remain on the local disk under `prototype/screenshots/` as untracked files; the links below are therefore local-only and will not resolve from a fresh clone.
 
 ## The core idea
 
@@ -74,7 +74,7 @@ Everything else is an optional **generic panel** to the right. Panels are contai
 - `technical-audit.md` — verified findings, chat identity/runtime facts, feasibility, official API links, quality gates.
 - `interaction-model.md` — generic panel/tab behavior, context model, persistence, responsive, prototype demos.
 - `prototype/index.html` — interactive visual prototype (open directly in a browser).
-- `prototype/screenshots/` — current architecture renders (`arch-*`):
+- `prototype/screenshots/` — architecture renders (`arch-*`, local-only, not committed):
   - Default: [1440×900](prototype/screenshots/arch-default-1440x900.png) · [1280×800](prototype/screenshots/arch-default-1280x800.png) · [960×800](prototype/screenshots/arch-default-960x800.png) · [light](prototype/screenshots/arch-default-light-1440x900.png)
   - Primary OpenCode: [1440×900](prototype/screenshots/arch-primary-opencode-1440x900.png) · [1280×800](prototype/screenshots/arch-primary-opencode-1280x800.png) · [960×800](prototype/screenshots/arch-primary-opencode-960x800.png)
   - Two Direct: [1440×900](prototype/screenshots/arch-two-direct-1440x900.png) · [1280×800](prototype/screenshots/arch-two-direct-1280x800.png) · [960×800](prototype/screenshots/arch-two-direct-960x800.png)

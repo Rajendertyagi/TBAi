@@ -11,9 +11,15 @@ import { NEW_DRAFT_TAB_ID, parseTabKey } from "../../chat/state/chatTabs";
  * number — React never reparents or remounts the host, so its runtime/session
  * survives the move. Closing a panel unmounts only that host.
  */
-export function WorkspaceSurface() {
+export function WorkspaceSurface({ activeTabKey }: { activeTabKey?: string }) {
   const panels = useWorkspacePanels((s) => s.panels);
-  const sorted = useMemo(() => [...panels].sort((a, b) => a.order - b.order), [panels]);
+  // A panel whose tab is now the Primary Chat must not render a second live
+  // runtime for the same conversation. Filter it out here (without deleting the
+  // panel entry) so re-selecting another tab restores it with the same identity.
+  const sorted = useMemo(
+    () => [...panels].filter((p) => p.tabKey !== activeTabKey).sort((a, b) => a.order - b.order),
+    [panels, activeTabKey],
+  );
   if (sorted.length === 0) return null;
 
   return (

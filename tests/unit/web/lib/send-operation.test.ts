@@ -12,6 +12,7 @@ import {
   activeSendOperationId,
   attachSendOperation,
   beginSendOperation,
+  createFinishPredicate,
   endSendOperation,
   observeBodySettled,
   resetSendOperationForTests,
@@ -232,5 +233,40 @@ describe("observeBodySettled", () => {
     await drain(wrapped);
     await wrapped.cancel().catch(() => {});
     expect(settled).toBe(1);
+  });
+});
+
+describe("createFinishPredicate — pure, never ends an operation", () => {
+  const chunk = new Uint8Array();
+
+  it("detects finish, error, and abort markers in the accumulated SSE text", () => {
+    const finish = createFinishPredicate();
+    expect(finish(chunk, 'data: {"type":"finish"}')).toBe(true);
+    expect(finish(chunk, 'data: {"type":"error"}')).toBe(true);
+    expect(finish(chunk, 'data: {"type":"abort"}')).toBe(true);
+  });
+
+  it("does not fire on ordinary message text", () => {
+    const finish = createFinishPredicate();
+    expect(finish(chunk, 'data: {"type":"text-delta","delta":"hello"}')).toBe(false);
+  });
+
+  it("never ends an operation, even when a marker is seen", () => {
+    beginSendOperation("conv-predicate", {});
+    const id = currentOperationId("conv-predicate");
+    const finish = createFinishPredicate();
+    finish(chunk, 'data: {"type":"finish"}');
+    finish(chunk, 'data: {"type":"abort"}');
+    // The predicate is shared across streams and has no send identity; only
+    // observeBodySettled may end the operation, with its captured id.
+    expect(currentOperationId("conv-predicate")).toBe(id);
+  });
+
+  it("signals finish for every abort-only stream through one shared instance", () => {
+    // One predicate instance lives for the whole transport. A per-stream
+    // "already saw abort" flag would make the second stream never finish.
+    const finish = createFinishPredicate();
+    expect(finish(chunk, 'data: {"type":"abort"}')).toBe(true);
+    expect(finish(chunk, 'data: {"type":"abort"}')).toBe(true);
   });
 });

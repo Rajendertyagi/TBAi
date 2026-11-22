@@ -70,6 +70,31 @@ export function resetSendOperationForTests(): void {
   // No module-local send state remains; operation.ts owns the scope registry.
 }
 
+/** Raw SSE terminal markers. Message text is JSON-escaped, so user/model text
+ *  can never contain one of these verbatim. */
+const ABORT_MARKER = '"type":"abort"';
+const FINISH_MARKER = '"type":"finish"';
+const ERROR_MARKER = '"type":"error"';
+
+/**
+ * Pure finish predicate for the resumable stream. It must NOT end operations:
+ * the callback is a single shared closure with no stream/send identity, so a
+ * late marker from an older stream could end a newer send's operation. The
+ * operation is ended only by `observeBodySettled`, which holds the id captured
+ * at request time.
+ *
+ * It is also STATELESS: one instance lives for the whole transport, so any
+ * per-stream flag (e.g. "already saw an abort") would leak into later streams
+ * and make a later abort-only stream never signal finish. The accumulator is
+ * the full text of the CURRENT stream, so checking it directly is sufficient.
+ */
+export function createFinishPredicate(): (chunk: Uint8Array, accumulator: string) => boolean {
+  return (_chunk, accumulator) =>
+    accumulator.includes(ABORT_MARKER) ||
+    accumulator.includes(FINISH_MARKER) ||
+    accumulator.includes(ERROR_MARKER);
+}
+
 /**
  * Pass a response body through byte-for-byte, invoking `onSettled` exactly once
  * when it finishes: read to the end, errored, or cancelled. Never buffers and

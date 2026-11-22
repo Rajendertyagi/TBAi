@@ -31,6 +31,7 @@ import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 import { useAvailabilityStore } from "../../features/availability/availabilityStore";
 import { registerAvailabilityRecovery } from "../../features/availability/recovery";
 import { registerTabReconciliation } from "../../features/chat/state/tabReconciliation";
+import { useDraftPickLifecycle } from "../../features/chat/state/useDraftPickLifecycle";
 import { useAppChatRuntime } from "../../runtime";
 import { threadListAdapter } from "../adapter";
 import { useSettingsStore } from "@/features/providers/state/providersStore";
@@ -84,6 +85,11 @@ const TbaiCompactDataUI = makeAssistantDataUI({
  * menu) live in their own chrome components so this file stays a thin layout.
  */
 export function AppShell() {
+  // Draft one-shot picks are scoped to the unsent draft by a single store
+  // subscription, so every navigation path (strip, keyboard, sidebar, history)
+  // discards them on leave. See useDraftPickLifecycle.
+  useDraftPickLifecycle();
+
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
@@ -265,7 +271,7 @@ export function AppShell() {
                   <Outlet />
                 </div>
                 {/* Optional panels: stable, keyed runtime hosts under one parent. */}
-                <WorkspaceSurface />
+                <WorkspaceSurface activeTabKey={active?.key} />
               </div>
             </PageContextMenu>
           </main>

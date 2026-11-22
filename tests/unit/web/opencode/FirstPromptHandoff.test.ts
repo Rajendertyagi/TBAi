@@ -4,7 +4,9 @@ import path from "node:path";
 import {
   fireFirstPromptHandoff,
   isSessionThreadBound,
+  endHandoffOperation,
 } from "@web/features/opencode/FirstPromptHandoff.tsx";
+import { currentOperationId, resetOperationsForTests } from "@web/lib/operation.ts";
 import {
   claimPendingFirstMessage,
   peekPendingFirstMessage,
@@ -45,6 +47,7 @@ function installMemoryStorage(): () => void {
 let restoreStorage: (() => void) | null = null;
 beforeEach(() => {
   restoreStorage = installMemoryStorage();
+  resetOperationsForTests();
 });
 afterEach(() => {
   restoreStorage?.();
@@ -124,6 +127,53 @@ describe("fireFirstPromptHandoff — draft thread never appends", () => {
     });
     expect(outcome).toBe("skipped");
     expect(appendCalls).toHaveLength(0);
+  });
+});
+
+describe("handoff operation is bounded to the first run", () => {
+  it("starts on dispatch and ends when the first run completes", async () => {
+    setPendingFirstMessage("conv-op", "first prompt");
+    const outcome = await fireFirstPromptHandoff({
+      conversationId: "conv-op",
+      sessionId: "ses_op",
+      boundSessionId: "ses_op",
+      append: () => Promise.resolve(),
+    });
+    expect(outcome).toBe("sent");
+    // The handoff id is live for the first run's requests.
+    const opId = currentOperationId("ses_op");
+    expect(opId).toMatch(/^op_/);
+
+    // When the first run settles, the operation is ended — later prompts in
+    // this session must not inherit it.
+    endHandoffOperation("ses_op", "first-run-complete");
+    expect(currentOperationId("ses_op")).toBeUndefined();
+  });
+
+  it("ending one session's handoff does not touch another session", async () => {
+    setPendingFirstMessage("conv-op-a", "a");
+    setPendingFirstMessage("conv-op-b", "b");
+    await fireFirstPromptHandoff({
+      conversationId: "conv-op-a",
+      sessionId: "ses_a",
+      boundSessionId: "ses_a",
+      append: () => Promise.resolve(),
+    });
+    await fireFirstPromptHandoff({
+      conversationId: "conv-op-b",
+      sessionId: "ses_b",
+      boundSessionId: "ses_b",
+      append: () => Promise.resolve(),
+    });
+    const a = currentOperationId("ses_a");
+    const b = currentOperationId("ses_b");
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+
+    endHandoffOperation("ses_a", "first-run-complete");
+    expect(currentOperationId("ses_a")).toBeUndefined();
+    expect(currentOperationId("ses_b")).toBe(b);
   });
 });
 

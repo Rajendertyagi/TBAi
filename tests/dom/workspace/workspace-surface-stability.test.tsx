@@ -42,13 +42,13 @@ function panels(fn: () => void): void {
   act(() => fn());
 }
 
-async function mount(): Promise<Mounted> {
+async function mount(activeTabKey?: string): Promise<Mounted> {
   const container = document.createElement("div");
   document.body.append(container);
   const root: Root = createRoot(container);
   const render = async (): Promise<void> => {
     await act(async () => {
-      root.render(<WorkspaceSurface />);
+      root.render(<WorkspaceSurface activeTabKey={activeTabKey} />);
     });
     await settle();
   };
@@ -163,5 +163,16 @@ describe("WorkspaceSurface stable hosts", () => {
     panels(() => useWorkspacePanels.getState().openPanel("chat:new"));
     const m = await mount();
     expect(hosts(m.container)).toHaveLength(0);
+  });
+
+  it("does not render a panel whose tab is now the active Primary Chat", async () => {
+    panels(() => {
+      useWorkspacePanels.getState().openPanel("chat:conv-A");
+      useWorkspacePanels.getState().openPanel("chat:conv-B");
+    });
+    // conv-A is now the primary tab — only conv-B may stay live as a panel.
+    const m = await mount("chat:conv-A");
+    expect(hosts(m.container)).toHaveLength(1);
+    expect(hosts(m.container)[0]?.dataset.thread).toBe("conv-B");
   });
 });
