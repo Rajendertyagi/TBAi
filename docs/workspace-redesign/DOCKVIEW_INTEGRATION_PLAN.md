@@ -111,7 +111,7 @@ Required work:
 ### 4a. Panel components
 - `DirectPanel` wraps `DirectChatHost`; `OpenCodePanel` wraps `OpenCodeChatHost`.
 - `renderer: "always"` for all chat panels.
-- Panel id = canonical `chat:<ref>` / `agent:<ref>`; params = `{ tabKey, contentType }` only.
+- Panel id = canonical `chat:<ref>` / `agent:<ref>`; params = `{ tabKey, contentType }` only. Dockview types `Parameters` as `{ [key: string]: any }` (`panel/types.d.ts:6-8`), so serializability is **not** type-enforced — enforce it at the TBAi boundary (typed params + runtime validation). Non-serializable params break `toJSON()`/restore.
 - One host per conversation id; reconciler prevents duplicate mounts.
 - **Direct host config/data-UI parity (blocking):** `DirectChatHost.tsx:9,33` currently uses `AuiConfig({})` and mounts no data UIs, while the root AppShell provider registers `Tools({ toolkit: appToolkit })`, `Suggestions([...])`, and mounts `TbaiProgressDataUI` / `TbaiCompactDataUI` (`AppShell.tsx:55-63,159-170,229-231`). Production Direct panels (and the draft-aware host from §5a) must have the same tool renderers, suggestions, progress stages, and compaction divider. Define one shared Direct config/data-UI contract used by every Direct host; decide explicitly whether data UIs mount per host provider or in one safe location. Do not ship a Direct panel with `AuiConfig({})`. Add a test that a Direct panel renders tool UI and progress/compact data UIs.
 - **Direct panel composition parity (blocking):** the routed Direct view renders `ChatHeader` + `ChatWindow` (`ChatView.tsx:20-27`), but `DirectChatHost` renders only `ChatWindow` (`DirectChatHost.tsx:39-45`). `ChatHeader` provides rename/archive/delete/copy-id/open-in-code/new-chat actions and depends on assistant-ui hooks (`ChatHeader.tsx:4,64,120-130,154-244`). Specify that each Direct panel includes `ChatHeader` (or a named equivalent) **inside the same per-host assistant-ui provider** as `ChatWindow`, with defined behavior for draft vs bound conversations. Add a Phase 4 assertion that Direct panels expose the required conversation header/actions targeting the correct conversation.
@@ -119,16 +119,16 @@ Required work:
 ### 4b. Workspace controller (`DockviewWorkspace`)
 - Hosts `DockviewReact` with registered components; proper flex sizing (`min-h-0`, `min-w-0`, actual height).
 - `onReady`: register panels from canonical open conversations; restore saved layout.
-- `onDidMovePanel`: relocation tracking only — never treat as close, never remove shared membership.
-- `onDidAddPanel`/`onDidRemovePanel`: genuine add/close only. Dockview **may** fire add/remove events during moves depending on the operation and version — verify against the resolved Dockview version and handle these events idempotently; never infer a conversation close from them alone.
-- `onDidLayoutChange`: persist layout (guarded against writes during restore).
-- Visibility events: pause only optional visual work; never pause execution, streaming, or subscriptions.
+- `onDidMovePanel`: relocation tracking only — never treat as close, never remove shared membership. Payload is `MovePanelEvent { panel, from, to }` (`dockviewComponent.d.ts:129-137`).
+- `onDidAddPanel`/`onDidRemovePanel`: **never infer a conversation close from these alone.** Official docs (https://dockview.dev/docs/core/events) state add/remove fire during moves (remove then add); the installed 8.9.1 bundle instead suppresses component-level add/remove forwarding while `_moving` is set in `movingLock` (`main.cjs.js` ~19000-19008, ~19600-19605). These two sources disagree — therefore: use `onDidMovePanel` for relocations, treat add/remove as structural signals only with idempotent reconciliation against canonical `chatTabs`, and add a **version-pinned regression test** against the resolved 8.9.1 behavior. Do not rely on either interpretation without that test.
+- `onDidLayoutChange`: persist layout. Payload is `{ reasons: ReadonlySet<'geometry'|'structure'|'activePanel'|'panelTitle'|'panelParameters'> }` (`types.d.ts:42-47`) — persist only relevant reasons, debounce/coalesce, and ignore writes while applying `fromJSON`. Use `onDidLayoutFromJSON` (`component.api.d.ts:416`) to clear the restore guard. Mutation boundary events `onWillMutateLayout`/`onDidMutateLayout` (with `kind` incl. `move`/`load`) are available if a transaction-aware guard is needed.
+- Visibility: there is **no** `DockviewApi.onDidVisibilityChange`. Use `panel.api.onDidVisibilityChange` (`panelApi.d.ts:20,80-82`) or `IContentRenderer.onShow/onHide` (`dockview/types.d.ts:34-36`) to pause only optional visual work; never pause execution, streaming, or subscriptions. Hidden `renderer: "always"` panels keep browser-driven work running unless explicitly paused.
 
 ### 4c. Layout persistence
 - Versioned localStorage record wrapping `toJSON()`; `migrate` + validation.
 - Reconcile saved panel refs against `chatTabs`; drop stale/deleted conversations; safe default layout.
 - Persist split sizes, group structure, panel placement, active selections — identity/spatial only.
-- In-session restore uses `fromJSON(data, { reuseExistingPanels: true })` to preserve live instances; cold restore creates fresh runtimes.
+- In-session restore uses `fromJSON(data, { reuseExistingPanels: true })` to preserve live instances; cold restore creates fresh runtimes. `reuseExistingPanels` is optional (`component.api.d.ts:625-627`) and reuses **compatible** existing panel instances — it is not a guarantee. Use it only with stable panel ids/components and serializable params; do not assume reuse. Guard against layout writes during restore and reconcile restored panel refs against `chatTabs` afterward.
 
 ---
 
@@ -169,7 +169,7 @@ Required work:
   | Event | Action | Must NOT |
   |---|---|---|
   | TabStrip / Chat Threads select | Focus panel if open, else open via canonical tab key; set `localActiveKey` + URL | Create a second runtime for the same conversation |
-  | Dockview active-panel change | Set `localActiveKey` + URL for the focused conversation | Change active selection in unrelated groups |
+  | Dockview active-panel change (`onDidActivePanelChange`, payload `{ panel, origin }` with `origin: 'user' / 'api'` — `dockviewComponent.d.ts:209-212`) | Set `localActiveKey` + URL for the focused conversation; use `origin` to avoid URL/focus feedback loops | Change active selection in unrelated groups |
   | Route change (`/chat/:id`, `/code/:id`) | Focus/open matching panel via route-effect controller | Bypass `useConversationTab` validation |
   | Panel close (genuine remove) | Apply existing conversation-close + shared-membership semantics | Treat a move as a close; remove shared membership on move |
   | Conversation closed elsewhere | Reconcile: remove stale panel, drop invalid layout ref | Invent a new conversation identity |
@@ -242,7 +242,8 @@ All tests under `tests/`. Critical scenarios must be Playwright E2E against real
 - **Activity projection has no publishers** — Phase 1c blocking; without publishers Sidebar status regresses.
 - **Hidden-stream E2E** — POC could not drive a real send due to browser-tool focus limitation; must be covered by Playwright.
 - **Composer text preservation** — instance preservation proven; direct assertion still required.
-- **Dockview add/remove on move** — add/remove events may fire during moves depending on operation/version; verify against resolved version, handle idempotently, distinguish via `onDidMovePanel`; regression coverage required.
+- **Dockview add/remove on move** — official docs say add/remove fire during moves (remove then add); installed 8.9.1 bundle suppresses component-level add/remove during `movingLock`. These disagree. Use `onDidMovePanel` for relocations, treat add/remove as structural signals with idempotent reconciliation, and add a **version-pinned regression test** against resolved 8.9.1 behavior before relying on either interpretation.
+- **Renderer `always` hidden work** — hidden panels keep DOM and browser-driven work alive; pause only optional visual work via `panel.api.onDidVisibilityChange` / `onShow`/`onHide`, never execution. Measure many-panel memory.
 - **Memory with many panels** — measure; no LRU without evidence.
 - **Enterprise features** — none used; stay on MIT core.
 
@@ -308,5 +309,18 @@ Verdict: **ACCEPTED WITH CORRECTIONS** — no Critical or Major gaps; two Minor 
 | §1c detached-execution citation path imprecise | Nit | Full path `src/services/chat-runs.ts:189-193` |
 
 Auditor's closing note: "No Critical or Major gaps remain... they do not change the plan's architecture or readiness direction."
+
+### Deep Dockview API study (2026-11-23) — `opencode/iceman-free`
+Read-only study of the installed `dockview-react@8.9.1` / `dockview@8.9.1` / `dockview-core@8.9.1` type declarations and official docs (https://dockview.dev/docs/core/{panels/add,events,state/save,state/load,panels/rendering}). Verdict: **Sound with required corrections before implementation.** Core API choices confirmed correct. Corrections applied:
+
+| Area | Correction applied |
+|---|---|
+| Serializable params | §4a — `Parameters` typed `any`; enforce serializability at TBAi boundary |
+| Add/remove-on-move | §4b + §8 — docs say add/remove fire on move; 8.9.1 bundle suppresses during `movingLock`; use `onDidMovePanel`, reconcile idempotently, version-pinned test |
+| Layout-change reasons | §4b — `LayoutChangeEvent.reasons` set; filter, debounce, guard writes during restore; `onDidLayoutFromJSON` clears guard |
+| Visibility API | §4b — no `DockviewApi.onDidVisibilityChange`; use `panel.api.onDidVisibilityChange` / `onShow`/`onHide` |
+| `fromJSON` semantics | §4c — `reuseExistingPanels` is optional compatible-instance reuse, not a guarantee; stable ids/params required |
+| Focus sync | §5b — `onDidActivePanelChange` carries `origin: 'user' / 'api'`; use to avoid feedback loops |
+| Renderer `always` cost | §8 — hidden panels keep browser work alive; pause only visual work; measure memory |
 
 No implementation was performed during planning beyond the foundation work already present in the working tree.
