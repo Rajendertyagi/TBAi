@@ -59,7 +59,19 @@ The Sidebar has **two different** dependencies that must not be conflated:
 1. **Conversation listing is HTTP-owned.** `Sidebar.tsx:19` uses `useConversationsList` (`features/sidebar/hooks/useConversationsList.ts:1-55`), an HTTP hook over `apiFetch`, plus `useChatTabsStore` and `useThreadListQuerySync` (which writes module-level adapter search/sort globals). The Sidebar component itself has no `useAui`/`useAuiState`/`ThreadListPrimitive` call. **[VERIFIED]**
 2. **Live status decorations are runtime-dependent.** `SidebarThreadRow.tsx:218,229` renders `ThreadRunningDot` and `ThreadLastMessageTime`. Both call `useAuiState` on the assistant-ui thread list: `thread-running-dot.tsx:14-40` reads `threadListItem.isRunning` for the open row and `state.threads.threadItems[].isRunning` for other rows; `thread-last-message-time.tsx:26-35` reads `threadItems[].lastMessageAt`. Both wrap the selector in `try/catch` and fall back (running → false, time → the HTTP-fetched `fallback`) when no `AuiProvider` is present. **[VERIFIED]**
 
-**Consequence for runtime relocation:** the AppShell `AssistantRuntimeProvider` is not only a chat host — it is the ambient provider that makes these live decorations work. Removing or relocating it without accounting for these consumers would silently degrade running indicators and last-message times to their static fallbacks. Any content-host ownership model must either keep an ambient thread-list provider available to the Sidebar or give these leaves an explicit provider/data source. This is a real dependency, not an optional optimization. **[DECISION]**
+**The ambient provider does not observe isolated hosts.** `AuiProvider extends={null}` creates a fresh root client that ignores ambient context (§2b.1; `DirectChatHost.tsx:33`, `OpenCodeIsolationBoundary.tsx:10-15`). The ambient thread list (`state.threads.threadItems`) is the AppShell Direct runtime's list; it does not contain isolated panel hosts or OpenCode sessions. `useOptionalV2RuntimeExtras` (`v2RuntimeExtras.ts:98-101`) reads `state.thread.extras` from the **ambient** provider, so it only sees the currently-mounted OpenCode runtime, not other sessions. Therefore the current Sidebar indicators are accurate only for conversations present in the AppShell Direct thread list; OpenCode sessions and isolated panel hosts fall back to static values. **[VERIFIED]** It is incorrect to assume relocation "just works" because a provider exists.
+
+**Chosen design — centralized conversation-activity projection (not a second conversation/message store):** **[DECISION]**
+
+- Add a small feature-owned store (owner: `features/chat/state/conversationActivity.ts`; it holds derived activity, not conversation records or message content) keyed by the canonical conversation id — the `ref` from `chatTabs`, which equals `conversations.id` for both Direct and OpenCode. **[DECISION]**
+- Entry shape: `{ status: "idle" | "running" | "completed" | "failed" | "cancelled", lastMessageAt?: number, updatedAt: number, engine: "direct" | "opencode" }`. Status is a small derived enum; no message text, tool parts, or credentials are stored. **[DECISION]**
+- **Publishers:** each content host publishes from inside its own provider, where the data is real:
+  - Direct host: a hook reads `useAuiState((s) => s.thread.isRunning)` and the last message's terminal status; publishes `running` while active, then `completed`/`failed`/`cancelled` from the runtime's terminal status (not inferred from text). **[DECISION]**
+  - OpenCode host: a hook reads `useOptionalV2RuntimeExtras()` inside the OpenCode provider and publishes from `projection.hasActiveSessionWork`, `projection.primaryStatus`, `projection.health.degraded`, and `projection.pendingLifecycle` (`lifecycleProjection.ts:56-75`); `hasActiveSessionWork` maps to `running`, `health.degraded` to a reconciling form of running, cancellation pending to `cancelled`, terminal message status to `completed`/`failed`. **[DECISION]**
+  - Both publish `lastMessageAt` from their own last message timestamp, so the Sidebar's time is fresher than its HTTP fetch. **[DECISION]**
+- **Consumers:** `ThreadRunningDot` and `ThreadLastMessageTime` read the projection by `remoteId` (the canonical conversation id) instead of ambient `useAuiState`, keeping their existing static fallbacks for conversations with no open host. **[DECISION]**
+- **Cleanup:** a host publishes `idle` on unmount and clears its entry when the conversation is closed; the store starts empty on boot, so no timer-based sweep is needed. A defensive `updatedAt` check may mark an entry stale if a host crashes without cleanup. **[DECISION]**
+- **Ambient provider:** still required for in-surface consumers that read `useAuiState` inside a host (`ChatWindow`, `Composer`, `ChatHeader`, `useAssistantActivity`, `OpenCodePrimaryStatus`, tool UIs) — those are inside a host's own provider, not the AppShell one. The AppShell ambient provider is **no longer needed for the Sidebar** once the projection exists; it remains only while the routed Chat area is still AppShell-owned (§5.4), and can be removed when that ownership moves, provided every in-surface consumer is inside a host provider. **[DECISION]**
 
 ### 2.3 Conversation identity and membership
 
@@ -90,8 +102,9 @@ The Sidebar has **two different** dependencies that must not be conflated:
 ### 2.7 Tests and prior experiments
 
 - Permanent tests: `tests/dom/workspace/workspace-surface-stability.test.tsx` (mocked host, sibling reorder, close isolation, active-tab filter); `tests/unit/web/workspace/workspace-panels.test.ts`; `tests/dom/opencode/first-prompt-handoff-lifecycle.test.tsx`; `tests/unit/web/lib/send-operation.test.ts`. **[VERIFIED]**
-- Completed experiments (harnesses removed): §2b.1 two real Direct runtimes with stub transports (3 tests, 29 assertions passed; `extends={null}` must wrap the component that calls `useRemoteThreadListRuntime`); §2b.2 shared-state audit; §2b.3 real backend with two concurrent conversations (1 test, 7 assertions passed); §2b.4 Option B two real runtimes in one page (mixed Direct+OpenCode passed; two-Direct "cross-write" later proven a probe artifact); §2b.5 root-cause investigation (backend clean, no cross-route mechanism). **[EXPERIMENT]**
-- No permanent test currently exercises two real Direct runtimes with distinct reply markers, and no E2E covers workspace panels. **[VERIFIED]**
+- Completed experiments (harnesses removed): §2b.1 two real Direct runtimes with stub transports (3 tests, 29 assertions passed; `extends={null}` must wrap the component that calls `useRemoteThreadListRuntime`); §2b.2 shared-state audit; §2b.3 real backend with two concurrent conversations (1 test, 7 assertions passed); §2b.4 Option B two real runtimes in one page (mixed Direct+OpenCode **mounted**; two-Direct "cross-write" later proven a probe artifact); §2b.5 root-cause investigation (backend clean, no cross-route mechanism). **[EXPERIMENT]**
+- **The §2b.4 mixed Direct+OpenCode run asserted mounting only** — §2b.5 states explicitly: "The mixed Direct+OpenCode test passed because no sends were asserted there." It did **not** prove independent sends, concurrent execution, isolated responses, or isolated lifecycle events. **[EXPERIMENT]**
+- No permanent test currently exercises two real Direct runtimes with distinct reply markers, no permanent test exercises mixed Direct+OpenCode sends, and no E2E covers workspace panels. **[VERIFIED]**
 
 ### 2.8 Reconciliation of the multi-runtime experimental evidence
 
@@ -110,6 +123,7 @@ Three documents describe overlapping experiments with apparently conflicting con
 2. The **duplicated assistant text** was a measurement artifact, not a product defect (§2b.5). No production fix was warranted for that symptom. **[EXPERIMENT]**
 3. The **shared adapter** is safe to keep: its module-level state is not isolated by creating fresh instances, and the real correctness defect (stale cross-query cache) was fixed by query-keying (`55b8ed5`). The §2b.4 Run 1 claim that the singleton "cannot be shared" is **superseded** by the corrected §2.2 item 5 and §2b.5. **[EXPERIMENT / VERIFIED]**
 4. **What remains unverified:** whether two live Direct runtimes with the **shared** adapter and correct isolation boundary route messages correctly under **concurrent** sends with distinct reply markers. Run 2 used fresh adapters; §2b.1 used stub transports; §2b.3 tested the backend only. No permanent test combines the production shared adapter + two real runtimes + distinct markers. This is a verification gap, not evidence of a defect. **[UNRESOLVED → acceptance criterion §10]**
+5. **Mixed Direct + OpenCode was a mount-only result.** §2b.4 Run 2 proved both runtime types mount in one page with distinct ids and no cross-talk in the *mount assertion*. §2b.5 states no sends were asserted in that test. Therefore **independent message submission, concurrent execution, correctly isolated responses, and isolated lifecycle events are all unproven** for the mixed case. The earlier plan's phrase "sends isolated (§2b.4 outcome)" overstated the evidence and is withdrawn. **[EXPERIMENT → acceptance criterion §10]**
 
 ---
 
@@ -133,7 +147,8 @@ Three documents describe overlapping experiments with apparently conflicting con
 1. **Global one-shot overrides.** `providersStore.ts:30-32,89-96` holds `selectedProviderId/ModelId/ReasoningLevel` globally; `runtime.ts:337,379-423` consumes and reverts them. Concurrent Direct sends can race. **[VERIFIED]** This is the one shared-state item with a concrete race risk.
 2. **Panel model too narrow.** `workspacePanels.ts:15-19` cannot express content type, multiple tabs per panel, panel-local active selection, size, split, or persistence. **[VERIFIED]** This is a missing capability, not a defect in what it currently does.
 2b. **No state-preserving cross-container move.** The current sibling-reorder invariant does not extend to moving a tab between panels; a stable host layer is required (§5.5). **[VERIFIED / DECISION]**
-3. **No permanent multi-runtime regression coverage.** Prior experiments proved feasibility but their harnesses were removed. **[VERIFIED]**
+2c. **Sidebar activity is not accurate across isolated hosts.** Live indicators read the ambient thread list, which excludes isolated panel hosts and OpenCode sessions; a centralized activity projection is required (§2.2). **[VERIFIED / DECISION]**
+3. **No permanent multi-runtime regression coverage.** Prior experiments proved feasibility but their harnesses were removed; mixed Direct+OpenCode sends were never asserted (§2.8). **[VERIFIED]**
 4. **AppShell concentration.** Runtime ownership is coupled to draft materialization, engine selection, and active-tab binding (§2.1). **[VERIFIED]** Relocation is a coordinated change.
 5. **Documentation drift.** `docs/state-management.md:74,147` describes `tbai:openTabs` (absent in code); `docs/architecture.md:80-118,212-266` omits `features/workspace/`; `README.md:8` has a stale worktree claim; older audits name `lastGoodThreads`/`lastMountedConversationId` (now `threadListCache`/`lastMountedByOwner`); "Primary Chat" terminology persists. **[VERIFIED]**
 6. **`runBash` unsandboxed** — a boundary fact that future terminal/UX work must make explicit, not a bug. **[VERIFIED]**
@@ -168,7 +183,7 @@ Chat Threads (persistent navigation)   Workspace layout tree (§5.2)
         |                                |
    AI SDK / providers              OpenCode V2 session
 
-Ambient thread-list provider (AppShell) remains for Sidebar live decorations (§2.2).
+Conversation-activity projection (§2.2) feeds Sidebar live decorations; no ambient provider dependency.
 ```
 
 ### 5.2 Layout and panel structure **[DECISION]**
@@ -176,29 +191,63 @@ Ambient thread-list provider (AppShell) remains for Sidebar live decorations (§
 Adopt a minimal recursive layout model owned by `features/workspace/state/`. The model is a **discriminated union** so each node type carries only valid fields:
 
 ```ts
-// Content identity — chat content references chatTabs; other content owns its identity.
-type ContentIdentity =
-  | { kind: "chat";  tabKey: string }        // chat:<ref>  — chatTabs canonical
-  | { kind: "agent"; tabKey: string }        // agent:<ref> — chatTabs canonical
-  | { kind: "file";  projectId: string; fileId: string }
-  | { kind: "terminal"; sessionId: string }
-  | { kind: "browser"; url: string };
+// RESOURCE identity — which conversation / file / terminal / URL is involved.
+// Conversation resources reference chatTabs; the engine is derived from the
+// conversation row by threadEngine(), never stored independently here.
+type ConversationResource = {
+  source: "chatTabs";
+  tabKey: `chat:${string}` | `agent:${string}`;   // chatTabs.ts:92-108
+  conversationId: string;                          // === tab ref === conversations.id
+};
+type FileResource = { source: "file"; projectId: string; fileId: string };
+type TerminalResource = { source: "terminal"; sessionId: string };
+type BrowserResource = { source: "browser"; url: string };
+type Resource = ConversationResource | FileResource | TerminalResource | BrowserResource;
 
-type ContentType = "direct" | "opencode" | "file" | "terminal" | "browser";
+// HOST INSTANCE identity — which mounted UI/runtime instance survives a move.
+// For conversations/files/terminals this is deterministic (one host per resource).
+// For browser it is a fresh instance id: two browser panels may show the same URL.
+type HostId = `conv:${string}` | `file:${string}` | `terminal:${string}` | `browser:${string}`;
 
-// A tab is a reference to a content host, never the host itself.
-type PanelTab = {
-  hostId: string;                 // stable: derived from (contentType, identity)
-  contentType: ContentType;
-  identity: ContentIdentity;
+// Discriminated union: the resource shape is tied to the content type, so an
+// invalid combination (e.g. a Direct host with a file resource) cannot compile.
+type DirectTab = {
+  contentType: "direct";
+  hostId: `conv:${string}`;
+  resource: ConversationResource & { tabKey: `chat:${string}` };
   label?: string;
 };
+type OpenCodeTab = {
+  contentType: "opencode";
+  hostId: `conv:${string}`;
+  resource: ConversationResource & { tabKey: `agent:${string}` };
+  label?: string;
+};
+type FileTab = {
+  contentType: "file";
+  hostId: `file:${string}`;
+  resource: FileResource;
+  label?: string;
+};
+type TerminalTab = {
+  contentType: "terminal";
+  hostId: `terminal:${string}`;
+  resource: TerminalResource;
+  label?: string;
+};
+type BrowserTab = {
+  contentType: "browser";
+  hostId: `browser:${string}`;   // unique per instance, NOT derived from url
+  resource: BrowserResource;
+  label?: string;
+};
+type PanelTab = DirectTab | OpenCodeTab | FileTab | TerminalTab | BrowserTab;
 
 type PanelNode = {
   kind: "panel";
   id: string;
   tabs: PanelTab[];               // ordered
-  activeTabId: string | null;     // PANEL-LOCAL selection (hostId of active tab)
+  activeTabId: HostId | null;     // PANEL-LOCAL selection
 };
 
 type SplitNode = {
@@ -221,9 +270,11 @@ type WorkspaceLayout = {
 
 Key properties:
 
+- **Resource identity vs host instance identity.** `resource` says *what* is displayed; `hostId` says *which mounted instance* must survive a move. For conversations, files, and terminals `hostId` is deterministic from the resource (one host per resource). For browser, `hostId` is a fresh `browser:<uuid>` per instance, so two browser panels may legitimately display the same URL while remaining independent hosts. **[DECISION]**
+- **Genuine type safety.** `PanelTab` is a discriminated union on `contentType`; each variant fixes both the `hostId` prefix and the `resource` shape. A Direct tab with a file resource, or a conversation tab with a browser URL, is a compile error. The `tabKey` template-literal types further constrain conversation tabs to the `chat:`/`agent:` forms produced by `chatTabs.ts:92-108`. **[DECISION]**
+- **Relationship to `chatTabs`.** `ConversationResource` references the canonical `chatTabs` key and `conversationId` (`=== tab ref === conversations.id`). The engine is **not** stored in the tab: it is derived from the conversation row by `threadEngine()` (`remoteThreadListAdapter.tsx:370-380`), which reads `custom.engine === "opencode"`. The reconciler must validate that a `DirectTab`'s conversation actually resolves to Direct and an `OpenCodeTab`'s to OpenCode, and correct the variant if the row disagrees — no second conversation identity system is introduced. **[DECISION]**
 - **Panel-local active selection:** `activeTabId` lives on `PanelNode`, not in `chatTabs`. `chatTabs.localActiveKey` remains the single URL-authoritative selection for the routed Chat area; each optional panel tracks its own active tab in the layout tree. This is required for multiple panels to show different conversations simultaneously. **[DECISION]**
-- **Identity ownership:** `chatTabs` stays canonical for conversation identity and shared membership; `ContentIdentity` for `chat`/`agent` holds a `tabKey` reference into it. Non-chat content (`file`/`terminal`/`browser`) carries its own identity and is **not** forced into `chatTabs`. No second conversation store, no second tab-management system. **[DECISION]**
-- **No duplicate mount:** a `hostId` is unique per content identity; the layout reconciler must reject or deduplicate a second placement of the same `hostId` so a conversation cannot be mounted in two panels at once. **[DECISION]**
+- **No duplicate conversation host:** `hostId` for a conversation is `conv:<conversationId>`; the reconciler rejects or deduplicates a second placement of the same `hostId` so a conversation cannot be mounted in two panels. Two browser hosts with the same URL are allowed because their `hostId`s differ. **[DECISION]**
 - **Split sizing:** `SplitNode.sizes` holds fractional weights; resize updates these values. This is the only layout-specific numeric state. **[DECISION]**
 - Reuse the existing dnd-kit stack for tab reordering and the Sidebar pointer-capture resize handle pattern; no new dependency for v1. **[VERIFIED: installed libs in `technical-audit.md:54-56`]**
 - **Alternative rejected:** FlexLayout (`decisions.md:4620-4679`) — tab identity would need re-derivation, mutable model/stale-closure traps, popup context loss, and DOM-test impossibility. Its evaluation stands; no migration authorized.
@@ -234,7 +285,7 @@ Key properties:
 - The routed Chat area is the panel identified by `WorkspaceLayout.chatPanelId`. It renders that panel's `activeTabId` through a content host selected by `contentType`: Direct → `DirectChatHost`, OpenCode → `OpenCodeChatHost`, other types → their registered host. **[DECISION]**
 - Every panel renders its own `activeTabId` through the same host components. A panel is a container, not a feature; no "Direct panel" or "OpenCode panel" classes. Panel-local selection is independent (§5.2). **[DECISION]**
 - Hosts live in the stable host layer (§5.5); a panel's slot displays the host referenced by its active tab. Moving a tab changes slot references, not the host instance. **[DECISION]**
-- Panels reference `chatTabs` tab keys for chat content. Non-chat content (files/terminal/browser) uses its own identity fields in `ContentIdentity` and is **not** forced into `chatTabs`. **[DECISION]** This reuses `chatTabs` for conversation identity without making it responsible for files or terminals.
+- Panels reference `chatTabs` tab keys for chat content. Non-chat content (files/terminal/browser) uses its own `Resource` variant (§5.2) and is **not** forced into `chatTabs`. **[DECISION]** This reuses `chatTabs` for conversation identity without making it responsible for files or terminals.
 
 ### 5.4 Runtime ownership **[DECISION]**
 
@@ -242,7 +293,7 @@ Binding requirement 5 says runtime ownership must not be tied to a fixed screen 
 
 - **Direct:** `DirectChatHost` already implements this pattern (`AuiProvider extends={null}` + `useAppChatRuntime` + shared adapter). Keep it; do not rebuild it. Two Direct runtimes are implemented and were proven by §2b.1/§2b.4. **[VERIFIED / EXPERIMENT]**
 - **OpenCode:** extract a reusable `OpenCodeChatHost` from `OpenCodeView` that owns the session bootstrap + `useOpenCodeRuntime` chain by conversation id. This is required for mixed arrangements, not optional. The view is not a thin wrapper — route binding, config/model resolution, timeout/retry, recovery, first-prompt handoff, permissions, forms, terminal, and diff must be preserved in the host or its owning surface. **[DECISION]**
-- **AppShell root runtime:** its removal/relocation is a coordinated change because it also serves the Sidebar's live decorations (§2.2) and owns draft materialization binding, engine selection, and route binding (§2.1). The target keeps an ambient thread-list provider available to the Sidebar while content hosts own their execution runtimes. **[DECISION]**
+- **AppShell root runtime:** its removal/relocation is a coordinated change because it owns draft materialization binding, engine selection, and route binding (§2.1). The Sidebar's live decorations no longer depend on it once the centralized activity projection exists (§2.2); in-surface `useAuiState` consumers live inside their own host providers. The ambient provider can therefore be removed when ownership moves, provided the projection and host providers are in place. **[DECISION]**
 - **No runtime merger, no universal runtime abstraction.** Direct and OpenCode hosts share only the presentation layer (`ChatWindow` with `mode`).
 
 ### 5.5 Moving content between containers — stable content-host ownership **[DECISION]**
@@ -251,32 +302,57 @@ Binding requirement 5 says runtime ownership must not be tied to a fixed screen 
 
 **React lifecycle fact (not negotiable):** React preserves component state only when an element keeps the same type and key **at the same position in the same parent**. Moving an element to a different parent unmounts it from the old parent and mounts a new instance in the new parent; local state is lost. CSS `order` changes visual order only, not DOM/reconciliation order. The existing DOM test (`workspace-surface-stability.test.tsx:101-133`) proves only sibling reordering under one parent with a **mocked** host — it does not prove cross-container moves or runtime-state preservation. **[VERIFIED]**
 
-**Chosen mechanism — stable host identity independent of layout placement:**
+**Chosen mechanism — stable host layer with absolutely positioned host wrappers:**
 
-The unit of persistence is a **content host** keyed by a stable `hostId` derived from content identity (`(contentType, identity)`), not by its panel. The layout tree stores references to hosts; it never owns the host component instance. Concretely:
+The unit of persistence is a **content host** keyed by a stable `hostId` (§5.2), not by its panel. The layout tree stores references to hosts; it never owns the host component instance. The concrete React and DOM structure is:
 
-- Content hosts are mounted **once** in a stable host layer whose parent and sibling order do not change when layout changes. A host is created when its content is first opened and unmounted only when the content is closed (or explicitly evicted). Moving, splitting, resizing, or hiding a panel changes only layout metadata and which host is displayed where — it does not change the host's React parent or key. **[DECISION]**
-- Because the host component instance is never reparented, React preserves its local state: the runtime/session instance, the active stream, composer text, and scroll/viewport state all survive a move. This is the only mechanism that preserves all of them without re-deriving state. **[DECISION]**
-- The layout tree renders **placement slots** (regions with sizes and a `hostId` reference). A host is displayed in its slot; when a tab moves between panels, the slot reference changes but the host instance does not. **[DECISION]**
+```
+<WorkspaceRoot>                              // position: relative; overflow: hidden
+  <LayoutFrames>                             // visual chrome ONLY, no content
+     <PanelFrame rect={...}>                 // background, border, header, tab strip
+     <Splitter rect={...} onResize={...}/>   // pointer-capture resize handle
+  </LayoutFrames>
+  <HostLayer>                                // position: absolute; inset: 0; pointer-events: none
+     <HostWrapper key={hostId} rect={...}>   // position: absolute; transform/left/top/width/height
+        <ContentHost .../>                   // DirectChatHost / OpenCodeChatHost / ...
+     </HostWrapper>
+     ...
+  </HostLayer>
+</WorkspaceRoot>
+```
+
+- **React parent:** every `HostWrapper` is a direct child of the single `HostLayer`. Its key is `hostId` and its position in the children array is stable (host creation order). Moving a tab between panels changes only the `rect` prop, never the parent or key. React therefore preserves the `ContentHost` instance and all its local state. **[DECISION]**
+- **DOM parent:** every host wrapper's DOM parent is the `HostLayer` div. The host's content is *not* a DOM descendant of the panel frame — it is visually placed over it by geometry. This is the key distinction from the current `WorkspaceSurface`, where the host is a DOM child of the panel wrapper. **[DECISION]**
+- **Visual placement:** a recursive geometry function walks `WorkspaceLayout.root`; each `SplitNode` divides its rect by `sizes` along `direction`, each `PanelNode` yields a leaf rect. The panel's active `hostId` is looked up and that host wrapper receives the leaf rect (inset by the panel header height). The host is drawn inside the panel by absolute positioning, not by DOM nesting. **[DECISION]**
+- **Nested splits / resize / clipping:** nested splits are just recursive rect division; a `Splitter` is an absolutely positioned element at the boundary with pointer capture that updates `SplitNode.sizes`, which recomputes all rects. Each `HostWrapper` sets `overflow: hidden` and a border radius so content is clipped to its panel. No remount occurs on resize. **[DECISION]**
+- **Panel headers and tab strips:** rendered by `LayoutFrames` as siblings of `HostLayer`, positioned at the panel rect's top. The host rect is inset below the header, so content never overlaps chrome. Because the header is a sibling (not a parent) of the host, activating a different tab does not reparent the host. **[DECISION]**
+- **Inactive tabs:** all tabs of a panel stay mounted in `HostLayer`. Only the active tab's wrapper receives the panel rect and `visibility: visible; pointer-events: auto`. Inactive wrappers are kept mounted but given `visibility: hidden; pointer-events: none; aria-hidden="true"; inert` and moved off-screen (or zero-sized) so they cannot intercept input or appear in the accessibility tree. `inert` also removes them from keyboard tab order. Their DOM nodes and scroll positions remain intact. **[DECISION]**
+- **Focus and keyboard:** the active host is in normal tab order; `inert` on inactive hosts prevents focus. Tab activation moves focus from the tab strip into the newly active host explicitly. Because DOM order follows host creation order rather than visual order, keyboard tab order may not match visual panel order — this must be verified in the real-host test and mitigated with explicit focus management if needed. **[DECISION / UNRESOLVED until tested]**
+- **Scrolling:** each host owns its scroll container (the `ChatWindow` viewport). Because the node is never unmounted or reparented, scroll position survives moves and tab switches. **[DECISION]**
+- **Overlays and accessibility:** assistant-ui menus/popovers that portal to `document.body` are outside the host wrapper; their positioning relative to the host must be verified (the FlexLayout ADR recorded popup context loss at `decisions.md:4664-4666`). Each active host wrapper carries `role="region"` and an `aria-label` derived from its content. **[DECISION / UNRESOLVED until tested]**
+- **Close vs hide:** "hide" (inactive tab) keeps the host mounted with `inert`; "close" unmounts the `HostWrapper`, which disposes the runtime/session and releases its resources. Closing the last tab of a panel removes the panel frame. **[DECISION]**
 
 **Alternatives evaluated:**
 
 | Option | Preserves | Cost / risk | Verdict |
 |---|---|---|---|
-| Stable host layer + layout slots (chosen) | Identity, runtime/session, stream, composer, scroll — all by not unmounting | Requires hosts to be mounted independently of visual placement; hidden hosts still consume memory; needs a clear "close vs hide" contract | **Chosen** — only option that meets the requirement without state reconstruction |
-| React portals into panel DOM | Component state survives (React tree unchanged) | Focus/ARIA/context hazards; portal target changes still reparent DOM; FlexLayout ADR recorded popup context loss (`decisions.md:4664-4666`) | Reject — complexity without a state benefit over the host layer |
+| Stable host layer + absolute wrappers (chosen) | Identity, runtime/session, stream, composer, scroll — by never unmounting or reparenting | Manual geometry computation; DOM order ≠ visual order (focus/ARIA risk); portaled overlays need verification; hidden hosts consume memory | **Chosen** — only option that meets the requirement without state reconstruction |
+| CSS Grid with generated areas | Same state preservation | Grid areas cannot express arbitrary nested splits cleanly; dynamic split trees awkward | Reject — insufficient for nested splits |
+| React portals into panel DOM | Component state survives (React tree unchanged) | DOM reparenting can reset scroll; focus/ARIA hazards; FlexLayout ADR recorded popup context loss | Reject — no state benefit over absolute wrappers |
 | Lift all runtimes into one provider | Runtime instance survives | Couples all content to one provider; undermines isolation; does not preserve composer/scroll local state | Reject — conflicts with isolated runtimes |
-| Accept remount, reconstruct state | Identity + durable history only | Loses runtime instance, stream, composer, scroll; requires state capture/restore for each | Rejected — does not satisfy the requirement |
+| Accept remount, reconstruct state | Identity + durable history only | Loses runtime instance, stream, composer, scroll | Rejected — does not satisfy the requirement |
 
-**Practical limits, stated honestly:** a host that is hidden (tab not active) stays mounted to preserve state; memory grows with the number of *opened* content items, so "close" must genuinely unmount and release the runtime. Restoring after an application restart cannot preserve in-memory runtime/composer state — only durable identity and layout; that is a different operation from an in-session move. **[DECISION]**
+**State preservation is not yet proven.** The mechanism above is designed to support it, but the current DOM test uses a mocked host and only sibling reorder (`workspace-surface-stability.test.tsx:101-133`). A **real-host cross-panel move test is required** before claiming the requirement is met: mount two real `DirectChatHost`s, type into a composer, scroll, start a stream, move a tab between panels, and assert the same host component instance, runtime, composer text, scroll position, and stream continuity. **[UNRESOLVED → acceptance criterion §10]**
 
-**Migration note:** the current `WorkspaceSurface` already keeps hosts as stable keyed siblings under one parent, which is why sibling reorder preserves the host node. The target generalizes that property from "one parent, reorder only" to "stable host layer, arbitrary placement". The existing DOM test remains valid for the sibling case; new tests must cover cross-panel moves with a real host. **[VERIFIED / DECISION]**
+**Practical limits:** hidden hosts consume memory, so "close" must genuinely unmount. Restoring after an application restart cannot preserve in-memory runtime/composer state — only durable identity and layout; that is a different operation from an in-session move. **[DECISION]**
+
+**Migration note:** the current `WorkspaceSurface` already keeps hosts as stable keyed siblings under one parent, which is why sibling reorder preserves the host node. The target generalizes that property from "one parent, reorder only" to "one host layer, arbitrary placement via geometry". The existing DOM test remains valid for the sibling case. **[VERIFIED / DECISION]**
 
 ### 5.6 Identity ownership **[DECISION]**
 
-- `chatTabs` remains the sole **conversation** identity and shared-membership system. `ContentIdentity` for `chat`/`agent` stores a `tabKey` reference into it; the layout never duplicates conversation identity or message state.
+- `chatTabs` remains the sole **conversation** identity and shared-membership system. `ConversationResource` in §5.2 stores a `tabKey` reference into it; the layout never duplicates conversation identity or message state.
 - Panel placement, split sizing, and **panel-local active tab selection** are owned by the workspace layout tree (`WorkspaceLayout`), not by `chatTabs`. `chatTabs.localActiveKey` stays the URL-authoritative selection for the Chat area only.
-- Non-chat content gets identity in `ContentIdentity` (project id, file id, URL) — a separate concern, not a second tab system.
+- Non-chat content gets a `Resource` variant (project id, file id, URL) — a separate concern, not a second tab system.
 - A `hostId` is unique per content identity; the reconciler prevents the same conversation from being mounted in two panels.
 - No second conversation store, no mirrored message state, no second router.
 
@@ -305,7 +381,7 @@ The unit of persistence is a **content host** keyed by a stable `hostId` derived
 | Stable content host (runtime/session/UI state) | stable host layer keyed by `hostId` (§5.5) | Never reparented; preserves state on move |
 | Direct runtime | `DirectChatHost` (content-owned) | Proven isolated host; keep |
 | OpenCode runtime | extracted `OpenCodeChatHost` (content-owned) | Session-scoped, isolated; required for mixed arrangements |
-| Ambient thread-list provider | AppShell | Sidebar live decorations depend on it (§2.2) |
+| Conversation-activity projection | `features/chat/state/conversationActivity.ts` | Derived status/timestamps for Sidebar; not a conversation/message store (§2.2) |
 | Device-local layout persistence | `useDesktopLayout` persist pattern | Established pattern |
 | Portable preferences | `/api/preferences` + SQLite | Server-authoritative |
 | One-shot provider overrides | currently global `providersStore`; **should be scoped per draft/surface** | Concrete race risk |
@@ -333,7 +409,7 @@ The unit of persistence is a **content host** keyed by a stable `hostId` derived
 3. **Phase 2 — scope one-shot overrides** to the draft/surface that owns them; regression test: a pick in surface A does not affect surface B's send.
 4. **Phase 3 — introduce the layout model** (§5.2) with panel-local `activeTabId`, split `sizes`, `contentType`, and `hostId` references into `chatTabs`; add device-wide persistence with versioned migration. This is required for tabs/split/resize/move/restore, not optional.
 5. **Phase 4 — stable host layer + content hosts:** generalize the stable-sibling property to arbitrary placement (§5.5); extract `OpenCodeChatHost` for mixed arrangements (§5.4); add file tree + viewer behind a secure endpoint.
-6. **Phase 5 — complete runtime ownership move:** move runtime + draft binding + engine selection + route binding as one coordinated change, keeping the Sidebar's ambient thread-list provider (§2.2); verify with Phase 1 tests plus cross-panel move tests.
+6. **Phase 5 — complete runtime ownership move:** move runtime + draft binding + engine selection + route binding as one coordinated change, with the activity projection (§2.2) already feeding the Sidebar; verify with Phase 1 tests plus cross-panel move tests.
 7. **Phase 6 — documentation reconciliation** (§13) in the same commits as the changes.
 
 At every phase: preserve existing working code, no runtime merger, no second tab system, no new dependency without ADR, `bun run verify` + DOM + E2E + security gates, and the Definition of DONE in `AGENTS.md`.
@@ -349,7 +425,7 @@ At every phase: preserve existing working code, no runtime merger, no second tab
 | 2 | 1 | Scope one-shot overrides | Race regression test passes |
 | 3 | 2 | Layout model (§5.2) + device-wide persistence + migrate | DOM tests for add/close/reorder/split/resize/restore; panel-local selection independent |
 | 4 | 3 | Stable host layer (§5.5) + `OpenCodeChatHost` + file tree/viewer behind secure endpoint | Cross-panel move preserves runtime/composer/scroll; mixed Direct+OpenCode E2E; traversal/symlink rejection |
-| 5 | 1, 4 | Complete runtime ownership move (draft binding, engine selection, route binding, Sidebar provider) | Phase 1 tests still pass; no duplicate conversation on move; Sidebar live decorations still work |
+| 5 | 1, 4 | Complete runtime ownership move (draft binding, engine selection, route binding); install activity projection (§2.2) | Phase 1 tests still pass; no duplicate conversation on move; Sidebar live decorations accurate across isolated hosts |
 | 6 | each phase | Documentation reconciliation | Docs match code |
 
 Do not start a later phase before the earlier exit evidence exists.
@@ -359,8 +435,10 @@ Do not start a later phase before the earlier exit evidence exists.
 ## 10. Acceptance criteria and regression-test requirements
 
 - Two Direct runtimes in one page: distinct conversation ids, distinct reply markers, each panel contains only its own marker; record message parts individually (§2b.5). **[required before any panel expansion]**
-- Mixed Direct + OpenCode in one page: both mount, sends isolated (§2b.4 outcome, now permanent).
+- **Mixed Direct + OpenCode permanent integration/E2E test (outstanding):** two independent conversations (one Direct, one OpenCode), **concurrent** sends with distinct reply markers, record message parts individually, assert each surface contains only its own marker, assert correct isolated responses and lifecycle events (running/completed/failed/cancelled), and assert no cross-runtime interference. §2b.4 proved mounting only; this test closes that gap. **[required before mixed arrangements are declared complete]**
 - Provider pick in one surface does not affect another surface's send.
+- **Sidebar activity projection:** with multiple isolated Direct and OpenCode hosts open, the Sidebar shows correct running/completed/failed/cancelled status and fresh last-message timestamps for every conversation, keyed by canonical conversation id; closing a host clears its entry (§2.2). **[required before ambient provider removal]**
+- **Real-host cross-panel move:** two real `DirectChatHost`s, composer text, scroll position, and an active stream survive a tab move between panels; assert the host component instance is not remounted (§5.5). **[required before claiming state preservation]**
 - Panel add/close/reorder/split/resize/restore: DOM + E2E; layout survives reload; corrupt layout falls back safely.
 - Cross-container move: conversation identity, runtime/session instance, active stream/execution state, composer contents, and scroll/viewport state are preserved (§5.5). Test with a real host, not a marker; assert the host component instance is not remounted.
 - Panel-local selection: two panels show two different active conversations simultaneously; `chatTabs.localActiveKey` remains the single URL-authoritative Chat-area selection.
