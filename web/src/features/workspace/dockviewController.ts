@@ -71,8 +71,12 @@ export interface DockviewControllerApi {
   toJSON(): SerializedDockview;
   fromJSON(data: SerializedDockview, options?: { reuseExistingPanels: boolean }): void;
   onDidMovePanel(listener: (event: { panel: PanelRef }) => void): Disposable;
-  onWillMutateLayout(listener: (event: { kind: MutationKind; origin: DockviewOrigin }) => void): Disposable;
-  onDidMutateLayout(listener: (event: { kind: MutationKind; origin: DockviewOrigin }) => void): Disposable;
+  onWillMutateLayout(
+    listener: (event: { kind: MutationKind; origin: DockviewOrigin }) => void,
+  ): Disposable;
+  onDidMutateLayout(
+    listener: (event: { kind: MutationKind; origin: DockviewOrigin }) => void,
+  ): Disposable;
   onDidAddPanel(listener: (panel: PanelRef) => void): Disposable;
   onDidRemovePanel(listener: (panel: PanelRef) => void): Disposable;
   onDidLayoutChange(listener: (event: LayoutChangeEvent) => void): Disposable;
@@ -145,7 +149,8 @@ export class DockviewController {
     this.openTabKeys = canonicalPanelKeys(deps.openTabKeys);
     this.microtask = deps.scheduleMicrotask ?? ((fn) => queueMicrotask(fn));
     this.setTimeoutFn = deps.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
-    this.clearTimeoutFn = deps.clearTimeoutFn ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    this.clearTimeoutFn =
+      deps.clearTimeoutFn ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.debounceMs = deps.debounceMs ?? 250;
   }
 

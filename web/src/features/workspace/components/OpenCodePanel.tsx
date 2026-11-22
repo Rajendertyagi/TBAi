@@ -17,7 +17,7 @@ export function OpenCodePanel(props: IDockviewPanelProps<PanelParams>) {
   const params = parsePanelParams(props.params);
   const visible = usePanelVisibility(props.api);
 
-  if (!params || params.contentType !== "opencode") {
+  if (params?.contentType !== "opencode") {
     return (
       <div
         className="flex h-full items-center justify-center p-6 text-sm text-destructive"

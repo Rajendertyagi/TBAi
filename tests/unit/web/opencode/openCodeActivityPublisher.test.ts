@@ -10,7 +10,10 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useConversationActivityStore } from "@web/features/chat/state/conversationActivity";
-import type { V2ExecutionOutcome, V2ExecutionOutcomeRecord } from "@web/features/opencode/sync/executionFacts";
+import type {
+  V2ExecutionOutcome,
+  V2ExecutionOutcomeRecord,
+} from "@web/features/opencode/sync/executionFacts";
 import {
   decideOpenCodeActivity,
   INITIAL_OPEN_CODE_ACTIVITY_LATCH,

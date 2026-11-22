@@ -31,9 +31,9 @@ describe("createPanelRegistry", () => {
 
 describe("desiredPanelKeys", () => {
   it("keeps canonical keys, drops malformed/empty/duplicate keys", () => {
-    expect(
-      desiredPanelKeys(["chat:a", "agent:b", "chat:a", "garbage", "chat:", "agent:"]),
-    ).toEqual(["chat:a", "agent:b"]);
+    expect(desiredPanelKeys(["chat:a", "agent:b", "chat:a", "garbage", "chat:", "agent:"])).toEqual(
+      ["chat:a", "agent:b"],
+    );
   });
 });
 

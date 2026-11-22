@@ -25,11 +25,7 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 
-import {
-  DIRECT_COMPONENT,
-  OPENCODE_COMPONENT,
-  type PanelParams,
-} from "../dockviewParams";
+import { DIRECT_COMPONENT, OPENCODE_COMPONENT, type PanelParams } from "../dockviewParams";
 import { DockviewController, type DockviewControllerApi } from "../dockviewController";
 import {
   DOCKVIEW_LAYOUT_PERSIST_DEBOUNCE_MS,
@@ -38,11 +34,7 @@ import {
 } from "../state/layoutPersistence";
 import { DirectPanel } from "./DirectPanel";
 import { OpenCodePanel } from "./OpenCodePanel";
-import {
-  NEW_DRAFT_TAB_ID,
-  useChatTabsStore,
-  visibleTabs,
-} from "../../chat/state/chatTabs";
+import { NEW_DRAFT_TAB_ID, useChatTabsStore, visibleTabs } from "../../chat/state/chatTabs";
 import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 
 const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelParams>>> = {
@@ -124,8 +116,7 @@ export function DockviewWorkspace({
         if (handler) handler(tabKey);
         else useChatTabsStore.getState().close(tabKey);
       },
-      onActivePanelChange: (tabKey, origin) =>
-        onActivePanelChangeRef.current?.(tabKey, origin),
+      onActivePanelChange: (tabKey, origin) => onActivePanelChangeRef.current?.(tabKey, origin),
       persist: (layout) => saveLayout(layout, storageKeyRef.current),
       restore: () => loadLayout(storageKeyRef.current, openTabKeysRef.current),
       debounceMs: DOCKVIEW_LAYOUT_PERSIST_DEBOUNCE_MS,
@@ -169,8 +160,6 @@ function useCanonicalOpenTabKeys(): string[] {
   const sharedTabs = usePreferencesStore((s) => s.snapshot?.sharedTabs);
   return useMemo(() => {
     const tabs = visibleTabs({ ...tabState, sharedTabs: sharedTabs ?? [] });
-    return tabs
-      .filter((tab) => tab.ref !== NEW_DRAFT_TAB_ID)
-      .map((tab) => tab.key);
+    return tabs.filter((tab) => tab.ref !== NEW_DRAFT_TAB_ID).map((tab) => tab.key);
   }, [tabState, sharedTabs]);
 }

@@ -136,7 +136,8 @@ export function reconcileLayout(
 
   const groupIds = new Set<string>();
   collectGroupIds(root, groupIds);
-  const activeGroup = layout.activeGroup && groupIds.has(layout.activeGroup) ? layout.activeGroup : undefined;
+  const activeGroup =
+    layout.activeGroup && groupIds.has(layout.activeGroup) ? layout.activeGroup : undefined;
 
   return {
     grid: { ...layout.grid, root },

@@ -265,7 +265,9 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
       if (shouldPublishTerminal(generationAtStart, runGenerationRef.current.get(threadId) ?? 0)) {
         const execution = directExecutionFromTerminalStatus(status.terminalKind);
         if (execution) {
-          useConversationActivityStore.getState().publish(threadId, { execution, engine: "direct" });
+          useConversationActivityStore
+            .getState()
+            .publish(threadId, { execution, engine: "direct" });
         }
       }
       try {

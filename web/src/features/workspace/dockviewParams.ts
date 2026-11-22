@@ -69,7 +69,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]));
+  return aKeys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

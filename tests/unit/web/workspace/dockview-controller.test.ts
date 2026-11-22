@@ -21,7 +21,8 @@ type MutateListener = Parameters<DockviewControllerApi["onDidMutateLayout"]>[0];
 type PanelListener = Parameters<DockviewControllerApi["onDidRemovePanel"]>[0];
 type LayoutListener = Parameters<DockviewControllerApi["onDidLayoutChange"]>[0];
 type ActiveListener = Parameters<DockviewControllerApi["onDidActivePanelChange"]>[0];
-type LayoutReasons = Parameters<LayoutListener>[0]["reasons"] extends ReadonlySet<infer R> ? R : never;
+type LayoutReasons =
+  Parameters<LayoutListener>[0]["reasons"] extends ReadonlySet<infer R> ? R : never;
 type SerializedLayout = ReturnType<DockviewControllerApi["toJSON"]>;
 
 function makeLayout(): SerializedLayout {

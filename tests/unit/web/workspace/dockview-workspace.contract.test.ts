@@ -29,7 +29,7 @@ describe("DockviewWorkspace adapter contract", () => {
     expect(source).toContain("<DockviewReact");
     expect(source).toContain("theme={themeAbyss}");
     expect(source).toContain("components={COMPONENTS}");
-    expect(source).toContain('dockview-react/dist/styles/dockview.css');
+    expect(source).toContain("dockview-react/dist/styles/dockview.css");
   });
 
   it("delegates the event state machine to DockviewController via a thin API adapter", () => {

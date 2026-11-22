@@ -17,7 +17,7 @@ export function DirectPanel(props: IDockviewPanelProps<PanelParams>) {
   const params = parsePanelParams(props.params);
   const visible = usePanelVisibility(props.api);
 
-  if (!params || params.contentType !== "direct") {
+  if (params?.contentType !== "direct") {
     return <InvalidPanelParams panelId={props.api.id} />;
   }
 
@@ -58,12 +58,19 @@ function BoundDirectPanel({
       data-visible={visible}
     >
       {isDraft ? (
-        // Draft materialization is owned by the Phase 5a draft-aware host. A
-        // generic DirectChatHost uses noopThreadIdChange and would silently drop
-        // first-send materialization, so we never mount one for a draft here.
+        // Draft materialization is owned by `DraftChatHost`, which wires the
+        // runtime's thread-id-change callback to `resolveDraftId`. We do NOT
+        // mount it here: the `chat:new` panel is excluded from canonical panel
+        // keys, and during the staged migration (plan §5a decision 5) AppShell
+        // still renders the routed ChatView with its own new-thread runtime for
+        // `/chat/new`. Mounting a second draft runtime here would make both call
+        // `adapter.initialize()` on first send and both bind the same id — two
+        // runtimes for one draft, breaking the one-shot lifecycle. Phase E's
+        // route controller must mount the single `DraftChatHost` only after it
+        // removes the routed draft view / root runtime binding.
         <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
           <span data-testid="draft-panel-notice">New chat draft</span>
-          <span>First-send materialization is provided by the draft-aware host in Phase 5a.</span>
+          <span>First-send materialization is provided by the draft-aware host in Phase E.</span>
         </div>
       ) : owned ? (
         <DirectChatHost threadId={refId} isDraft={false} />
