@@ -124,7 +124,7 @@ Required work:
 - **Definitive panel-close detection (blocking).** Never apply close semantics from `onDidRemovePanel` alone. Required procedure for every suspected close:
   1. Identify relocations via `onDidMovePanel` and the settled layout mutation events (`onDidMutateLayout` with `kind: 'move'`); a move is never a close.
   2. For a suspected close, wait until the structural mutation has settled (do not act on the intermediate add/remove pair emitted during a move).
-  3. Confirm the panel is **genuinely absent** from Dockview's current registry using `api.getPanel(id)` and `api.panels` (`component.api.d.ts:562,625`).
+  3. Confirm the panel is **genuinely absent** from Dockview's current registry using `api.getPanel(id)` and `api.panels` (`component.api.d.ts:527,562`).
   4. Only then apply the intended close behavior and reconcile with canonical `chatTabs`.
   This protects conversations from being closed, or their runtimes disposed, merely because a panel was relocated. Add regression coverage for move-then-check and genuine-close paths.
 - `onDidLayoutChange`: persist layout. Payload is `{ reasons: ReadonlySet<'geometry'|'structure'|'activePanel'|'panelTitle'|'panelParameters'> }` (`types.d.ts:42-47`) — persist only relevant reasons, debounce/coalesce, and ignore writes while applying `fromJSON`. Use `onDidLayoutFromJSON` (`component.api.d.ts:416`) to clear the restore guard. Mutation boundary events `onWillMutateLayout`/`onDidMutateLayout` (with `kind` incl. `move`/`load`) are available if a transaction-aware guard is needed.
