@@ -1,12 +1,12 @@
 # TBAi — Unified Workspace Redesign (durable handoff)
 
-**This is the canonical handoff document and current source of truth.** A future agent with no access to the previous chat must read this file first.
+**Read `WORKSPACE_ARCHITECTURE_PLAN.md` first — it is the authoritative architecture plan.** This README is the durable handoff and background context; where it conflicts with the plan, the plan wins.
 
-## Current status (2026-11-22, revision 5)
+## Current status (2026-11-22, revision 6)
 
-- **Phase:** the five confirmed multi-chat fixes from `multi-chat-architecture-audit.md` are implemented and verified. The full generic panel/tab redesign remains a future phase awaiting owner approval.
-- **Production code:** the five fixes are implemented across production files (thread-list cache, operation ownership, Direct model/reasoning selection, history visit ownership, stable workspace panel hosts). The current uncommitted diff touches 6 production files; earlier fixes in this effort were committed separately. No dependencies were added. See `docs/decisions.md` for the `features/workspace/` ownership decision.
-- **Verification:** typecheck, build, lint, format, test-locations all exit 0; unit 4999 pass / 3 skip / 0 fail, integration 1037 pass / 85 skip / 0 fail, DOM 828 pass / 0 fail. No live browser/Tauri E2E was run.
+- **Phase:** the five confirmed multi-chat fixes from `multi-chat-architecture-audit.md` are implemented and committed. The authoritative, implementation-ready `WORKSPACE_ARCHITECTURE_PLAN.md` is complete and awaits owner review; no further implementation is authorized by it.
+- **Production code:** the five fixes are committed (thread-list cache, operation ownership, Direct model/reasoning selection, history visit ownership, stable workspace panel hosts). No dependencies were added. See `docs/decisions.md` for the `features/workspace/` ownership decision. The working tree is clean at the audited HEAD apart from untracked prototype screenshots.
+- **Verification (agent-reported, not re-run in the latest audit):** typecheck, build, lint, format, test-locations exit 0; unit 4999 pass / 3 skip / 0 fail, integration 1037 pass / 85 skip / 0 fail, DOM 828 pass / 0 fail. No live browser/Tauri E2E was run, and no CI results exist for this branch.
 - **Prototype:** `prototype/index.html` — standalone, zero dependencies, interactive, dark + light. Rebuilt in revision 4 around generic panels + content types. Interaction test: 16/16 PASS, zero console errors.
 - **Screenshots:** the `arch-*` renders were review artifacts and are NOT committed to the repository (removed in a follow-up commit). They remain on the local disk under `prototype/screenshots/` as untracked files; the links below are therefore local-only and will not resolve from a fresh clone.
 
