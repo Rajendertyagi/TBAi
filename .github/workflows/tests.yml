@@ -38,7 +38,7 @@ on:
         type: string
         required: false
   push:
-    branches: [main, develop, ci/tauri-e2e-verify]
+    branches: [main, develop, ci/tauri-e2e-verify, ui-foundation-upgrade]
   pull_request:
     branches: [main, develop]
 
@@ -461,6 +461,7 @@ jobs:
           opencode-v2-code-route.spec.ts
           appearance-scaling.spec.ts
           typography-standardization.spec.ts
+          dockview-workspace.spec.ts
 
       # B1 — dedicated managed-restart recovery acceptance. This is the ONLY
       # gate for the interrupted-turn recovery contract: it drives the real
