@@ -105,15 +105,39 @@ async function seedChain(
 }
 
 /**
- * Records every Direct history page request. Registered before any navigation so
- * the FIRST load is captured too.
+ * Records Direct history page requests for ONE conversation. Registered before
+ * any navigation so the FIRST load is captured too.
+ *
+ * Phase E: conversations live in persistent Dockview panels, so several
+ * conversations can be mounted (and load history) at once. Counting every
+ * `/messages/window` request on the page would mix unrelated conversations and
+ * report 2x the per-conversation budget. Scope to the conversation under test.
  */
-function trackWindowRequests(page: Page): string[] {
+function trackWindowRequests(page: Page, conversationId: string): string[] {
   const seen: string[] = [];
+  const marker = `/api/conversations/${conversationId}/messages/window`;
   page.on("request", (r) => {
-    if (r.url().includes("/messages/window")) seen.push(r.url());
+    if (r.url().includes(marker)) seen.push(r.url());
   });
   return seen;
+}
+
+/**
+ * Close a conversation's shared-tab membership with CAS + conflict retry.
+ * Deleting the conversation row does not remove its shared tab server-side;
+ * without this, stale membership leaks across tests in the same spec file.
+ */
+async function closeSharedTab(request: APIRequestContext, conversationId: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const prefsRes = await request.get("/api/preferences");
+    if (!prefsRes.ok()) return;
+    const prefs = (await prefsRes.json()) as { revision: number };
+    const res = await request.post("/api/preferences/tabs/close", {
+      data: { baseRevision: prefs.revision, conversationId },
+    });
+    if (res.status() === 409) continue;
+    return;
+  }
 }
 
 /** Await the composer, which proves the thread shell mounted. */
@@ -138,7 +162,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const other = await createConversation(request, `rec ${tag} B`);
     await seedChain(request, failed, 12, `${tag}-a`);
     await seedChain(request, other, 12, `${tag}-b`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, failed);
 
     try {
       // --- visit 1: the history route is broken, so the load fails ------------
@@ -182,6 +206,8 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       ).toBe(1);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, failed);
+      await closeSharedTab(request, other);
       await request.delete(`/api/conversations/${failed}`).catch(() => undefined);
       await request.delete(`/api/conversations/${other}`).catch(() => undefined);
     }
@@ -194,7 +220,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const tag = `i1b-${Date.now()}`;
     const target = await createConversation(request, `rec ${tag} A`);
     await seedChain(request, target, 12, `${tag}-a`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       // Fail ONLY the first window request. The automatic recovery then runs
@@ -220,6 +246,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       expect(requests.length, "recovery must stop once the retry has succeeded").toBe(2);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
     }
   });
@@ -230,7 +257,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const other = await createConversation(request, `rec ${tag} B`);
     await seedChain(request, target, 12, `${tag}-a`);
     await seedChain(request, other, 12, `${tag}-b`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       await page.goto(`/#/chat/${target}`);
@@ -251,6 +278,8 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
         "a healthy thread must NOT re-fetch history on ordinary navigation",
       ).toBe(0);
     } finally {
+      await closeSharedTab(request, target);
+      await closeSharedTab(request, other);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
       await request.delete(`/api/conversations/${other}`).catch(() => undefined);
     }
@@ -264,14 +293,19 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const empty = await createConversation(request, `rec ${tag} empty`);
     const other = await createConversation(request, `rec ${tag} B`);
     await seedChain(request, other, 12, `${tag}-b`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, empty);
 
     try {
       // An empty conversation is a SUCCESSFUL zero-row answer, not a failure.
       await page.goto(`/#/chat/${empty}`);
       await expectShell(page);
       await expect.poll(() => requests.length, { timeout: 30_000 }).toBe(1);
-      await expect.poll(() => page.locator("[data-row-key]").count(), { timeout: 30_000 }).toBe(0);
+      // Scope rows to THIS conversation's panel: with persistent Dockview panels
+      // another conversation's rows may be mounted (and visible) at the same time.
+      const emptyPanelRows = page.locator(
+        `[data-testid="dockview-direct-panel"][data-conversation-id="${empty}"] [data-row-key]`,
+      );
+      await expect.poll(() => emptyPanelRows.count(), { timeout: 30_000 }).toBe(0);
 
       // The visible failure state must agree: a conversation that genuinely holds
       // nothing must NOT be told its history could not be loaded. Counting
@@ -292,6 +326,8 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
         "an empty conversation must never be retried as if it had failed",
       ).toBe(0);
     } finally {
+      await closeSharedTab(request, empty);
+      await closeSharedTab(request, other);
       await request.delete(`/api/conversations/${empty}`).catch(() => undefined);
       await request.delete(`/api/conversations/${other}`).catch(() => undefined);
     }
@@ -306,7 +342,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const other = await createConversation(request, `rec ${tag} B`);
     await seedChain(request, target, 12, `${tag}-a`);
     await seedChain(request, other, 12, `${tag}-b`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       // The whole lifecycle, and the safety property that matters most is that
@@ -364,6 +400,8 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       }
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
+      await closeSharedTab(request, other);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
       await request.delete(`/api/conversations/${other}`).catch(() => undefined);
     }
@@ -378,7 +416,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const other = await createConversation(request, `rec ${tag} B`);
     await seedChain(request, target, 12, `${tag}-a`);
     await seedChain(request, other, 12, `${tag}-b`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       // Hold A's history request open so the load is provably still in flight
@@ -417,6 +455,8 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       ).toBe(1);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
+      await closeSharedTab(request, other);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
       await request.delete(`/api/conversations/${other}`).catch(() => undefined);
     }
@@ -432,7 +472,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const tag = `i6-${Date.now()}`;
     const target = await createConversation(request, `rec ${tag} A`);
     await seedChain(request, target, 12, `${tag}-a`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
     const failureRow = page.getByTestId("history-load-failed");
 
     try {
@@ -467,6 +507,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await expect(failureRow).toHaveCount(0);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
     }
   });
@@ -479,7 +520,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const tag = `i7-${Date.now()}`;
     const target = await createConversation(request, `rec ${tag} A`);
     await seedChain(request, target, 12, `${tag}-a`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       // The fault is DELIBERATELY LEFT IN PLACE for the whole test.
@@ -545,6 +586,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await expect(page.getByTestId("history-load-failed")).toBeVisible();
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
     }
   });
@@ -566,7 +608,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
     const tag = `i8-${Date.now()}`;
     const target = await createConversation(request, `rec ${tag} A`);
     await seedChain(request, target, 12, `${tag}-a`);
-    const requests = trackWindowRequests(page);
+    const requests = trackWindowRequests(page, target);
 
     try {
       await page.goto(`/#/chat/${target}`);
@@ -615,6 +657,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await expectTipLoaded(page, `rec-${tag}-a-0`);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
+      await closeSharedTab(request, target);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
     }
   });

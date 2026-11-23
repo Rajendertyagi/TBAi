@@ -457,6 +457,96 @@ function resetAllHistoryVisits(): void {
   visitGeneration += 1;
 }
 
+// ── Activation generation (Dockview persistent panels) ──────────────────────
+//
+// `beginHistoryVisit` above detects a new visit from a React MOUNT. That worked
+// when switching conversations unmounted the old surface. With Dockview, a
+// conversation's host stays mounted when it is hidden, so a failed load can
+// settle (and consume the recovery budget) while the user is elsewhere, and
+// returning produces no mount — no new visit — leaving the failure unrecoverable.
+//
+// A new visit is therefore also signalled by ACTIVATION: a conversation becoming
+// the focused one. This is a separate, per-conversation generation counter, not
+// a global slot: activating B must not reset A's budget. Repeated activation of
+// the already-active conversation is a no-op (no manufactured visits). The
+// bridge remembers the generation it last processed, so a `loadFailed` update
+// within the same activation cannot spend another visit's budget or recover a
+// hidden panel. Visibility is deliberately NOT used: in a split layout several
+// panels are visible at once, but only the activated one is a user visit.
+const activationGenerations = new Map<string, number>();
+const processedActivations = new Map<string, number>();
+let activeConversation: string | null = null;
+const activationListeners = new Set<() => void>();
+
+function emitActivationChange(): void {
+  for (const listener of activationListeners) listener();
+}
+
+/**
+ * Mark `conversationId` as the currently activated conversation. Bumps its
+ * generation only on a genuine change of focus; re-activating the same id is a
+ * no-op. Call from Dockview's active-panel change (all origins) and from
+ * route/Chat-Threads focus so initial and API-driven activation are covered.
+ */
+export function activateHistoryConversation(conversationId: string): void {
+  if (activeConversation === conversationId) return;
+  activeConversation = conversationId;
+  activationGenerations.set(conversationId, (activationGenerations.get(conversationId) ?? 0) + 1);
+  emitActivationChange();
+}
+
+/** Current activation generation for a conversation (0 if never activated). */
+export function getHistoryActivationGeneration(conversationId: string): number {
+  return activationGenerations.get(conversationId) ?? 0;
+}
+
+/**
+ * True when `conversationId` is the activated conversation. When no activation
+ * has been recorded yet (non-Dockview surfaces / pre-activation first paint),
+ * returns true so the mount-based visit signal still works as a fallback.
+ */
+export function isHistoryConversationActive(conversationId: string): boolean {
+  return activeConversation === null || activeConversation === conversationId;
+}
+
+/** Subscribe to activation changes (for `useSyncExternalStore`). */
+export function subscribeHistoryActivation(listener: () => void): () => void {
+  activationListeners.add(listener);
+  return () => activationListeners.delete(listener);
+}
+
+/**
+ * Consume a pending activation for `conversationId`. Returns true exactly once
+ * per generation — when the conversation has been (re)activated since the last
+ * time this was called. The bridge calls this in its recovery effect so a
+ * `loadFailed` change within one activation cannot manufacture a new visit.
+ */
+export function beginHistoryActivation(conversationId: string): boolean {
+  const current = activationGenerations.get(conversationId) ?? 0;
+  const processed = processedActivations.get(conversationId) ?? 0;
+  if (current === processed) return false;
+  processedActivations.set(conversationId, current);
+  return true;
+}
+
+/** React hook: the current activation generation for a conversation. */
+export function useHistoryActivationGeneration(conversationId: string | null): number {
+  return useSyncExternalStore(
+    subscribeHistoryActivation,
+    () => (conversationId ? getHistoryActivationGeneration(conversationId) : 0),
+    () => 0,
+  );
+}
+
+/** React hook: whether a conversation is currently the activated one. */
+export function useIsHistoryConversationActive(conversationId: string | null): boolean {
+  return useSyncExternalStore(
+    subscribeHistoryActivation,
+    () => (conversationId ? isHistoryConversationActive(conversationId) : false),
+    () => false,
+  );
+}
+
 /**
  * Record that a conversation's history load failed.
  *

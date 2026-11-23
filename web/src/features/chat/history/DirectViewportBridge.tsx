@@ -29,12 +29,15 @@ import { historyConfig } from "../../../config/history";
 import { logger } from "../../../lib/logger";
 import { TooltipIconButton } from "../../../components/assistant-ui/elements/tooltip-icon-button";
 import {
+  beginHistoryActivation,
   beginHistoryReload,
   beginHistoryVisit,
   clearHistoryRecoveryAttempted,
   hasAttemptedHistoryRecovery,
   markHistoryRecoveryAttempted,
   useDirectHistoryWindow,
+  useHistoryActivationGeneration,
+  useIsHistoryConversationActive,
 } from "./useDirectHistoryWindow";
 
 /**
@@ -114,6 +117,16 @@ export function DirectViewportBridge({ owner }: { owner: object }) {
    */
   const isHistoryLoading = useAuiState((s) => s.thread.isLoading);
 
+  // Dockview keeps a conversation's host mounted while hidden. A new user visit
+  // is therefore an ACTIVATION (the conversation became the focused one), not
+  // just a mount. Both signals are consulted: `beginHistoryVisit` covers the
+  // mount path (non-Dockview surfaces / first paint), `beginHistoryActivation`
+  // covers re-activation of a persistent panel. Each is consumed at most once
+  // per genuine visit, so a `loadFailed` update within one activation cannot
+  // manufacture a second visit or spend another visit's budget.
+  const activationGeneration = useHistoryActivationGeneration(conversationId);
+  const isActive = useIsHistoryConversationActive(conversationId);
+
   useEffect(() => {
     if (!conversationId) {
       logger.info("chat", "history.recovery_visit", {
@@ -125,14 +138,32 @@ export function DirectViewportBridge({ owner }: { owner: object }) {
     }
     // Consulted and consumed in the SAME effect, so no render can slip between
     // re-arming an exhausted budget and spending it.
-    const isNewVisit = beginHistoryVisit(owner, conversationId);
-    logger.info("chat", "history.recovery_visit", { conversationId, isNewVisit, loadFailed });
+    // Consume BOTH signals explicitly (no short-circuit): a mount visit must not
+    // leave a pending activation unconsumed, which would later look like a new
+    // visit on an unrelated `loadFailed` update.
+    const mountedVisit = beginHistoryVisit(owner, conversationId);
+    const activatedVisit = beginHistoryActivation(conversationId);
+    const isNewVisit = mountedVisit || activatedVisit;
+    logger.info("chat", "history.recovery_visit", {
+      conversationId,
+      isNewVisit,
+      loadFailed,
+      isActive,
+      activationGeneration,
+    });
 
     if (!loadFailed) {
       // The thread loaded (or is empty), so a future failure is recoverable
       // again rather than permanently suppressed by an old attempt.
       clearHistoryRecoveryAttempted(conversationId);
       logger.info("chat", "history.recovery_skipped", { conversationId, reason: "no-failure" });
+      return;
+    }
+    // A failed load on a HIDDEN conversation must stay pending: do not spend
+    // its recovery budget and do not refresh a thread the user cannot see.
+    // The failure is re-evaluated when the conversation is activated again.
+    if (!isActive) {
+      logger.info("chat", "history.recovery_skipped", { conversationId, reason: "inactive" });
       return;
     }
     if (isNewVisit) {
@@ -158,7 +189,7 @@ export function DirectViewportBridge({ owner }: { owner: object }) {
       // The refresh itself failed; the failure signal stays set, and the next
       // visit into this conversation re-arms the budget and tries again.
     });
-  }, [aui, owner, conversationId, loadFailed, isRunning]);
+  }, [aui, owner, conversationId, loadFailed, isRunning, isActive, activationGeneration]);
 
   const onLoadEarlier = useCallback(async () => {
     if (busy) return;

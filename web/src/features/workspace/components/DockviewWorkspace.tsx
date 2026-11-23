@@ -45,7 +45,13 @@ import {
 import { DirectPanel } from "./DirectPanel";
 import { OpenCodePanel } from "./OpenCodePanel";
 import { createDraftAlias, DRAFT_PANEL_ID, type DraftAlias } from "../draftAlias";
-import { useChatTabsStore, visibleTabs } from "../../chat/state/chatTabs";
+import {
+  NEW_DRAFT_TAB_ID,
+  parseTabKey,
+  useChatTabsStore,
+  visibleTabs,
+} from "../../chat/state/chatTabs";
+import { activateHistoryConversation } from "../../chat/history/useDirectHistoryWindow";
 import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 
 const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelParams>>> = {
@@ -180,7 +186,18 @@ export function DockviewWorkspace({
           else useChatTabsStore.getState().close(canonicalKey);
         },
         onActivePanelChange: (panelId, origin) => {
-          onActivePanelChangeRef.current?.(canonicalKeyFor(panelId ?? ""), origin);
+          const canonicalKey = canonicalKeyFor(panelId ?? "");
+          // A conversation becoming the active Dockview panel is a genuine new
+          // user visit for history recovery — including API-driven focus from
+          // route navigation and Chat Threads, not just user tab clicks. This
+          // is activation, NOT visibility: split layouts keep several panels
+          // visible, but only the activated one is a visit. Repeated focus of
+          // the already-active conversation is a no-op in the activation store.
+          const parsed = parseTabKey(canonicalKey);
+          if (parsed?.kind === "chat" && parsed.ref !== NEW_DRAFT_TAB_ID) {
+            activateHistoryConversation(parsed.ref);
+          }
+          onActivePanelChangeRef.current?.(canonicalKey, origin);
         },
         persist: (layout) => saveLayout(layout, storageKeyRef.current),
         restore: () => loadLayout(storageKeyRef.current, openTabKeysRef.current),
