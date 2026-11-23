@@ -32,7 +32,7 @@ async function openCodeDraft(page: Page): Promise<void> {
     await openCode.click();
   }
   await expect(openCode).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Model" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: /Send a message/ })).toBeVisible();
 }
@@ -86,7 +86,7 @@ test("Code route admits a first prompt and restores its session history", async 
     });
     await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
     await expect(composer).toHaveValue("", { timeout: ROUTE_TIMEOUT_MS });
-    await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Model" })).toBeVisible();
 
     const promptOutcome = await Promise.race([
@@ -139,7 +139,7 @@ test("Code route admits a first prompt and restores its session history", async 
       timeout: SERVER_TIMEOUT_MS,
     });
     await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
-    await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible();
     // Phase 3 / L4, live and unmocked: after a reload the runtime must reach
     // READY from a real hydration of the real managed server. A hydration that
     // never settles renders as "Disconnected" or a stuck "Working", so this is

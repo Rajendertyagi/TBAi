@@ -170,7 +170,7 @@ test("D2 OpenCode draft send routes to /code/<id> with zero /api/chat calls", as
     await setDraftEngine(page, "OpenCode");
 
     // Engine switch must have replaced the Bot chip with the Agent chip.
-    await expect(page.getByRole("button", { name: "Agent" })).toBeVisible({
+    await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible({
       timeout: 10000,
     });
 

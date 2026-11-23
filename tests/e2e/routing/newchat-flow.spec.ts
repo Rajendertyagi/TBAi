@@ -63,12 +63,14 @@ test("welcome draft engine switch swaps Direct chips for the Agent chip", async 
   // Bot, so the engine swap reads as Bot count 1 → 2 — asserted structurally
   // below, not by icon identity.
   await expect(page.locator("button:has(.lucide-bot)")).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Agent" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Agent", exact: true })).toHaveCount(0);
 
   // Switch to OpenCode: Agent chip appears, Bot count doubles (Agent +
   // OpenCode-model chips), Brain stays single (one thinking chip either way).
   await engineGroup.getByRole("button", { name: "OpenCode" }).click();
-  await expect(page.getByRole("button", { name: "Agent" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible({
+    timeout: 15000,
+  });
   await expect(page.locator("button:has(.lucide-bot)")).toHaveCount(2);
 });
 

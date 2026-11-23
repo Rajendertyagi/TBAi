@@ -31,6 +31,28 @@ async function rmConv(request: APIRequestContext, id: string): Promise<void> {
   await request.delete(`/api/conversations/${id}`).catch(() => {});
 }
 
+/**
+ * Add conversations to shared workspace membership (CAS). A conversation only
+ * becomes a Dockview panel when it is in `sharedTabs` — clicking a sidebar row
+ * navigates but does not open a panel. This mirrors the proven helper in
+ * tab-strip-reorder.spec.ts.
+ */
+async function addToSharedTabs(request: APIRequestContext, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const prefsRes = await request.get("/api/preferences");
+      expect(prefsRes.ok()).toBe(true);
+      const prefs = (await prefsRes.json()) as { revision: number };
+      const res = await request.post("/api/preferences/tabs/open", {
+        data: { baseRevision: prefs.revision, conversationId: id, kind: "chat" },
+      });
+      if (res.status() === 409) continue;
+      expect(res.ok()).toBe(true);
+      break;
+    }
+  }
+}
+
 /** Open a seeded conversation as a Dockview panel via its deep link. */
 async function openPanel(page: Page, id: string): Promise<void> {
   await page.goto(`/#/chat/${id}`);
@@ -73,9 +95,9 @@ test.describe("Dockview workspace (hermetic)", () => {
     const a = await seedConversation(request, { title: `${MARKER}-a` });
     const b = await seedConversation(request, { title: `${MARKER}-b` });
     created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
 
     await openPanel(page, a.id);
-    await openFromSidebar(page, b.title);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
 
     const ids = await page
@@ -93,9 +115,9 @@ test.describe("Dockview workspace (hermetic)", () => {
     const a = await seedConversation(request, { title: `${MARKER}-move-a` });
     const b = await seedConversation(request, { title: `${MARKER}-move-b` });
     created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
 
     await openPanel(page, a.id);
-    await openFromSidebar(page, b.title);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
     // Capture both host identities, then drag panel A's tab onto panel B's tab
@@ -118,8 +140,8 @@ test.describe("Dockview workspace (hermetic)", () => {
     const a = await seedConversation(request, { title: `${MARKER}-composer` });
     const b = await seedConversation(request, { title: `${MARKER}-composer-other` });
     created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
     await openPanel(page, a.id);
-    await openFromSidebar(page, b.title);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
     // Focus A's panel and type a draft.
@@ -142,6 +164,7 @@ test.describe("Dockview workspace (hermetic)", () => {
     const a = await seedConversation(request, { title: `${MARKER}-hidden` });
     const b = await seedConversation(request, { title: `${MARKER}-hidden-other` });
     created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
     await openPanel(page, a.id);
 
     // Start a held run on conversation A.
