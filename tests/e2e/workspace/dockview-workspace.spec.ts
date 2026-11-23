@@ -60,6 +60,20 @@ async function openPanel(page: Page, id: string): Promise<void> {
   await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(1, { timeout: 15000 });
 }
 
+/**
+ * Wait until the Chat Threads strip reflects every shared tab. Shared
+ * membership arrives via the preferences snapshot (async), so asserting panel
+ * counts before it lands reads a stale single-panel layout.
+ */
+async function waitForSharedTabs(page: Page, titles: string[]): Promise<void> {
+  const strip = page.getByRole("tablist", { name: "Chat tabs" });
+  for (const title of titles) {
+    await expect(strip.getByRole("tab", { name: new RegExp(title, "i") })).toBeVisible({
+      timeout: 15000,
+    });
+  }
+}
+
 /** Click a conversation's row in the Chat Threads sidebar (a button, not a tab). */
 async function openFromSidebar(page: Page, title: string): Promise<void> {
   await page
@@ -98,6 +112,7 @@ test.describe("Dockview workspace (hermetic)", () => {
     await addToSharedTabs(request, [a.id, b.id]);
 
     await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
 
     const ids = await page
@@ -118,6 +133,7 @@ test.describe("Dockview workspace (hermetic)", () => {
     await addToSharedTabs(request, [a.id, b.id]);
 
     await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
     // Capture both host identities, then drag panel A's tab onto panel B's tab
@@ -142,6 +158,7 @@ test.describe("Dockview workspace (hermetic)", () => {
     created.push(a.id, b.id);
     await addToSharedTabs(request, [a.id, b.id]);
     await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
     // Focus A's panel and type a draft.
@@ -166,6 +183,7 @@ test.describe("Dockview workspace (hermetic)", () => {
     created.push(a.id, b.id);
     await addToSharedTabs(request, [a.id, b.id]);
     await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
 
     // Start a held run on conversation A.
     await page.getByRole("textbox", COMPOSER).first().fill("stream me");
