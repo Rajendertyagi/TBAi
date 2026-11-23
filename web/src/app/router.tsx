@@ -204,15 +204,6 @@ export const router = createHashRouter([
               Component: m.KeyboardLab,
             })),
         },
-        {
-          // DEV-ONLY POC: evaluate whether Dockview preserves real DirectChatHost
-          // state across panel moves. Compiled out of production like the other labs.
-          path: ROUTE_PATTERNS.DOCKVIEW_LAB,
-          lazy: () =>
-            import("../features/workspace/DockviewLab").then((m) => ({
-              Component: m.DockviewLab,
-            })),
-        },
       ]
     : []),
 ]);

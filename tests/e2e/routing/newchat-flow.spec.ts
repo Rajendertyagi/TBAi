@@ -8,7 +8,7 @@ import {
 /**
  * Regression specs for the single-screen new-chat flow:
  * - opening a thread from a non-chat route must keep /chat/<id>
- *   (TabUrlSync used to bounce it to /chat/new — single-writer fix);
+ *   (the old URL writer used to bounce it to /chat/new — single-writer fix);
  * - the welcome draft shows the engine switch, and the OpenCode engine
  *   swaps the Direct chips for the Agent chip.
  * Read-only navigation + draft UI: no conversation is created here.
@@ -22,7 +22,7 @@ test("sidebar thread click from a settings route keeps /chat/<id>", async ({ pag
   const { id: target, title } = await seedConversation(page.request);
 
   try {
-    // Start somewhere the chat tab is NOT active, so a lagging TabUrlSync
+    // Start somewhere the chat tab is NOT active, so a lagging URL writer
     // would previously have bounced the navigation to /chat/new.
     await page.goto("/#/providers");
     await expect(page).toHaveURL(/#\/providers/);

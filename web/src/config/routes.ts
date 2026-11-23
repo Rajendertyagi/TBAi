@@ -25,7 +25,6 @@ export const ROUTE_PATTERNS = {
   OPENCODE_CONFIG: "opencode-config",
   THEME_LAB: "/theme-lab",
   KEYBOARD_LAB: "/keyboard-lab",
-  DOCKVIEW_LAB: "/dockview-lab",
   CATCH_ALL: "*",
 } as const;
 

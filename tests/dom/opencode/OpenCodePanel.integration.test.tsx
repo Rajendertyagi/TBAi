@@ -575,14 +575,12 @@ describe("OpenCode isolation boundary (plan §1 / AGENTS.md)", () => {
     expect(panelSource).not.toContain("sessionBootstrap");
     expect(panelSource).not.toContain("@opencode/client");
 
-    // Generic Dockview infrastructure never imports opencode code. POC/lab
-    // files are excluded — they are Phase E cleanup, not production infra.
+    // Generic Dockview infrastructure never imports opencode code.
     const genericInfra = [
       "web/src/features/workspace/dockviewParams.ts",
       "web/src/features/workspace/panelRegistry.ts",
       "web/src/features/workspace/dockviewController.ts",
       "web/src/features/workspace/state/layoutPersistence.ts",
-      "web/src/features/workspace/state/workspacePanels.ts",
       "web/src/features/workspace/components/DockviewWorkspace.tsx",
       "web/src/features/workspace/components/usePanelVisibility.ts",
       "web/src/features/workspace/components/usePanelMountClaim.ts",
@@ -590,7 +588,6 @@ describe("OpenCode isolation boundary (plan §1 / AGENTS.md)", () => {
       "web/src/features/workspace/components/DirectChatHost.tsx",
       "web/src/features/workspace/components/directHost.tsx",
       "web/src/features/workspace/components/DraftChatHost.tsx",
-      "web/src/features/workspace/components/WorkspaceSurface.tsx",
     ];
     for (const relative of genericInfra) {
       const source = await Bun.file(path.join(REPO_ROOT, relative)).text();

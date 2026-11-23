@@ -346,7 +346,7 @@ function Composer({
   // this send (it would mint an opencode row then fail the prompt with
   // ENGINE_MISMATCH 422). Instead: snapshot once → materialize via the
   // single owner → stash the text as the conversation's pending first prompt
-  // → bind the agent tab (TabUrlSync navigates to /code/:id). The Code
+  // → bind the agent tab (the focus controller navigates to /code/:id). The Code
   // surface consumes the stash into its session-bound runtime exactly once.
   // Failure keeps the text in the box (never cleared here) with a truthful
   // error; offline is already gated by the inert button below.
