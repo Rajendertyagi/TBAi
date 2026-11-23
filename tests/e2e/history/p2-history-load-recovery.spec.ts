@@ -56,7 +56,23 @@ async function createConversation(request: APIRequestContext, title: string): Pr
   const created = await request.post("/api/conversations", {
     data: { title, workspaceMode: "simple", engine: "direct" },
   });
-  return ((await created.json()) as { id: string }).id;
+  const id = ((await created.json()) as { id: string }).id;
+  // Phase E: conversations live in Dockview panels. A conversation not in
+  // shared membership is a detached local presentation that is removed when
+  // navigating away, so re-entry remounts it and re-runs its history load.
+  // These specs assert the runtime's per-visit recovery budget, which requires
+  // the panel to stay mounted across SPA navigation — add it to shared tabs.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const prefsRes = await request.get("/api/preferences");
+    if (!prefsRes.ok()) break;
+    const prefs = (await prefsRes.json()) as { revision: number };
+    const res = await request.post("/api/preferences/tabs/open", {
+      data: { baseRevision: prefs.revision, conversationId: id, kind: "chat" },
+    });
+    if (res.status() === 409) continue;
+    break;
+  }
+  return id;
 }
 
 /**
