@@ -205,7 +205,16 @@ export function DockviewWorkspace({
 
   useEffect(() => {
     controllerRef.current?.setOpenTabKeys(openTabKeys);
-  }, [openTabKeys]);
+    // Reconciliation adds panels in a microtask; Dockview makes the last added
+    // panel active. Re-assert the canonical active key AFTER that settles so a
+    // deep link to A is not overridden by a shared tab B added afterwards.
+    if (activeTabKey) {
+      const key = activeTabKey;
+      queueMicrotask(() => {
+        queueMicrotask(() => controllerRef.current?.focusOrOpen(panelIdFor(key)));
+      });
+    }
+  }, [openTabKeys, activeTabKey, panelIdFor]);
 
   // A fresh draft opened after the previous one materialized must get a NEW
   // runtime. The `chat:new` panel id is stable, so replace the existing host

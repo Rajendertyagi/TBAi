@@ -31,6 +31,20 @@ async function rmConv(request: APIRequestContext, id: string): Promise<void> {
   await request.delete(`/api/conversations/${id}`).catch(() => {});
 }
 
+/** Clear shared workspace membership so each test starts with no panels. */
+async function clearSharedTabs(request: APIRequestContext): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const prefsRes = await request.get("/api/preferences");
+    if (!prefsRes.ok()) return;
+    const prefs = (await prefsRes.json()) as { revision: number };
+    const res = await request.post("/api/preferences/tabs/close-batch", {
+      data: { baseRevision: prefs.revision, mode: "all" },
+    });
+    if (res.status() === 409) continue;
+    return;
+  }
+}
+
 /**
  * Add conversations to shared workspace membership (CAS). A conversation only
  * becomes a Dockview panel when it is in `sharedTabs` — clicking a sidebar row
@@ -57,7 +71,11 @@ async function addToSharedTabs(request: APIRequestContext, ids: string[]): Promi
 async function openPanel(page: Page, id: string): Promise<void> {
   await page.goto(`/#/chat/${id}`);
   await expect(page.getByTestId("dockview-workspace")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(1, { timeout: 15000 });
+  // Shared tabs may already be open, so assert the target panel exists rather
+  // than a fixed count.
+  await expect(
+    page.locator(`[data-testid="dockview-direct-panel"][data-conversation-id="${id}"]`),
+  ).toBeVisible({ timeout: 15000 });
 }
 
 /**
@@ -68,7 +86,7 @@ async function openPanel(page: Page, id: string): Promise<void> {
 async function waitForSharedTabs(page: Page, titles: string[]): Promise<void> {
   const strip = page.getByRole("tablist", { name: "Chat tabs" });
   for (const title of titles) {
-    await expect(strip.getByRole("tab", { name: new RegExp(title, "i") })).toBeVisible({
+    await expect(strip.locator(`[role="tab"][title="${title}"]`)).toBeVisible({
       timeout: 15000,
     });
   }
@@ -78,13 +96,13 @@ async function waitForSharedTabs(page: Page, titles: string[]): Promise<void> {
 async function openFromSidebar(page: Page, title: string): Promise<void> {
   await page
     .locator("#sidebar-section-chats")
-    .getByRole("button", { name: new RegExp(title, "i") })
+    .getByRole("button", { name: title, exact: true })
     .click();
 }
 
-/** The Dockview tab for a conversation, scoped to the workspace tab list. */
+/** The Dockview tab for a conversation, matched by its exact title attribute. */
 function dockviewTab(page: Page, title: string) {
-  return page.getByRole("tab", { name: new RegExp(title, "i") });
+  return page.locator(`[role="tab"][title="${title}"]`);
 }
 
 test.describe("Dockview workspace (hermetic)", () => {
@@ -92,6 +110,7 @@ test.describe("Dockview workspace (hermetic)", () => {
   const created: string[] = [];
 
   test.beforeEach(async ({ request }) => {
+    await clearSharedTabs(request);
     provider = await startControlledProvider(request);
   });
 
@@ -187,7 +206,7 @@ test.describe("Dockview workspace (hermetic)", () => {
 
     // Start a held run on conversation A.
     await page.getByRole("textbox", COMPOSER).first().fill("stream me");
-    await page.locator('button[type="submit"]').first().click();
+    await page.getByRole("button", { name: "Send message" }).first().click();
     await expect.poll(() => provider?.requestCount, { timeout: 30000 }).toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible({
       timeout: 15000,
