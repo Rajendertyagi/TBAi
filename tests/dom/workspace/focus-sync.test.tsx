@@ -93,6 +93,20 @@ describe("localActiveKey -> Dockview focus + URL (plan §6 tests 10, 15)", () =>
     expect(focusCalls).toEqual(["chat:new"]);
     expect(path()).toBe("/chat/new");
   });
+
+  it("refocus re-drives the current key when the handle becomes ready late", () => {
+    // A deep link sets localActiveKey before Dockview's onReady populates the
+    // handle. The one-shot effect skips focus; refocus (fired on handle ready)
+    // must re-drive it so the target panel becomes active and its content shows.
+    handleRef.current = null; // simulate Dockview not ready yet
+    mount("/chat/deep");
+    act(() => useChatTabsStore.getState().selectLocal("chat:deep"));
+    expect(focusCalls).toEqual([]); // skipped while handle was null
+
+    handleRef.current = { focusOrOpen: (tabKey) => focusCalls.push(tabKey) };
+    act(() => latestSync!.refocus());
+    expect(focusCalls).toEqual(["chat:deep"]);
+  });
 });
 
 describe("Dockview user focus -> localActiveKey + URL (plan §6 test 16)", () => {

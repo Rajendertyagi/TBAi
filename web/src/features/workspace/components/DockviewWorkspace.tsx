@@ -77,6 +77,12 @@ export interface DockviewWorkspaceProps {
   storageKey?: string;
   /** Receives the imperative focus handle once the Dockview API is ready. */
   handleRef?: MutableRefObject<DockviewWorkspaceHandle | null>;
+  /**
+   * Fired once the imperative handle is populated. The focus controller uses
+   * this to re-drive focus for a deep link whose `localActiveKey` was set
+   * before Dockview became ready (otherwise the one-shot effect skips focus).
+   */
+  onHandleReady?: () => void;
 }
 
 /** Adapt the real `DockviewApi` to the controller's minimal structural surface. */
@@ -118,6 +124,7 @@ export function DockviewWorkspace({
   onActivePanelChange,
   storageKey,
   handleRef,
+  onHandleReady,
 }: DockviewWorkspaceProps) {
   const controllerRef = useRef<DockviewController | null>(null);
   const canonicalKeys = useCanonicalOpenTabKeys();
@@ -183,13 +190,17 @@ export function DockviewWorkspace({
       if (handleRef) {
         handleRef.current = { focusOrOpen: (tabKey) => controller.focusOrOpen(panelIdFor(tabKey)) };
       }
+      // Notify the focus controller that the handle is now usable so a deep
+      // link set before onReady can be re-driven (the one-shot effect may have
+      // run while handleRef.current was still null).
+      onHandleReady?.();
       controller.start();
       // A deep link may have set localActiveKey before the Dockview API existed.
       // Converge the initially restored/created layout onto that selection.
       const initial = activeTabKeyRef.current;
       if (initial) controller.focusOrOpen(panelIdFor(initial));
     },
-    [canonicalKeyFor, panelIdFor, handleRef, alias],
+    [canonicalKeyFor, panelIdFor, handleRef, alias, onHandleReady],
   );
 
   useEffect(() => {

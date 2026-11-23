@@ -74,7 +74,7 @@ export function AppShell() {
   // The single URL ↔ focused-panel convergence controller. AppShell owns the
   // imperative handle and shares it with the persistent Dockview instance.
   const dockviewHandleRef = useRef<DockviewWorkspaceHandle | null>(null);
-  const { onDockviewActivePanelChange } = useWorkspaceFocusSync(dockviewHandleRef);
+  const { onDockviewActivePanelChange, refocus } = useWorkspaceFocusSync(dockviewHandleRef);
 
   // The frameless Windows caption strip exists only in the Tauri desktop;
   // the browser reserves just the button cluster.
@@ -178,6 +178,7 @@ export function AppShell() {
                   activeTabKey={localActiveKey}
                   onPanelClose={onPanelClose}
                   onActivePanelChange={onDockviewActivePanelChange}
+                  onHandleReady={refocus}
                 />
               </div>
               {/* Route pages: thin focus triggers for chat/code, real pages for

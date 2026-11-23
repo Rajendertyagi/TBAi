@@ -35,6 +35,11 @@ import type { DockviewWorkspaceHandle } from "../components/DockviewWorkspace";
 export interface WorkspaceFocusSync {
   /** Forward a Dockview active-panel change to the controller. */
   onDockviewActivePanelChange: (tabKey: string | undefined, origin: FocusOrigin) => void;
+  /**
+   * Re-drive focus for the current `localActiveKey`. Called when the Dockview
+   * handle becomes ready, to cover a deep link whose key was set before mount.
+   */
+  refocus: () => void;
 }
 
 /**
@@ -89,5 +94,10 @@ export function useWorkspaceFocusSync(
     [],
   );
 
-  return { onDockviewActivePanelChange };
+  const refocus = useCallback(() => {
+    const key = useChatTabsStore.getState().localActiveKey;
+    if (key) handleRef.current?.focusOrOpen(key);
+  }, [handleRef]);
+
+  return { onDockviewActivePanelChange, refocus };
 }
