@@ -461,8 +461,11 @@ describe("FirstPromptHandoff settled boundary — source pins the production pat
     const source = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
     ).text();
-    expect(source).toContain("<OpenCodeChatHost");
+    // Phase E: the view is a thin focus trigger; the host lives in the
+    // persistent Dockview OpenCodePanel and owns the first-prompt boundary.
+    expect(source).not.toContain("<OpenCodeChatHost");
     expect(source).not.toContain("<FirstPromptHandoff");
+    expect(source).toContain('useConversationTab(agentId, "agent")');
   });
 
   it("ChatShell binds through the owner record with the live snapshot as backstop", async () => {

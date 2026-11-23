@@ -9,6 +9,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { NEW_DRAFT_TAB_ID } from "../../chat/state/chatTabs";
 import { parsePanelParams, type PanelParams } from "../dockviewParams";
 import { DirectChatHost } from "./DirectChatHost";
+import { DraftChatHost } from "./DraftChatHost";
 import { usePanelVisibility } from "./usePanelVisibility";
 import { usePanelMountClaim } from "./usePanelMountClaim";
 
@@ -58,20 +59,20 @@ function BoundDirectPanel({
       data-visible={visible}
     >
       {isDraft ? (
-        // Draft materialization is owned by `DraftChatHost`, which wires the
-        // runtime's thread-id-change callback to `resolveDraftId`. We do NOT
-        // mount it here: the `chat:new` panel is excluded from canonical panel
-        // keys, and during the staged migration (plan §5a decision 5) AppShell
-        // still renders the routed ChatView with its own new-thread runtime for
-        // `/chat/new`. Mounting a second draft runtime here would make both call
-        // `adapter.initialize()` on first send and both bind the same id — two
-        // runtimes for one draft, breaking the one-shot lifecycle. Phase E's
-        // route controller must mount the single `DraftChatHost` only after it
-        // removes the routed draft view / root runtime binding.
-        <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-          <span data-testid="draft-panel-notice">New chat draft</span>
-          <span>First-send materialization is provided by the draft-aware host in Phase E.</span>
-        </div>
+        // Phase E: the routed draft view and AppShell's root runtime binding
+        // are gone, so this panel is the ONE place a draft runtime is mounted.
+        // `DraftChatHost` wires the runtime's thread-id-change callback to
+        // `resolveDraftId`; the panel id stays `chat:new` across materialization
+        // (see DockviewWorkspace's draft alias), so the live runtime is never
+        // disposed mid-send. The duplicate-mount claim below still guards
+        // against a second host for the same canonical key.
+        owned ? (
+          <DraftChatHost />
+        ) : (
+          <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+            This draft is already open in another panel.
+          </div>
+        )
       ) : owned ? (
         <DirectChatHost threadId={refId} isDraft={false} />
       ) : (

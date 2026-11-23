@@ -40,7 +40,10 @@ describe("DockviewWorkspace adapter contract", () => {
   });
 
   it("wires canonical-close and persistence defaults at the adapter boundary", () => {
-    expect(source).toContain("useChatTabsStore.getState().close(tabKey)");
+    // M1: close is canonicalized before reaching chatTabs so an aliased draft
+    // panel closes the materialized conversation, not just draft-local state.
+    expect(source).toContain("const canonicalKey = canonicalKeyFor(panelId)");
+    expect(source).toContain("useChatTabsStore.getState().close(canonicalKey)");
     expect(source).toContain("saveLayout(layout, storageKeyRef.current)");
     expect(source).toContain("loadLayout(storageKeyRef.current, openTabKeysRef.current)");
   });

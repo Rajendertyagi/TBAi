@@ -5,12 +5,13 @@ import path from "node:path";
 /**
  * OpenCode surface guards, split by ownership after the host extraction.
  *
- * `OpenCodeView` is now a THIN route adapter: it reads the route param, validates
- * the tab, redirects a missing agent id, shows the boot skeleton, and delegates
- * the full lifecycle to `OpenCodeChatHost`. The loading/error/bootstrap and
- * composer-extras invariants therefore belong to the host's source, not the
- * adapter's. Both files are guarded here so the extraction cannot silently drop
- * a behavior.
+ * `OpenCodeView` is now a THIN focus/open trigger: it reads the route param,
+ * validates the tab and redirects a missing agent id. In Phase E it mounts no
+ * host at all — `OpenCodeChatHost` lives in the persistent Dockview
+ * `OpenCodePanel`, so a route-mounted host would create a duplicate runtime.
+ * The loading/error/bootstrap and composer-extras invariants therefore belong
+ * to the host's source, not the adapter's. Both files are guarded here so the
+ * extraction cannot silently drop a behavior.
  *
  * Source-guard convention (same as `CodeShell.test.tsx`): `web/` has no DOM
  * runner, so these branches are pinned against the source rather than rendered.
@@ -37,13 +38,18 @@ describe("OpenCodeView thin route adapter", () => {
     expect(source).toContain("if (!agentId?.trim())");
   });
 
-  it("renders the message-shaped boot skeleton while no agent is routed", () => {
-    expect(source).toContain("ThreadBootSkeleton");
+  it("owns no boot skeleton of its own — the host renders it in the Dockview panel", () => {
+    // Phase E: the view is a thin focus trigger; the boot skeleton lives in
+    // OpenCodeChatHost, mounted by the persistent OpenCodePanel.
+    expect(source).not.toContain("ThreadBootSkeleton");
     expect(source).not.toContain("Loader2");
   });
 
-  it("delegates the full lifecycle to OpenCodeChatHost with the conversation id", () => {
-    expect(source).toContain("<OpenCodeChatHost conversationId={agentId} />");
+  it("delegates the full lifecycle to the Dockview host, not a route-mounted one", () => {
+    // No host in the route view: a second mount would create a duplicate
+    // runtime for an already-open panel. The panel owns the host.
+    expect(source).not.toContain("<OpenCodeChatHost");
+    expect(source).toContain('useConversationTab(agentId, "agent")');
     // The adapter owns no runtime/bootstrap/composer internals of its own.
     expect(source).not.toContain("bootstrapOpenCodeSession");
     expect(source).not.toContain("composerExtras");

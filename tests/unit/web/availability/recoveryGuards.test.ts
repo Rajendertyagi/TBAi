@@ -218,7 +218,10 @@ describe("OpenCode recovery reconnect (Phase 3.10)", () => {
 
   it("[P3-18a-adapter] the route adapter delegates the lifecycle without owning recovery", () => {
     const view = sources.openCodeView;
-    expect(view).toContain("<OpenCodeChatHost");
+    // Phase E: the view is a thin focus trigger; the host (in the Dockview
+    // OpenCodePanel) owns recovery and the runtime.
+    expect(view).not.toContain("<OpenCodeChatHost");
+    expect(view).toContain('useConversationTab(agentId, "agent")');
     expect(view).not.toContain("seenRecoveryEpochRef");
     expect(view).not.toContain("shouldReconnectForEpoch");
   });

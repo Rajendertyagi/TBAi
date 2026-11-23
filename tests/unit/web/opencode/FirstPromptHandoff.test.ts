@@ -380,8 +380,11 @@ describe("FirstPromptHandoff — structural boundary pins", () => {
     const source = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
     ).text();
-    expect(source).toContain("<OpenCodeChatHost");
+    // Phase E: the view is a thin focus trigger; the host lives in the
+    // persistent Dockview OpenCodePanel and owns the first-prompt boundary.
+    expect(source).not.toContain("<OpenCodeChatHost");
     expect(source).not.toContain("<FirstPromptHandoff");
+    expect(source).toContain('useConversationTab(agentId, "agent")');
   });
 
   it("recovery reconnects only on epoch change while mounted, never on stale mount", async () => {

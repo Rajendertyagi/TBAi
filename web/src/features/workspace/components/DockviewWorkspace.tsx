@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Production Dockview workspace (Phase 2 core).
+ * Production Dockview workspace (Phase 2 core + Phase E application integration).
  *
  * This is a thin React adapter: it hosts `DockviewReact`, adapts the real
  * `DockviewApi` to the controller's structural surface, and wires persistence
@@ -11,9 +11,18 @@
  *
  * Dockview owns spatial layout only. Canonical identity stays in `chatTabs`;
  * panel ids are canonical tab keys and params carry only `{ tabKey,
- * contentType }`. Not mounted in AppShell until Phase E.
+ * contentType }`. In Phase E this component is mounted once at AppShell level
+ * as the persistent chat surface and exposes an imperative focus handle so the
+ * single route/focus controller can converge `localActiveKey` with Dockview.
  */
-import { useCallback, useEffect, useMemo, useRef, type FunctionComponent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type FunctionComponent,
+  type MutableRefObject,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   DockviewReact,
@@ -34,7 +43,8 @@ import {
 } from "../state/layoutPersistence";
 import { DirectPanel } from "./DirectPanel";
 import { OpenCodePanel } from "./OpenCodePanel";
-import { NEW_DRAFT_TAB_ID, useChatTabsStore, visibleTabs } from "../../chat/state/chatTabs";
+import { createDraftAlias, DRAFT_PANEL_ID, type DraftAlias } from "../draftAlias";
+import { useChatTabsStore, visibleTabs } from "../../chat/state/chatTabs";
 import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 
 const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelParams>>> = {
@@ -42,20 +52,30 @@ const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelPara
   [OPENCODE_COMPONENT]: OpenCodePanel,
 };
 
+/** Imperative focus handle populated on `handleRef` once the API is ready. */
+export interface DockviewWorkspaceHandle {
+  /** Focus the panel for a canonical tab key, opening it when absent. */
+  focusOrOpen(tabKey: string): void;
+}
+
 export interface DockviewWorkspaceProps {
   /**
    * Override the canonical open tab keys (tests/harnesses). When omitted they
-   * are derived from chatTabs + shared membership. Drafts are excluded from
-   * auto-registration: first-send materialization belongs to the Phase 5a
-   * draft-aware host, not a generic Direct host.
+   * are derived from chatTabs + shared membership. Drafts are included: the
+   * single `chat:new` panel hosts `DraftChatHost`, which owns first-send
+   * materialization.
    */
   openTabKeys?: readonly string[];
+  /** Window-level active tab key (URL-authoritative). Drives the draft alias. */
+  activeTabKey?: string;
   /** Called only after a panel is confirmed genuinely closed. */
   onPanelClose?: (tabKey: string) => void;
   /** Focus/URL seam for Phase E; `origin` avoids feedback loops. */
   onActivePanelChange?: (tabKey: string | undefined, origin: DockviewOrigin) => void;
   /** localStorage key override (tests). */
   storageKey?: string;
+  /** Receives the imperative focus handle once the Dockview API is ready. */
+  handleRef?: MutableRefObject<DockviewWorkspaceHandle | null>;
 }
 
 /** Adapt the real `DockviewApi` to the controller's minimal structural surface. */
@@ -69,6 +89,12 @@ function toControllerApi(api: DockviewApi): DockviewControllerApi {
     removePanelById: (id) => {
       const panel = api.getPanel(id);
       if (panel) api.removePanel(panel);
+    },
+    setActivePanelById: (id) => {
+      const panel = api.getPanel(id);
+      // `panel.api.setActive()` fires onDidActivePanelChange with origin 'api',
+      // which the focus controller ignores — no URL/focus feedback loop.
+      if (panel) panel.api.setActive();
     },
     toJSON: () => api.toJSON(),
     fromJSON: (data, options) => api.fromJSON(data, options),
@@ -86,16 +112,31 @@ function toControllerApi(api: DockviewApi): DockviewControllerApi {
 /** Host the production Dockview workspace with registered chat panels. */
 export function DockviewWorkspace({
   openTabKeys: openTabKeysProp,
+  activeTabKey,
   onPanelClose,
   onActivePanelChange,
   storageKey,
+  handleRef,
 }: DockviewWorkspaceProps) {
   const controllerRef = useRef<DockviewController | null>(null);
   const canonicalKeys = useCanonicalOpenTabKeys();
-  const openTabKeys = useMemo(
-    () => openTabKeysProp ?? canonicalKeys,
-    [openTabKeysProp, canonicalKeys],
-  );
+
+  // Draft materialization keeps the SAME panel (and therefore the same live
+  // runtime) across first send. The alias state machine maps the materialized
+  // `chat:<id>` back to the stable `chat:new` panel id. `observeActiveKey` is
+  // idempotent under StrictMode double-render.
+  const aliasRef = useRef<DraftAlias | null>(null);
+  if (!aliasRef.current) aliasRef.current = createDraftAlias();
+  const alias = aliasRef.current;
+  alias.observeActiveKey(activeTabKey);
+
+  const panelIdFor = useCallback((key: string) => alias.panelIdFor(key), [alias]);
+  const canonicalKeyFor = useCallback((panelId: string) => alias.canonicalKeyFor(panelId), [alias]);
+
+  const openTabKeys = useMemo(() => {
+    const keys = openTabKeysProp ?? canonicalKeys;
+    return keys.map(panelIdFor);
+  }, [openTabKeysProp, canonicalKeys, panelIdFor]);
 
   // Latest values without re-creating the controller on every render.
   const openTabKeysRef = useRef(openTabKeys);
@@ -106,35 +147,73 @@ export function DockviewWorkspace({
   onActivePanelChangeRef.current = onActivePanelChange;
   const storageKeyRef = useRef(storageKey);
   storageKeyRef.current = storageKey;
+  const activeTabKeyRef = useRef(activeTabKey);
+  activeTabKeyRef.current = activeTabKey;
 
-  const onReady = useCallback((event: DockviewReadyEvent) => {
-    const controller = new DockviewController({
-      api: toControllerApi(event.api),
-      openTabKeys: openTabKeysRef.current,
-      onPanelClose: (tabKey) => {
-        const handler = onPanelCloseRef.current;
-        if (handler) handler(tabKey);
-        else useChatTabsStore.getState().close(tabKey);
-      },
-      onActivePanelChange: (tabKey, origin) => onActivePanelChangeRef.current?.(tabKey, origin),
-      persist: (layout) => saveLayout(layout, storageKeyRef.current),
-      restore: () => loadLayout(storageKeyRef.current, openTabKeysRef.current),
-      debounceMs: DOCKVIEW_LAYOUT_PERSIST_DEBOUNCE_MS,
-    });
-    controllerRef.current = controller;
-    controller.start();
-  }, []);
+  const onReady = useCallback(
+    (event: DockviewReadyEvent) => {
+      const controller = new DockviewController({
+        api: toControllerApi(event.api),
+        openTabKeys: openTabKeysRef.current,
+        onPanelClose: (panelId) => {
+          // M1: canonicalize before applying close semantics. After first-send
+          // materialization the live panel id is still `chat:new`, but the
+          // canonical conversation is `chat:<id>`. Closing the aliased panel
+          // must take the shared-close path for that conversation, not merely
+          // clear draft-local state.
+          const canonicalKey = canonicalKeyFor(panelId);
+          if (panelId === DRAFT_PANEL_ID && alias.materializedKey) {
+            // A genuine close ends the materialization identity. Drop the alias
+            // so a later fresh draft cannot inherit a stale canonical key.
+            alias.clear();
+          }
+          const handler = onPanelCloseRef.current;
+          if (handler) handler(canonicalKey);
+          else useChatTabsStore.getState().close(canonicalKey);
+        },
+        onActivePanelChange: (panelId, origin) => {
+          onActivePanelChangeRef.current?.(canonicalKeyFor(panelId ?? ""), origin);
+        },
+        persist: (layout) => saveLayout(layout, storageKeyRef.current),
+        restore: () => loadLayout(storageKeyRef.current, openTabKeysRef.current),
+        debounceMs: DOCKVIEW_LAYOUT_PERSIST_DEBOUNCE_MS,
+      });
+      controllerRef.current = controller;
+      if (handleRef) {
+        handleRef.current = { focusOrOpen: (tabKey) => controller.focusOrOpen(panelIdFor(tabKey)) };
+      }
+      controller.start();
+      // A deep link may have set localActiveKey before the Dockview API existed.
+      // Converge the initially restored/created layout onto that selection.
+      const initial = activeTabKeyRef.current;
+      if (initial) controller.focusOrOpen(panelIdFor(initial));
+    },
+    [canonicalKeyFor, panelIdFor, handleRef, alias],
+  );
 
   useEffect(() => {
     controllerRef.current?.setOpenTabKeys(openTabKeys);
   }, [openTabKeys]);
 
+  // A fresh draft opened after the previous one materialized must get a NEW
+  // runtime. The `chat:new` panel id is stable, so replace the existing host
+  // (close semantics suppressed) and let reconciliation mount a fresh one.
+  // This is the ONLY transition that calls replacePanel — materialization
+  // itself keeps the panel (and its runtime) mounted.
+  useEffect(() => {
+    if (activeTabKey === DRAFT_PANEL_ID && alias.materializedKey) {
+      alias.clear();
+      controllerRef.current?.replacePanel(DRAFT_PANEL_ID);
+    }
+  }, [activeTabKey, alias]);
+
   useEffect(() => {
     return () => {
       controllerRef.current?.dispose();
       controllerRef.current = null;
+      if (handleRef) handleRef.current = null;
     };
-  }, []);
+  }, [handleRef]);
 
   return (
     <div
@@ -148,7 +227,7 @@ export function DockviewWorkspace({
   );
 }
 
-/** Derive canonical open tab keys from chatTabs + shared membership, minus drafts. */
+/** Derive canonical open tab keys from chatTabs + shared membership (drafts included). */
 function useCanonicalOpenTabKeys(): string[] {
   const tabState = useChatTabsStore(
     useShallow((s) => ({
@@ -158,8 +237,8 @@ function useCanonicalOpenTabKeys(): string[] {
     })),
   );
   const sharedTabs = usePreferencesStore((s) => s.snapshot?.sharedTabs);
-  return useMemo(() => {
-    const tabs = visibleTabs({ ...tabState, sharedTabs: sharedTabs ?? [] });
-    return tabs.filter((tab) => tab.ref !== NEW_DRAFT_TAB_ID).map((tab) => tab.key);
-  }, [tabState, sharedTabs]);
+  return useMemo(
+    () => visibleTabs({ ...tabState, sharedTabs: sharedTabs ?? [] }).map((t) => t.key),
+    [tabState, sharedTabs],
+  );
 }

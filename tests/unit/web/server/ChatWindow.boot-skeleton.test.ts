@@ -8,8 +8,9 @@ import { shouldShowThreadBoot } from "@web/components/ChatWindow.tsx";
  *
  * `ThreadBootSkeleton` must live in exactly ONE place — the shared element
  * `assistant-ui/elements/thread-boot-skeleton.tsx` — and be imported by both
- * the Direct chat surface (`ChatWindow`) and the OpenCode surface
- * (`OpenCodeView`). The old local copy in `ChatWindow.tsx` must not return.
+ * the Direct chat surface (`ChatWindow`) and the OpenCode host
+ * (`OpenCodeChatHost`). In Phase E `OpenCodeView` is a thin focus trigger with
+ * no host. The old local copy in `ChatWindow.tsx` must not return.
  *
  * Source-guard convention (same as `ChatWindow.blocks.test.ts`): `web/` has no
  * DOM runner, so the sharing contract is pinned against the source.
@@ -18,6 +19,7 @@ const SHARED_PATH = "assistant-ui/elements/thread-boot-skeleton";
 
 let chatWindowSource = "";
 let openCodeViewSource = "";
+let openCodeHostSource = "";
 let sharedSource = "";
 
 beforeAll(async () => {
@@ -26,6 +28,9 @@ beforeAll(async () => {
   ).text();
   openCodeViewSource = await Bun.file(
     path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+  ).text();
+  openCodeHostSource = await Bun.file(
+    path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeChatHost.tsx"),
   ).text();
   sharedSource = await Bun.file(
     path.join(REPO_ROOT, "web/src/components/assistant-ui/elements/thread-boot-skeleton.tsx"),
@@ -42,12 +47,13 @@ describe("ThreadBootSkeleton — single shared implementation", () => {
     expect(chatWindowSource).toContain(`import { ThreadBootSkeleton } from "./${SHARED_PATH}";`);
   });
 
-  it("OpenCodeView imports the same shared component", () => {
-    // OpenCodeView lives outside components/, so it reaches the same module
-    // through the web alias. Both spellings name one implementation.
-    expect(openCodeViewSource).toContain(
+  it("the OpenCode host imports the same shared component", () => {
+    // Phase E: OpenCodeView is a thin focus trigger with no host; the boot
+    // skeleton is rendered by OpenCodeChatHost inside the Dockview panel.
+    expect(openCodeHostSource).toContain(
       `import { ThreadBootSkeleton } from "@/components/${SHARED_PATH}";`,
     );
+    expect(openCodeViewSource).not.toContain("ThreadBootSkeleton");
   });
 
   it("ChatWindow no longer contains a local ThreadBootSkeleton implementation", () => {

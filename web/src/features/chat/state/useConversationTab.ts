@@ -16,6 +16,7 @@ import {
   visibleTabs,
 } from "./chatTabs";
 import { useWelcomeEngineStore } from "./welcomeEngine";
+import { markValidationRedirect } from "../../workspace/routeFocus";
 
 /**
  * One-shot navigation intent for a draft reached because a missing Code/agent
@@ -95,8 +96,12 @@ export function useConversationTab(
             expected: "opencode",
             actual: engine,
           });
+          const target = threadUrl(ref, engine);
+          // Validation owns this route correction; focus sync must not write
+          // the URL while the pathname still addresses the mismatched ref.
+          markValidationRedirect(ref, target);
           useChatTabsStore.getState().presentChat(ref);
-          navigate(threadUrl(ref, engine), { replace: true });
+          navigate(target, { replace: true });
           return;
         }
         if (kind === "chat" && engine === "opencode") {
@@ -105,8 +110,10 @@ export function useConversationTab(
             expected: "direct",
             actual: engine,
           });
+          const target = threadUrl(ref, engine);
+          markValidationRedirect(ref, target);
           useChatTabsStore.getState().presentAgent(ref);
-          navigate(threadUrl(ref, engine), { replace: true });
+          navigate(target, { replace: true });
           return;
         }
       } catch (err) {
@@ -126,7 +133,9 @@ export function useConversationTab(
           const tabs = visibleTabs(useChatTabsStore.getState());
           const next = tabs.find((t) => t.ref !== ref);
           if (next) {
-            navigate(urlForTab(next), { replace: true });
+            const target = urlForTab(next);
+            markValidationRedirect(ref, target);
+            navigate(target, { replace: true });
           } else if (kind === "agent") {
             // Preserve Code/OpenCode intent for the fallback draft without
             // persisting it as the user's default engine preference.
@@ -136,6 +145,7 @@ export function useConversationTab(
               model: "",
               variant: "",
             });
+            markValidationRedirect(ref, ROUTES.CHAT_NEW);
             navigate(ROUTES.CHAT_NEW, {
               replace: true,
               state: {
@@ -143,6 +153,7 @@ export function useConversationTab(
               },
             });
           } else {
+            markValidationRedirect(ref, ROUTES.CHAT_NEW);
             navigate(ROUTES.CHAT_NEW, { replace: true });
           }
         }

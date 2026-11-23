@@ -1,28 +1,20 @@
 import { useParams } from "react-router";
-import { ChatWindow } from "../../../components/ChatWindow";
-import { ChatHeader } from "./ChatHeader";
 import { NEW_DRAFT_TAB_ID } from "../state/chatTabs";
 import { useConversationTab } from "../state/useConversationTab";
 
 /**
- * Routed chat view (`/chat/:threadId?`). Binds the route to a chat tab with
- * existence validation (shared hook — stale ids close the tab and redirect
- * to a fresh draft) and renders the thread-bound ChatWindow. Tab switching
- * itself only changes the runtime's threadId — background thread runtimes
- * stay cached in the shared thread-list runtime, so streams continue.
+ * Routed chat surface (`/chat/:threadId?`) — Phase E thin focus/open trigger.
+ *
+ * The conversation is rendered by the persistent Dockview workspace's
+ * `DirectPanel` (or the single draft panel), each with its own per-host
+ * assistant-ui provider. This view owns NO `ChatWindow` of its own: mounting
+ * one here would create a second runtime for an already-open panel. Its only
+ * job is the shared route→tab binding with existence validation (stale ids
+ * close their tabs and redirect to a fresh draft); the focus controller then
+ * converges `localActiveKey` with the Dockview panel.
  */
 export function ChatView() {
   const { threadId } = useParams();
-
-  const target = threadId ?? NEW_DRAFT_TAB_ID;
-  useConversationTab(target, "chat");
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ChatHeader threadId={target} />
-      <div className="min-h-0 flex-1">
-        <ChatWindow isDraft={target === NEW_DRAFT_TAB_ID} />
-      </div>
-    </div>
-  );
+  useConversationTab(threadId ?? NEW_DRAFT_TAB_ID, "chat");
+  return null;
 }

@@ -415,7 +415,11 @@ describe("the browser half of the link: the view posts to this exact route", () 
 
   it("keeps the route adapter thin — it delegates the lifecycle to the host", () => {
     const view = read("web/src/features/opencode/OpenCodeView.tsx");
-    expect(view).toContain("<OpenCodeChatHost");
+    // Phase E: the view is a thin focus/open trigger. The host lives in the
+    // persistent Dockview OpenCodePanel, never in the route view (a second
+    // mount here would create a duplicate runtime for the same conversation).
+    expect(view).not.toContain("<OpenCodeChatHost");
+    expect(view).toContain('useConversationTab(agentId, "agent")');
     // No bootstrap/session logic in the route adapter itself.
     expect(view).not.toContain("bootstrapOpenCodeSession");
     expect(view).not.toContain("setSessionId(");

@@ -25,7 +25,7 @@ import {
   type PanelParams,
 } from "./dockviewParams";
 import { desiredPanelKeys, diffPanelKeys } from "./panelRegistry";
-import { NEW_DRAFT_TAB_ID, parseTabKey } from "../chat/state/chatTabs";
+import { parseTabKey } from "../chat/state/chatTabs";
 
 /** Minimal panel identity the controller needs from a Dockview panel. */
 export interface PanelRef {
@@ -68,6 +68,8 @@ export interface DockviewControllerApi {
   getPanel(id: string): PanelRef | undefined;
   addPanel(options: AddPanelOptionsLike): unknown;
   removePanelById(id: string): void;
+  /** Focus an existing panel programmatically (adapter calls `panel.api.setActive()`). */
+  setActivePanelById(id: string): void;
   toJSON(): SerializedDockview;
   fromJSON(data: SerializedDockview, options?: { reuseExistingPanels: boolean }): void;
   onDidMovePanel(listener: (event: { panel: PanelRef }) => void): Disposable;
@@ -112,12 +114,15 @@ const PERSIST_REASONS = [
   "panelParameters",
 ] as const;
 
-/** Drop drafts: first-send materialization belongs to the Phase 5a host. */
+/**
+ * Canonical panel keys are the valid tab keys as-is. Drafts (`chat:new`) are
+ * included: in Phase E the single draft panel hosts `DraftChatHost`, which owns
+ * first-send materialization. The panel id stays stable across materialization
+ * (Dockview ids are immutable); `DockviewWorkspace` maps the materialized key
+ * back to `chat:new` so the live runtime is never disposed mid-send.
+ */
 function canonicalPanelKeys(tabKeys: readonly string[]): string[] {
-  return desiredPanelKeys(tabKeys).filter((key) => {
-    const parsed = parseTabKey(key);
-    return parsed?.ref !== NEW_DRAFT_TAB_ID;
-  });
+  return desiredPanelKeys(tabKeys);
 }
 
 /** Drive the Dockview event state machine independently of React. */
@@ -198,6 +203,33 @@ export class DockviewController {
     for (const id of [...this.closedByUser]) {
       if (!desired.has(id)) this.closedByUser.delete(id);
     }
+  }
+
+  /**
+   * Remove a panel and let reconciliation immediately re-create a FRESH host
+   * under the same id. Used when a new draft replaces a materialized one: the
+   * panel id (`chat:new`) is stable but the runtime must be new. Close
+   * semantics are explicitly suppressed — this is a replacement, not a close.
+   */
+  replacePanel(panelId: string): void {
+    if (this.disposed || !this.api.getPanel(panelId)) return;
+    // Mark as a relocation so the suspected-close path skips it; reconcile
+    // then re-adds it because the id is still in the canonical open set.
+    this.confirmedRelocations.add(panelId);
+    this.api.removePanelById(panelId);
+  }
+
+  /**
+   * Focus the panel for `panelId`, opening it first when absent. Used by the
+   * Phase E route/focus controller to converge `localActiveKey` with Dockview.
+   * The panel id is already canonical (draft aliasing is resolved by the
+   * caller), so no identity translation happens here.
+   */
+  focusOrOpen(panelId: string): void {
+    if (this.disposed || !parseTabKey(panelId)) return;
+    if (!this.api.getPanel(panelId)) this.addPanelForTabKey(panelId);
+    const panel = this.api.getPanel(panelId);
+    if (panel) this.api.setActivePanelById(panelId);
   }
 
   /** Unsubscribe and cancel pending work. Idempotent. */

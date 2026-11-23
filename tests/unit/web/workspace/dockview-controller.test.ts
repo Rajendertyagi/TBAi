@@ -52,6 +52,7 @@ class FakeApi implements DockviewControllerApi {
   panels: PanelRef[] = [];
   addPanelCalls: AddPanelOptionsLike[] = [];
   removePanelCalls: string[] = [];
+  activePanelCalls: string[] = [];
   fromJSONCalls: Array<{ data: SerializedLayout; options?: { reuseExistingPanels: boolean } }> = [];
   toJSONCalls = 0;
 
@@ -77,6 +78,10 @@ class FakeApi implements DockviewControllerApi {
   removePanelById(id: string): void {
     this.removePanelCalls.push(id);
     this.panels = this.panels.filter((panel) => panel.id !== id);
+  }
+
+  setActivePanelById(id: string): void {
+    this.activePanelCalls.push(id);
   }
 
   toJSON(): SerializedLayout {
@@ -378,12 +383,62 @@ describe("DockviewController — reconciliation against canonical chatTabs", () 
     expect(h.api.addPanelCalls).toEqual([]);
   });
 
-  it("excludes drafts from the canonical panel set", () => {
+  it("includes drafts in the canonical panel set (single draft host)", () => {
+    // Phase E: the `chat:new` panel hosts the single DraftChatHost, which owns
+    // first-send materialization. The panel id stays stable across
+    // materialization (DockviewWorkspace maps the materialized key back to it).
     const h = harness({
       openTabKeys: ["chat:new", "chat:a"],
       initialPanels: [],
     });
     h.flushMicrotasks();
-    expect(h.api.addPanelCalls.map((c) => c.id)).toEqual(["chat:a"]);
+    expect(h.api.addPanelCalls.map((c) => c.id)).toEqual(["chat:new", "chat:a"]);
+  });
+});
+
+describe("DockviewController — imperative focus/open (Phase E route controller)", () => {
+  it("focuses an already-open panel without adding a duplicate", () => {
+    const h = harness({ openTabKeys: ["chat:a"], initialPanels: ["chat:a"] });
+    h.flushMicrotasks();
+    h.api.addPanelCalls = [];
+
+    h.controller.focusOrOpen("chat:a");
+
+    expect(h.api.activePanelCalls).toEqual(["chat:a"]);
+    expect(h.api.addPanelCalls).toEqual([]);
+  });
+
+  it("opens a missing panel then focuses it (deep link / draft focus)", () => {
+    const h = harness({ openTabKeys: [], initialPanels: [] });
+    h.flushMicrotasks();
+
+    h.controller.focusOrOpen("agent:deep");
+
+    expect(h.api.addPanelCalls.map((c) => c.id)).toEqual(["agent:deep"]);
+    expect(h.api.activePanelCalls).toEqual(["agent:deep"]);
+  });
+
+  it("ignores a non-canonical key", () => {
+    const h = harness({ openTabKeys: [], initialPanels: [] });
+    h.flushMicrotasks();
+
+    h.controller.focusOrOpen("not-a-tab-key");
+
+    expect(h.api.addPanelCalls).toEqual([]);
+    expect(h.api.activePanelCalls).toEqual([]);
+  });
+
+  it("replacePanel re-creates a fresh host without applying close semantics", () => {
+    const h = harness({ openTabKeys: ["chat:new"], initialPanels: ["chat:new"] });
+    h.flushMicrotasks();
+    h.api.addPanelCalls = [];
+
+    h.controller.replacePanel("chat:new");
+    h.api.simulateRemove("chat:new"); // Dockview's removal signal
+    h.flushMicrotasks();
+
+    // No conversation close, and reconciliation re-adds a fresh panel.
+    expect(h.closed).toEqual([]);
+    expect(h.api.addPanelCalls.map((c) => c.id)).toEqual(["chat:new"]);
   });
 });
