@@ -383,6 +383,28 @@ describe("DockviewController — reconciliation against canonical chatTabs", () 
     expect(h.api.addPanelCalls).toEqual([]);
   });
 
+  it("does not report a reconciliation removal as a user close (audit Major #1)", () => {
+    // A conversation closed ELSEWHERE is dropped from the canonical set first.
+    // reconcilePanels then removes its panel, which fires onDidRemovePanel. That
+    // must NOT become a close/requestSharedClose for an already-closed conversation.
+    const h = harness({
+      openTabKeys: ["chat:a", "chat:b"],
+      initialPanels: ["chat:a", "chat:b"],
+    });
+    h.flushMicrotasks();
+    h.api.addPanelCalls = [];
+    h.api.removePanelCalls = [];
+    h.closed.length = 0;
+
+    // chatTabs closed chat:a elsewhere -> canonical set no longer contains it.
+    h.controller.setOpenTabKeys(["chat:b"]);
+    h.api.simulateAdd("chat:b"); // trigger settled work (reconcile removes chat:a)
+    h.flushMicrotasks();
+
+    expect(h.api.removePanelCalls).toEqual(["chat:a"]); // panel removed
+    expect(h.closed).toEqual([]); // but NO close semantics applied
+  });
+
   it("includes drafts in the canonical panel set (single draft host)", () => {
     // Phase E: the `chat:new` panel hosts the single DraftChatHost, which owns
     // first-send materialization. The panel id stays stable across

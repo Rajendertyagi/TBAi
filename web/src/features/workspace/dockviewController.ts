@@ -283,6 +283,14 @@ export class DockviewController {
       if (present.has(id) || this.api.getPanel(id)) continue;
       if (!parseTabKey(id)) continue;
 
+      // A panel removed by reconciliation because the conversation was closed
+      // ELSEWHERE is not a user close. `setOpenTabKeys` already dropped it from
+      // the canonical set before reconcilePanels removed it, so applying close
+      // semantics here would redundantly close/requestSharedClose an already
+      // closed conversation (plan §5b "Conversation closed elsewhere"). Clear
+      // the suspicion only; the canonical store is already authoritative.
+      if (!this.openTabKeys.includes(id)) continue;
+
       this.closedByUser.add(id);
       this.deps.onPanelClose?.(id);
     }
