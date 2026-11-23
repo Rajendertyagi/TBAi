@@ -26,13 +26,14 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import {
   DockviewReact,
-  themeAbyss,
   type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
   type DockviewOrigin,
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
+
+import { tbaiTheme } from "../dockviewTheme";
 
 import { DIRECT_COMPONENT, OPENCODE_COMPONENT, type PanelParams } from "../dockviewParams";
 import { DockviewController, type DockviewControllerApi } from "../dockviewController";
@@ -221,7 +222,7 @@ export function DockviewWorkspace({
       data-testid="dockview-workspace"
     >
       <div className="min-h-0 min-w-0 flex-1">
-        <DockviewReact theme={themeAbyss} components={COMPONENTS} onReady={onReady} />
+        <DockviewReact theme={tbaiTheme} components={COMPONENTS} onReady={onReady} />
       </div>
     </div>
   );

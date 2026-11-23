@@ -673,3 +673,41 @@ pre,
 [data-terminal-wrap="off"] [data-slot="terminal-block"] > div:last-child > div {
   white-space: pre;
 }
+
+/* Dockview workspace theme � maps Dockview's --dv-* variables onto TBAi theme
+   tokens. Because these tokens are redefined by :root, .dark and
+   html[data-tbai-theme="..."], the workspace follows the app's light/dark mode
+   and every custom palette automatically. No inline styles, no JS switching. */
+.dockview-theme-tbai {
+  --dv-tabs-and-actions-container-background-color: var(--muted);
+  --dv-tabs-and-actions-container-font-size: inherit;
+  --dv-tabs-and-actions-container-height: var(--title-bar-height, 2rem);
+  --dv-group-view-background-color: var(--background);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--muted);
+  --dv-activegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-tab-divider-color: var(--border);
+  --dv-separator-border: var(--border);
+  --dv-sash-color: var(--border);
+  --dv-active-sash-color: var(--ring);
+  --dv-icon-hover-background-color: var(--accent);
+  --dv-drag-over-background-color: color-mix(in srgb, var(--primary) 20%, transparent);
+  --dv-drag-over-border-color: var(--primary);
+  --dv-edge-dock-indicator-color: var(--primary);
+  --dv-paneview-active-outline-color: var(--ring);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-tabs-container-scrollbar-color: var(--border);
+  --dv-scrollbar-background-color: var(--muted);
+  --dv-context-menu-background-color: var(--popover);
+  --dv-context-menu-color: var(--popover-foreground);
+  --dv-floating-border: 1px solid var(--border);
+  --dv-floating-box-shadow: var(--elevation-floating);
+  --dv-border-radius: 0px;
+  --dv-tab-font-size: inherit;
+  --dv-tab-group-color: var(--muted-foreground);
+}

@@ -27,7 +27,7 @@ describe("DockviewWorkspace adapter contract", () => {
 
   it("hosts DockviewReact with the official theme and registered components", () => {
     expect(source).toContain("<DockviewReact");
-    expect(source).toContain("theme={themeAbyss}");
+    expect(source).toContain("theme={tbaiTheme}");
     expect(source).toContain("components={COMPONENTS}");
     expect(source).toContain("dockview-react/dist/styles/dockview.css");
   });
