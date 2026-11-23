@@ -78,6 +78,10 @@ class FakeApi implements DockviewControllerApi {
   removePanelById(id: string): void {
     this.removePanelCalls.push(id);
     this.panels = this.panels.filter((panel) => panel.id !== id);
+    // Real Dockview emits onDidRemovePanel when a panel is removed
+    // programmatically (reconciliation, replacePanel). Mirror that so the
+    // controller's suspected-close path is exercised by programmatic removals.
+    for (const l of this.removeListeners) l({ id });
   }
 
   setActivePanelById(id: string): void {
@@ -455,8 +459,7 @@ describe("DockviewController — imperative focus/open (Phase E route controller
     h.flushMicrotasks();
     h.api.addPanelCalls = [];
 
-    h.controller.replacePanel("chat:new");
-    h.api.simulateRemove("chat:new"); // Dockview's removal signal
+    h.controller.replacePanel("chat:new"); // fake fires onDidRemovePanel itself
     h.flushMicrotasks();
 
     // No conversation close, and reconciliation re-adds a fresh panel.

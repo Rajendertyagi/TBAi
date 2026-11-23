@@ -1,6 +1,6 @@
 # TBAi — Dockview Production Integration Plan
 
-**Status:** implementation plan — approved in principle by owner, subject to plan audit and acceptance verification. No implementation is authorized by this document beyond the foundation work already present in the working tree.
+**Status:** IMPLEMENTED (2026-11-23). Phases A–F are complete and committed on `ui-foundation-upgrade`; the implementation passed an independent full audit (`opencode/iceman-free`) with one Major finding fixed and re-verified. This document is retained as the authoritative implementation specification and record; see `docs/decisions.md` for the Dockview ADR and `DOCKVIEW_POC_RESULT.md` for which POC findings became permanent tests. Remaining work is the opt-in live-credential/OpenCode E2E suite and final CI verification.
 **Date:** 2026-11-23
 **Branch / HEAD inspected:** `ui-foundation-upgrade` @ `072a7bf2054ebda93c41b159255b98e2c6d46e94` (local HEAD; remote not re-verified in this task).
 **Decision source:** owner approval of Dockview as workspace layout engine; evidence in `DOCKVIEW_EVALUATION_PLAN.md` and `DOCKVIEW_POC_RESULT.md`.

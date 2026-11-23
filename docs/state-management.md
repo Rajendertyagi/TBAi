@@ -51,7 +51,7 @@ concern and live beside the data because several components read them.
 
 | Store | Holds | Why a store and not `useState` |
 |---|---|---|
-| `useChatTabsStore` | open tabs, `activeKey`, `groupId` | read by the tab strip, `TabUrlSync`, the composer and the delete flow |
+| `useChatTabsStore` | open tabs, `activeKey`, `groupId` | read by the tab strip, the `useWorkspaceFocusSync` URL/focus controller, the composer and the delete flow |
 | `useWelcomeEngineStore` | draft engine / agent / model / variant / `autoApprove` | read by the welcome screen and `materializeDraft` |
 | `useWelcomeScopeStore` | draft workspace `{mode, folderId}` + quick-action tab | read by the welcome screen and `materializeDraft` |
 | `useStreamRecoveryStore` | per-thread "may I re-send this run?" verdict | written by the transport, read by the in-thread recovery strip |

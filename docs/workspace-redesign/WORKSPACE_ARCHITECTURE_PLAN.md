@@ -1,6 +1,8 @@
 # TBAi Workspace Architecture Plan
 
-**Status:** authoritative plan — implementation-ready, subject to owner review and approval. No implementation is authorized by this document.
+> **SUPERSEDED (2026-11-23).** This document proposed a custom recursive layout tree, splitter/geometry engine, and stable-host placement mechanism. That proposal was **not implemented**. Dockview was adopted as the workspace layout engine instead; see the ADR in `docs/decisions.md` ("Dockview as the workspace layout engine") and `DOCKVIEW_INTEGRATION_PLAN.md` for the implemented architecture. The custom-layout sections below are retained as historical design reasoning only — do not treat them as the current architecture. The current ownership split is: Dockview = spatial layout, `chatTabs` = canonical conversation identity/membership, TBAi = orchestration/routing/activity/preferences/security, Direct and OpenCode = separate runtimes.
+
+**Status:** SUPERSEDED — historical design document. The implemented architecture is Dockview-based (see banner above).
 **Date:** 2026-11-22
 **Branch / HEAD inspected:** `ui-foundation-upgrade` @ `b02ca473334ccf288a402d11fdfbbc0bc4197d51` (verified equal to `origin/ui-foundation-upgrade` via `git ls-remote` before work began).
 **Audited code commit:** `55b8ed5` (`fix(chat): correct multi-chat operation and draft-pick lifecycle`, parent `d3d81a6`, 13 files). Its fixes to operation scoping, history ownership, and the query-keyed cache are treated as **already present** and are not reported as current defects.

@@ -84,8 +84,8 @@ ai-chat-app/
 │  │  │  ├─ router.tsx       # createHashRouter: index→chat, /chat/:threadId?,
 │  │  │  │                   #   settings pages under SettingsLayout, * → /
 │  │  │  ├─ adapter.ts       # thread-list adapter singleton
-│  │  │  ├─ TabUrlSync.tsx   # tab-store → URL sync (URL → store lives in views)
-│  │  │  └─ layout/AppShell.tsx # shared chrome; runtime-independent
+│  │  │  └─ layout/AppShell.tsx # shared chrome; hosts the persistent Dockview workspace
+│  │  │                         #   and the single URL/focus controller (useWorkspaceFocusSync)
 │  │  ├─ features/
 │  │  │  ├─ chat/            # ChatView + TabStrip (chats + pages) + chatTabs store
 │  │  │  ├─ providers/       # ProvidersPage (moved from SettingsPanel)
@@ -212,7 +212,7 @@ internals.
 
 | Directory | Owns |
 |---|---|
-| `web/src/app/` | Application composition — `router.tsx` (surfaces), `layout/AppShell.tsx` (chrome), `TabUrlSync`, the thread-list adapter singleton. Never message or tool state. |
+| `web/src/app/` | Application composition — `router.tsx` (surfaces), `layout/AppShell.tsx` (chrome + persistent Dockview workspace), the thread-list adapter singleton. Never message or tool state. |
 | `web/src/features/<feature>/` | Everything specific to one feature — UI, `state/` stores, hooks, types, API clients, request logic, feature config. |
 | `web/src/components/` | Genuinely shared UI — `ChatWindow`, `Composer`, `Sidebar`, `StatusBar`, plus `assistant-ui/`, `chat/`, `composer/`, `shared/`, `ui/`. |
 | `web/src/lib/`, `web/src/config/` | Genuinely shared utilities and shared configuration. |
@@ -375,10 +375,11 @@ Tauri desktop shell). The router owns **pages only**:
 | SQLite | persistence (threads/messages via ThreadHistoryAdapter) | `src/services/storage/` |
 | Navigation config | labels, icons, routes, descriptions, order, visibility | `web/src/config/navigation.ts` |
 
-`/chat/123` → router renders ChatView → ChatView opens tab 123 → runtime
-switches threads. Store-initiated changes (close, first-send id attach)
-flow back to the URL via `TabUrlSync` (chat tabs and page tabs share one
-strip; page tabs register from SettingsLayout). `/` redirects straight to
+`/chat/123` → the route is a thin focus trigger → the single
+`useWorkspaceFocusSync` controller focuses/opens the `chat:123` Dockview
+panel and keeps `chatTabs.localActiveKey` and the URL converged (origin-guarded
+to avoid feedback loops). Store-initiated changes (close, first-send id attach)
+flow through the same controller. `/` redirects straight to
 the active tab or a fresh chat — there is no dashboard, matching codeg's
 open-into-work behavior. The main sidebar holds full-width rows only (New
 Chat, Chat, conversations, one Settings row); the settings area has its own

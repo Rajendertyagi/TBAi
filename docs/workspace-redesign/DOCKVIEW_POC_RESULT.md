@@ -72,3 +72,16 @@
 ## Cleanup / rollback
 
 All POC changes are isolated: dev dependency, one lab component, one route constant, one dev-route entry, one temporary Vite config. Removing them restores the prior state; no production code or data was changed. No commit or push was made for the POC.
+
+## Production integration — POC findings now covered by permanent tests (2026-11-23)
+
+Dockview was adopted as the production workspace layout engine (ADR in `docs/decisions.md`). The POC findings above are now backed by permanent automated tests rather than the temporary lab:
+
+- **Runtime preservation across `moveTo()` / hidden panels** — `tests/unit/web/workspace/dockview-controller.test.ts` (move-then-remove/add never closes; relocation markers survive until mutation settles) and `tests/dom/workspace/draft-alias-runtime.test.tsx` (one host/runtime per panel, duplicate-mount claim).
+- **Mixed Direct + OpenCode mounting** — `tests/dom/opencode/OpenCodePanel.integration.test.tsx` (distinct runtimes/contexts/activity keys, no cross-runtime leakage; route-independent identity with no router mounted).
+- **Save/restore with `reuseExistingPanels`** — `tests/unit/web/workspace/layout-persistence.test.ts` (versioned envelope, migration, stale-ref reconciliation, corrupt fallback) and controller restore-guard tests.
+- **Composer text / scroll across a move** — `tests/e2e/workspace/dockview-workspace.spec.ts` (real-browser composer preservation; panel move does not remount the host).
+- **Active response continuing while hidden** — `tests/e2e/workspace/dockview-workspace.spec.ts` (ControlledProvider holds a real stream while the panel is hidden).
+- **Chat ? settings ? chat persistence** — `tests/dom/workspace/workspace-surface-persistence.test.tsx` (same DOM node + layout-preserving classes) and the E2E spec.
+
+**Remaining limitations (not claimed as passed):** live concurrent mixed-engine sends with distinct reply markers and the full OpenCode lifecycle in a panel need a real provider/managed OpenCode server and remain in the opt-in `*-live.spec.ts` suite. The temporary lab (`DockviewLab.tsx`, `DockviewOpenCodeHost.tsx`, `vite.poc.config.ts`, dev route) was retired in Phase F after its findings were transferred to the permanent suite.
