@@ -203,6 +203,10 @@ export class DockviewController {
     for (const id of [...this.closedByUser]) {
       if (!desired.has(id)) this.closedByUser.delete(id);
     }
+    // A canonical-key change (e.g. a conversation added to shared membership)
+    // must reconcile the panel set. No Dockview event fires for a store change,
+    // so without this the newly-open conversation never gets a panel.
+    this.scheduleSettledWork();
   }
 
   /**

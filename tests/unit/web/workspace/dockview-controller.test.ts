@@ -380,11 +380,24 @@ describe("DockviewController — reconciliation against canonical chatTabs", () 
     h.api.removePanelCalls = [];
 
     h.controller.setOpenTabKeys(["chat:b"]);
-    h.api.simulateAdd("chat:b"); // trigger settled work
-    h.flushMicrotasks();
+    h.flushMicrotasks(); // setOpenTabKeys schedules its own settled work
 
     expect(h.api.removePanelCalls).toEqual(["chat:a"]);
     expect(h.api.addPanelCalls).toEqual([]);
+  });
+
+  it("opens a panel for a newly-added canonical key without any Dockview event", () => {
+    // A conversation added to shared membership changes openTabKeys but fires
+    // no Dockview event. The controller must reconcile on its own — otherwise
+    // the second conversation never gets a panel (E2E: Expected 2, Received 1).
+    const h = harness({ openTabKeys: ["chat:a"], initialPanels: ["chat:a"] });
+    h.flushMicrotasks();
+    h.api.addPanelCalls = [];
+
+    h.controller.setOpenTabKeys(["chat:a", "chat:b"]);
+    h.flushMicrotasks();
+
+    expect(h.api.addPanelCalls.map((c) => c.id)).toEqual(["chat:b"]);
   });
 
   it("does not report a reconciliation removal as a user close (audit Major #1)", () => {
