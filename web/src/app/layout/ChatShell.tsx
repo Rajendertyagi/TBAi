@@ -6,9 +6,9 @@ import { Outlet } from "react-router";
 
 /**
  * Normal-chat branch shell.
- * AssistantRuntimeProvider is mounted once at root in AppShell using canonical
- * `threadListAdapter` so Sidebar and Chat views share the official thread-list
- * runtime without duplication.
+ * There is no root AssistantRuntimeProvider (removed in Phase E): each Direct
+ * host mounts its own provider, the Sidebar reads the HTTP-owned activity
+ * projection, and Code mode isolates via CodeShell/OpenCodeIsolationBoundary.
  *
  * Thread binding: AppShell's handleThreadIdChange binds through the owner
  * record with the live snapshot as backstop:

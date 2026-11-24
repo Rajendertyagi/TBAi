@@ -1,6 +1,6 @@
 # TBAi — Dockview Startup Optimization Plan (lazy OpenCode activation)
 
-**Status:** FINAL PLAN — architecture ACCEPTED by final audit; all clarifications recorded. Ready for implementation approval. Implementation NOT yet authorized.
+**Status:** IMPLEMENTATION COMPLETE — architecture ACCEPTED by the final audit; all phases implemented and committed in `7461d20` (Dockview startup optimization + multi-project audit) and `ee95c5a` (Direct Chat custom tool UIs via runtime provider config). Controlled before/after verification results are recorded in §4 Phase 6 below.
 **Date:** 2026-11-24
 **Branch / commit inspected:** `ui-foundation-upgrade` @ `da556a9`.
 **Evidence:** browser-side instrumentation of the running app (wrapped `fetch` + `EventSource`) plus read-only source review. All figures below are from recorded runs; where a figure varies between runs, that is stated.
@@ -94,7 +94,7 @@ Phase 1 read-only investigation (headless Chromium, wrapped `fetch`) traced the 
 
 These are **necessary per-conversation recovery checks**, not app-wide duplication — but there is real duplication: the same conversation id is checked twice (e.g. `__LOCALID_fpZ514u` at 529ms and 720ms; `y87i8j82…` at 696ms and 721ms) because the thread-load effect and the running-transition effect both fire. This is a **Direct chat** concern; lazy OpenCode activation does not remove it.
 
-**Scope note:** this plan primarily optimizes **OpenCode startup**. Direct panels still mount eagerly and still issue these checks. Do not claim the whole startup problem is solved by this plan. Phase 1's tracing requirement is satisfied; the before/after workspace-visible-time measurement remains a Phase 6 deliverable.
+**Scope note:** this plan primarily optimizes **OpenCode startup**. Direct panels still mount eagerly and still issue these checks. Do not claim the whole startup problem is solved by this plan. Phase 1's tracing requirement is satisfied; the before/after workspace-visible-time measurement was completed in Phase 6 (see §4).
 
 **Measurement distinction — TabStrip tab-label lookups:** `TabStrip.useTabTitle()` (`web/src/components/TabStrip.tsx:42-71`) calls `threadListAdapter.fetch(ref)` for **every visible tab, including inactive OpenCode tabs**, to render the label (and to detect a conversation deleted elsewhere). This is a **tab-label lookup**, not an OpenCode runtime/config read. Keep it **separate** in the performance tests: the requirement that dormant panels issue no runtime/config requests must not be invalidated by these legitimate label fetches. Count them in their own category, not under conversation-config or probe duplication.
 
@@ -178,7 +178,38 @@ Implement ONE idempotent activation helper called by all these paths (rather tha
 
 ### Phase 6 — Verify
 - Targeted E2E in headless Chromium, full history/Dockview specs, unit tests, typecheck/lint/build.
-- **Before/after workspace-visible-time measurement** (not just API request counts): record `domcontentloaded` and `dockview-workspace` visible timing with the same panel set before and after the change. Phase 1 baseline examples: 266ms / 1649ms with 2 Direct + 1 OpenCode panels; 379ms / 2764ms with 4 Direct + 4 OpenCode panels.
+- **Controlled before/after startup measurement — COMPLETE.** A/B of `da556a9` (pre-optimization baseline, detached git worktree) vs `ee95c5a` (current, main checkout). Both servers were pointed at the **same** `DATA_DIR`, so the panel set was identical: **5 Direct panels (4 conversations + the `chat:new` draft) + 4 OpenCode panels**. Fixed ports 3016 (baseline) / 3015 (current); headless Chromium (`channel: "chromium"`), 1440×900 viewport, fresh browser context per run, 1 warm-up + 3 measured runs, medians reported. `fetch` and `EventSource` were wrapped before app scripts ran; request paths were normalised with ids collapsed to `:id`.
+
+  | Metric (median of 3) | Baseline `da556a9` | Current `ee95c5a` | Δ |
+  |---|---|---|---|
+  | `domcontentloaded` (wall clock) | 381 ms | 249 ms | −132 ms |
+  | `domcontentloaded` (navigation timing) | 373 ms | 243 ms | −130 ms |
+  | `dockview-workspace` visible | 1621 ms | 841 ms | −780 ms (~48%) |
+  | Total requests | 155 | 64 | −91 (~59%) |
+  | API requests | 154 | 63 | −91 |
+
+  Request counts by endpoint (median of 3, same panel set):
+
+  | Endpoint | Baseline | Current |
+  |---|---|---|
+  | `GET /api/conversations/:id` | 56 | 24 |
+  | `GET /api/chat/stream-status` | 17 | 17 |
+  | `GET /api/opencode/capabilities` | 19 | 0 |
+  | `GET /api/opencode/status` | 11 | 0 |
+  | `GET /api/folders` | 15 | 1 |
+  | `POST /api/opencode/session` | 4 | 0 |
+  | `GET /api/opencode/api/event` | 4 | 0 |
+  | `GET /api/opencode/api/info` | 4 | 0 |
+  | `GET /api/opencode/runtime/events` | 1 | 0 |
+  | `GET /api/opencode/commands` | 1 | 0 |
+  | `GET /api/conversations/:id/messages/window` | 4 | 4 |
+  | `GET /api/conversations` | 7 | 7 |
+  | `POST /api/logs/client` | 2 | 1 |
+  | all other endpoints (preferences, providers, server, readyz, workspace, scheduler, MCP) | 10 | 10 |
+
+  Interpretation: the OpenCode-only endpoints fall to zero because dormant panels never mount their runtime — exactly the lazy-activation contract. `GET /api/conversations/:id` drops from 56 to 24 but is **not** zero: `TabStrip.useTabTitle()` still fetches a label for every visible tab (§2.6), and the one activated Direct panel reads its config. `GET /api/chat/stream-status` is unchanged at 17 — a Direct-chat recovery concern explicitly out of scope (§2.6). Those remaining reads are the honest floor of this change, not a claim that all startup reads were removed.
+
+  **Limitations:** one machine (Windows), headless Chromium, 1440×900 viewport, 1.5 s post-shell settle window; wall-clock timings are noisy (baseline `domcontentloaded` ranged 255–416 ms, current 231–324 ms), so medians are the reportable figure. The two revisions ran sequentially against one shared SQLite `DATA_DIR`; no provider credentials were configured, so OpenCode bootstraps were counted as requests but did not complete real upstream sessions. The probe script and baseline worktree were deleted after measurement. Phase 1's earlier figures (266/1649 ms with 2 Direct + 1 OpenCode panels; 379/2764 ms with 4 Direct + 4 OpenCode panels) came from a different, uncontrolled run and are **not** comparable to this A/B table.
 - Final plan review / independent audit before commit.
 
 ## 5. Risks
