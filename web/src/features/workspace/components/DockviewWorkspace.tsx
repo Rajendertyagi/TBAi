@@ -52,6 +52,7 @@ import {
   visibleTabs,
 } from "../../chat/state/chatTabs";
 import { activateHistoryConversation } from "../../chat/history/useDirectHistoryWindow";
+import { activateWorkspacePanel, registerPanelCanonicalKey } from "../state/workspaceActivation";
 import { usePreferencesStore } from "../../preferences/state/preferencesStore";
 
 const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelParams>>> = {
@@ -194,8 +195,24 @@ export function DockviewWorkspace({
           // visible, but only the activated one is a visit. Repeated focus of
           // the already-active conversation is a no-op in the activation store.
           const parsed = parseTabKey(canonicalKey);
+          // Direct history recovery stays chat-only and unchanged. Workspace
+          // runtime activation is a separate contract and covers BOTH engines;
+          // the helper itself ignores the draft tab and malformed keys.
           if (parsed?.kind === "chat" && parsed.ref !== NEW_DRAFT_TAB_ID) {
             activateHistoryConversation(parsed.ref);
+          }
+          // Remember the panel-id -> canonical-key mapping so a materialized
+          // draft's unmount disposes `chat:<id>`, not the immutable `chat:new`.
+          registerPanelCanonicalKey(panelId ?? "", canonicalKey);
+          // Only intentional focus starts a runtime. A user click is always
+          // intentional; programmatic focus is intentional only when it matches
+          // the window-level active key (deep link / route / Chat Threads).
+          // dockview-core makes every added panel active with origin 'api', so
+          // transient activations during startup/reconciliation carry a
+          // non-intended key here and must stay dormant. The activeTabKey effect
+          // below is the safety net for an already-active intended panel.
+          if (origin === "user" || canonicalKey === activeTabKeyRef.current) {
+            activateWorkspacePanel(canonicalKey);
           }
           onActivePanelChangeRef.current?.(canonicalKey, origin);
         },
@@ -219,6 +236,19 @@ export function DockviewWorkspace({
     },
     [canonicalKeyFor, panelIdFor, handleRef, alias, onHandleReady],
   );
+
+  // Activate the window-level selected panel on initial restore, deep-link
+  // convergence and route navigation. `onActivePanelChange` above covers user
+  // clicks and API focus, but can miss a selection whose panel is already active
+  // (no Dockview event) — notably first-send draft materialization, where the
+  // `chat:new` panel stays active while the canonical key becomes `chat:<id>`.
+  // Register the mapping here too so that transition's later disposal resolves
+  // the materialized key. Repeated activation of a started panel is a no-op.
+  useEffect(() => {
+    if (!activeTabKey) return;
+    registerPanelCanonicalKey(panelIdFor(activeTabKey), activeTabKey);
+    activateWorkspacePanel(activeTabKey);
+  }, [activeTabKey, panelIdFor]);
 
   useEffect(() => {
     controllerRef.current?.setOpenTabKeys(openTabKeys);

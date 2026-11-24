@@ -283,3 +283,72 @@ describe("welcome scope — project binding is explicit UI state (soft refs pres
     expect(store().scope).toEqual({ mode: "project", folderId: "target" });
   });
 });
+
+describe("ensureFoldersLoaded — single-flight and loaded-data reuse", () => {
+  it("concurrent callers share one in-flight fetch", async () => {
+    const first = deferred();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return first.promise;
+    }) as unknown as typeof fetch;
+
+    const store = () => useFoldersStore.getState();
+    const p1 = store().ensureFoldersLoaded();
+    const p2 = store().ensureFoldersLoaded();
+    const p3 = store().ensureFoldersLoaded();
+
+    // All three join the same in-flight load — only one fetch was issued.
+    expect(calls).toBe(1);
+
+    first.resolve(okFolders([folder("a")]));
+    await Promise.all([p1, p2, p3]);
+
+    expect(calls).toBe(1);
+    expect(store().folders.map((f) => f.id)).toEqual(["a"]);
+    expect(store().foldersLoaded).toBe(true);
+  });
+
+  it("does not fetch again once folders are already loaded", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return okFolders([folder("a")]);
+    }) as unknown as typeof fetch;
+
+    const store = () => useFoldersStore.getState();
+    await store().ensureFoldersLoaded();
+    expect(calls).toBe(1);
+
+    await store().ensureFoldersLoaded();
+    await store().ensureFoldersLoaded();
+    expect(calls).toBe(1);
+    expect(store().folders.map((f) => f.id)).toEqual(["a"]);
+  });
+
+  it("a mutation forces a fresh load and ensureFoldersLoaded reuses the refreshed data", async () => {
+    let listCalls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return { ok: true, status: 200, json: async () => folder("b") } as Response;
+      }
+      listCalls += 1;
+      return okFolders(listCalls === 1 ? [folder("a")] : [folder("a"), folder("b")]);
+    }) as unknown as typeof fetch;
+
+    const store = () => useFoldersStore.getState();
+    await store().ensureFoldersLoaded();
+    expect(store().folders.map((f) => f.id)).toEqual(["a"]);
+    expect(listCalls).toBe(1);
+
+    // Mutations call loadFolders() directly — a fresh fetch is expected.
+    await store().createFolder({ path: "/proj/b" });
+    expect(store().folders.map((f) => f.id)).toEqual(["a", "b"]);
+    expect(listCalls).toBe(2);
+
+    // The refreshed data is reused; no additional fetch is issued.
+    await store().ensureFoldersLoaded();
+    expect(listCalls).toBe(2);
+    expect(store().folders.map((f) => f.id)).toEqual(["a", "b"]);
+  });
+});

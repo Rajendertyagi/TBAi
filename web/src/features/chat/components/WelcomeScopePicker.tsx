@@ -32,13 +32,13 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
   const validate = useWelcomeScopeStore((s) => s.validateAgainstFolderIds);
   const folders = useFoldersStore((s) => s.folders);
   const foldersLoaded = useFoldersStore((s) => s.foldersLoaded);
-  const loadFolders = useFoldersStore((s) => s.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((s) => s.ensureFoldersLoaded);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    void loadFolders();
-  }, [loadFolders]);
+    void ensureFoldersLoaded();
+  }, [ensureFoldersLoaded]);
 
   // Prune a preset/dead folder id only against a loaded list. An empty list
   // before the first load means "unknown" — validating against it wiped a

@@ -47,7 +47,7 @@ import type { Folder } from "@/types";
 export function FoldersPage() {
   const folders = useFoldersStore((s) => s.folders);
   const groups = useFoldersStore((s) => s.folderGroups);
-  const loadFolders = useFoldersStore((s) => s.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((s) => s.ensureFoldersLoaded);
   const loadGroups = useFoldersStore((s) => s.loadGroups);
   const updateFolder = useFoldersStore((s) => s.updateFolder);
   const removeFolder = useFoldersStore((s) => s.removeFolder);
@@ -72,9 +72,9 @@ export function FoldersPage() {
   const [newGroupName, setNewGroupName] = useState("");
 
   useEffect(() => {
-    void loadFolders();
+    void ensureFoldersLoaded();
     void loadGroups();
-  }, [loadFolders, loadGroups]);
+  }, [ensureFoldersLoaded, loadGroups]);
 
   const handleOpenAlias = (folder: Folder) => {
     setAliasFolder(folder);

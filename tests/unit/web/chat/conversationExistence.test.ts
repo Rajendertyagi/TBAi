@@ -351,9 +351,11 @@ describe("class identity survives the move to this module", () => {
 describe("consumer adoption — no lossy conversation reads remain", () => {
   const read = (rel: string) => Bun.file(path.join(REPO_ROOT, rel)).text();
 
+  // Phase F moved OpenCodeSessionRow off its own probe: it now reads the
+  // conversation config fetched once by the activated host through
+  // OpenCodeRuntimeContext, so it is no longer a `probeConversation` consumer.
   const PROBES = [
     ["ChatHeader", "web/src/features/chat/components/ChatHeader.tsx"],
-    ["OpenCodeSessionRow", "web/src/features/opencode/OpenCodeSessionRow.tsx"],
     ["useOpenCodeConversationConfig", "web/src/features/opencode/useOpenCodeConversationConfig.ts"],
   ] as const;
 

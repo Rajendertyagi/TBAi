@@ -8,10 +8,8 @@ import { logger } from "@/lib/logger";
 import { apiFetch } from "@/lib/platform";
 import { welcomeConfig } from "@/config/welcome";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
-import {
-  updateConversationConfig,
-  useOpenCodeConversationConfig,
-} from "./useOpenCodeConversationConfig";
+import { updateConversationConfig } from "./useOpenCodeConversationConfig";
+import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 import { mergeOpenCodeSelectionState, type OpenCodeSelectionPatch } from "./opencodeSelection";
@@ -25,7 +23,12 @@ import { findChipModelInfo, resolveChipModelSource } from "./chipModelSource";
  */
 export function useOpenCodeChipState(conversationId: string) {
   const { agents, models, isLoading, error } = useOpenCodeCapabilities(true);
-  const config = useOpenCodeConversationConfig(conversationId);
+  // The activated host fetches the conversation config once and publishes it
+  // through the runtime context. Reading it here (instead of calling the hook
+  // in every chip) keeps one conversation read per panel. Chip writes still
+  // bump the override version the host subscribes to, so this shared value
+  // stays fresh for all three chips.
+  const config = useOpenCodeRuntimeContext()?.config ?? null;
   const nativeExtras = useOptionalV2RuntimeExtras();
   // Draft (no bound conversation yet): picks live in the welcome-engine store
   // and seed native session creation. Bound threads persist to the conversation

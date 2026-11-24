@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { OpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 
 /**
  * Runtime-scoped OpenCode values the composer surface needs but cannot derive
@@ -21,6 +22,14 @@ export interface OpenCodeRuntimeContextValue {
    * correct identity inside a Dockview panel outside `/code/:agentId`.
    */
   conversationId: string;
+  /**
+   * The conversation's complete OpenCode config, fetched ONCE by the activated
+   * host and shared with every in-panel consumer (AgentRuntime, composer chips,
+   * Shield chip, session row). `null` while the read is in flight or failed —
+   * consumers then fall back to their neutral/empty presentation. Kept distinct
+   * from `sessionId`, which is the managed OpenCode session handle.
+   */
+  config: OpenCodeConversationConfig | null;
   /** The OpenCode session that owns this runtime. */
   sessionId: string;
   /** The runtime's reconcile seam (from `useOpenCodeRuntime`). */

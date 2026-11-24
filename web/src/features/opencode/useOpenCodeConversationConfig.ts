@@ -6,11 +6,23 @@ import { probeConversation } from "../chat/state/conversationExistence";
 
 /**
  * OpenCode configuration for a bound conversation: the persisted agent, model,
- * and thinking level (variant) the session was created with. The OpenCode
- * runtime derives its prompt-level defaults from these so a session never
- * falls back to a server-implicit default.
+ * and thinking level (variant) the session was created with, plus the
+ * conversation's engine/workspace identity. The OpenCode runtime derives its
+ * prompt-level defaults from these so a session never falls back to a
+ * server-implicit default.
+ *
+ * This is the COMPLETE conversation read shared by every in-panel consumer
+ * (host, AgentRuntime, composer chips, Shield chip, session row) through
+ * `OpenCodeRuntimeContext`. It is fetched once per activated host; the identity
+ * fields let the session row drop its own `probeConversation` call.
  */
 export interface OpenCodeConversationConfig {
+  /** The conversation's engine — the session row's engine badge. */
+  engine: "direct" | "opencode";
+  /** Workspace scope — the session row's scope chip. */
+  workspaceMode: "simple" | "project";
+  /** Bound project folder id, or null for a simple chat. */
+  workspaceFolderId: string | null;
   opencodeAgent: string | null;
   opencodeModel: string | null;
   opencodeVariant: string | null;
@@ -74,6 +86,9 @@ export function useOpenCodeConversationConfig(
       if (cancelled || probe.status !== "exists") return;
       const data = probe.data;
       setConfig({
+        engine: data.engine,
+        workspaceMode: data.workspaceMode,
+        workspaceFolderId: data.workspaceFolderId,
         opencodeAgent: data.opencodeAgent ?? null,
         opencodeModel: data.opencodeModel ?? null,
         opencodeVariant: data.opencodeVariant ?? null,

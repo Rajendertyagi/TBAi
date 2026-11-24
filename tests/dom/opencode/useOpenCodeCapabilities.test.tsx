@@ -210,6 +210,74 @@ describe("useOpenCodeCapabilities shared store (managed-only)", () => {
     await view.unmount();
   });
 
+  it("dedupes many simultaneous consumers into one request when a target is known, then refreshes on a genuine target change", async () => {
+    const consumerCount = 20;
+    const states = Array.from({ length: consumerCount }, () => ({
+      current: { agents: [], models: [], error: null, isLoading: false } as HookState,
+    }));
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchQueue.push(first, second);
+    publishRuntimeStatus({
+      mode: "managed",
+      backendInstanceId: BID,
+      targetRevision: 1,
+      targetId: 1,
+    });
+    const view = render(
+      createElement(
+        "div",
+        null,
+        ...states.map((slot, i) =>
+          createElement(Consumer, {
+            key: i,
+            onState: (s) => {
+              slot.current = s;
+            },
+          }),
+        ),
+      ),
+    );
+    await view.mount();
+    expect(fetchCalls).toBe(1);
+
+    first.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "first", name: "First", providerID: "p", variants: [] }],
+        target: { backendInstanceId: BID, targetRevision: 1, targetId: 1, mode: "managed" },
+      }),
+    );
+    await flush();
+    for (const slot of states) {
+      expect(slot.current.models.map((m) => m.id)).toEqual(["first"]);
+    }
+
+    await act(async () => {
+      publishRuntimeStatus({
+        mode: "managed",
+        backendInstanceId: BID,
+        targetRevision: 2,
+        targetId: 2,
+      });
+    });
+    await flush();
+    expect(fetchCalls).toBe(2);
+
+    second.resolve(
+      capabilitiesResponse({
+        agents: [],
+        models: [{ id: "second", name: "Second", providerID: "p", variants: [] }],
+        target: { backendInstanceId: BID, targetRevision: 2, targetId: 2, mode: "managed" },
+      }),
+    );
+    await flush();
+    for (const slot of states) {
+      expect(slot.current.models.map((m) => m.id)).toEqual(["second"]);
+    }
+    await view.unmount();
+  });
+
   it("refreshes active consumers when target revision changes without recovery epoch change", async () => {
     let latest: HookState = { agents: [], models: [], error: null, isLoading: false };
     const first = deferred<Response>();

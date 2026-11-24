@@ -88,7 +88,7 @@ export function Sidebar() {
   const searchQuery = useDesktopLayout((s) => s.searchQuery);
   const setSearchQuery = useDesktopLayout((s) => s.setSearchQuery);
   const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
-  const loadFolders = useFoldersStore((s) => s.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((s) => s.ensureFoldersLoaded);
   const folderCount = useFoldersStore((s) => s.folders.length);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -96,8 +96,8 @@ export function Sidebar() {
   // badge must be right even while the section is collapsed and its content is
   // unmounted.
   useEffect(() => {
-    void loadFolders();
-  }, [loadFolders]);
+    void ensureFoldersLoaded();
+  }, [ensureFoldersLoaded]);
 
   const isExpanded = (id: SidebarSectionId): boolean => {
     return !sectionCollapsed[id];

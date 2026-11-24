@@ -1,27 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { welcomeConfig } from "@/config/welcome";
-import { probeConversation } from "@/features/chat/state/conversationExistence";
 import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
-
-/**
- * Conversation identity fields this row consumes. These are the P1-extended
- * `custom` bag fields (engine / opencodeAgent / opencodeModel) plus the
- * pre-existing workspace scope fields (workspaceMode / workspaceFolderId) —
- * the same data `toMetadata` surfaces as `threadListItem.custom`.
- */
-type ConversationIdentity = {
-  engine?: "direct" | "opencode";
-  workspaceMode?: "simple" | "project";
-  workspaceFolderId?: string | null;
-  opencodeAgent?: string | null;
-  opencodeModel?: string | null;
-  opencodeVariant?: string | null;
-};
 
 const ENGINE_LABELS: Record<string, string> = {
   opencode: "OpenCode",
@@ -29,66 +13,34 @@ const ENGINE_LABELS: Record<string, string> = {
 };
 
 /**
- * Reads the bound conversation's identity (engine / scope / agent / model) from
- * the conversation record. The OpenCode view runs inside the OpenCode runtime,
- * whose `threadListItem.custom` is session-scoped and does not carry these
- * conversation fields — so we read the same source `toMetadata` maps into
- * `custom` (the conversation record) by id.
- *
- * Probed through the shared existence contract, so a proven-missing row and an
- * unreadable response are no longer the same value. This row is display-only, so
- * every non-`exists` verdict keeps today's behavior: identity stays `null` and
- * nothing renders. One request, and the row data still arrives on the happy path.
- */
-function useConversationIdentity(conversationId: string | undefined) {
-  const [identity, setIdentity] = useState<ConversationIdentity | null>(null);
-  useEffect(() => {
-    if (!conversationId) return;
-    let cancelled = false;
-    void (async () => {
-      const probe = await probeConversation(conversationId);
-      if (cancelled || probe.status !== "exists") return;
-      const data = probe.data;
-      setIdentity({
-        engine: data.engine,
-        workspaceMode: data.workspaceMode,
-        workspaceFolderId: data.workspaceFolderId,
-        opencodeAgent: data.opencodeAgent,
-        opencodeModel: data.opencodeModel,
-        opencodeVariant: data.opencodeVariant,
-      });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId]);
-  return identity;
-}
-
-/**
  * Static, non-editable session-identity row for Code mode: engine badge +
  * scope chip (folder name or chat mode) + agent/model names. Scope/agent/model
  * are locked at creation (changing them means a new chat), so this is display
  * only. Agent/model may be absent for pre-P1 sessions → neutral dash fallback.
  * Mounted as a sibling of ChatWindow (never inside it).
+ *
+ * Identity comes from the single conversation config fetched by the activated
+ * host and shared through `OpenCodeRuntimeContext` — this row issues no
+ * conversation probe of its own. `null` config (read in flight or failed)
+ * renders nothing, matching the previous probe's non-`exists` behavior.
  */
 export function OpenCodeSessionRow() {
   const runtime = useOpenCodeRuntimeContext();
-  const identity = useConversationIdentity(runtime?.conversationId);
+  const config = runtime?.config ?? null;
   const folders = useFoldersStore((s) => s.folders);
-  const loadFolders = useFoldersStore((s) => s.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((s) => s.ensureFoldersLoaded);
 
   useEffect(() => {
-    void loadFolders();
-  }, [loadFolders]);
+    void ensureFoldersLoaded();
+  }, [ensureFoldersLoaded]);
 
-  if (!identity) return null;
+  if (!config) return null;
 
-  const engineLabel = ENGINE_LABELS[identity.engine ?? ""] ?? identity.engine ?? "OpenCode";
-  const isProject = identity.workspaceMode === "project";
+  const engineLabel = ENGINE_LABELS[config.engine] ?? "OpenCode";
+  const isProject = config.workspaceMode === "project";
   const folder =
-    isProject && identity.workspaceFolderId
-      ? (folders.find((f) => f.id === identity.workspaceFolderId) ?? null)
+    isProject && config.workspaceFolderId
+      ? (folders.find((f) => f.id === config.workspaceFolderId) ?? null)
       : null;
   const scopeLabel = isProject
     ? folder?.alias || folder?.name || welcomeConfig.copy.folderRemoved
@@ -105,23 +57,23 @@ export function OpenCodeSessionRow() {
       </span>
       <span className="truncate">
         Agent:{" "}
-        {identity.opencodeAgent ? (
-          identity.opencodeAgent
+        {config.opencodeAgent ? (
+          config.opencodeAgent
         ) : (
           <span className="text-muted-foreground/60">–</span>
         )}
       </span>
       <span className="truncate">
         Model:{" "}
-        {identity.opencodeModel ? (
-          identity.opencodeModel
+        {config.opencodeModel ? (
+          config.opencodeModel
         ) : (
           <span className="text-muted-foreground/60">–</span>
         )}
       </span>
-      {identity.opencodeVariant && (
+      {config.opencodeVariant && (
         <span className="truncate">
-          Thinking: <span className="text-muted-foreground/60">{identity.opencodeVariant}</span>
+          Thinking: <span className="text-muted-foreground/60">{config.opencodeVariant}</span>
         </span>
       )}
     </div>

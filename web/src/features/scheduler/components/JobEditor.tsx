@@ -150,11 +150,11 @@ export function JobEditor({
   const editingId = editingJob?.id ?? null;
 
   const folders = useFoldersStore((st) => st.folders);
-  const loadFolders = useFoldersStore((st) => st.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((st) => st.ensureFoldersLoaded);
 
   useEffect(() => {
-    loadFolders();
-  }, [loadFolders]);
+    void ensureFoldersLoaded();
+  }, [ensureFoldersLoaded]);
 
   const [draft, setDraft] = useState<SchedulerJobDraft>(() => {
     if (editingJob) return draftFromJob(editingJob);

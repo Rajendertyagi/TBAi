@@ -5,7 +5,6 @@ import { Shield, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { welcomeConfig } from "@/config/welcome";
 import { logger } from "@/lib/logger";
-import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { persistAutoApprove } from "./autoApproveWrite";
 import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
@@ -123,7 +122,8 @@ export function OpenCodeShieldChip() {
   const runtime = useOpenCodeRuntimeContext();
   const conversationId = runtime?.conversationId ?? "";
   const draft = !conversationId;
-  const config = useOpenCodeConversationConfig(conversationId);
+  // Shared config from the activated host — one conversation read per panel.
+  const config = runtime?.config ?? null;
   const draftAutoApprove = useWelcomeEngineStore((s) => s.autoApprove);
   const setDraftAutoApprove = useWelcomeEngineStore((s) => s.setAutoApprove);
 

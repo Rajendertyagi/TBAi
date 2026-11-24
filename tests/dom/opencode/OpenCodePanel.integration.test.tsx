@@ -181,6 +181,11 @@ mock.module("@web/features/opencode/useOpenCodeConversationConfig", () => ({
   useOpenCodeConversationConfig: (conversationId: string | undefined) =>
     conversationId
       ? {
+          // Complete config now flows through the runtime context to the host,
+          // chips, Shield and session row — one fetch per activated panel.
+          engine: "opencode" as const,
+          workspaceMode: "simple" as const,
+          workspaceFolderId: null,
           opencodeAgent: `agent-${conversationId}`,
           opencodeModel: `provider-x/model-${conversationId}`,
           opencodeVariant: `chip-variant-${conversationId}`,
@@ -234,7 +239,8 @@ mock.module("@web/features/opencode/v2RuntimeExtras", () => ({
   }),
 }));
 
-// Session-row identity is keyed by the id the row read from context.
+// Kept for other consumers of the shared existence contract; the session row
+// now reads identity from the host's context config instead of probing here.
 const realExistence = await import("@web/features/chat/state/conversationExistence");
 mock.module("@web/features/chat/state/conversationExistence", () => ({
   ...realExistence,
@@ -262,8 +268,12 @@ const realFolders = await import("@web/features/folders/state/foldersStore");
 mock.module("@web/features/folders/state/foldersStore", () => ({
   ...realFolders,
   useFoldersStore: (
-    selector: (state: { folders: unknown[]; loadFolders: () => void }) => unknown,
-  ) => selector({ folders: [], loadFolders: () => {} }),
+    selector: (state: {
+      folders: unknown[];
+      loadFolders: () => void;
+      ensureFoldersLoaded: () => void;
+    }) => unknown,
+  ) => selector({ folders: [], loadFolders: () => {}, ensureFoldersLoaded: () => {} }),
 }));
 
 // --- Presence markers for the agent-mode extras ---------------------------
@@ -446,9 +456,9 @@ describe("OpenCode panel — route-independent identity (plan §6 test 13)", () 
     // would throw, so a successful render proves route independence.
     expect(query(host, "chat-window")?.getAttribute("data-mode")).toBe("agent");
 
-    // Session row identity comes from probeConversation(context.conversationId).
-    expect(host.container.textContent).toContain("row-agent-oc-conv-a");
-    expect(host.container.textContent).toContain("row-model-oc-conv-a");
+    // Session row identity comes from the host's config via the runtime context.
+    expect(host.container.textContent).toContain("agent-oc-conv-a");
+    expect(host.container.textContent).toContain("provider-x/model-oc-conv-a");
 
     // All four chips are present, and each shows data keyed by the context
     // conversation id (not a route param, not the other host's id).
@@ -463,14 +473,14 @@ describe("OpenCode panel — route-independent identity (plan §6 test 13)", () 
     const b = mountElement(<OpenCodeChatHost conversationId="oc-conv-b" />);
     await settle();
 
-    expect(a.container.textContent).toContain("row-agent-oc-conv-a");
-    expect(a.container.textContent).not.toContain("row-agent-oc-conv-b");
+    expect(a.container.textContent).toContain("agent-oc-conv-a");
+    expect(a.container.textContent).not.toContain("agent-oc-conv-b");
     expect(chipByLabel(a, "Agent")?.textContent).toContain("Agent oc-conv-a");
     expect(chipByLabel(a, "Model")?.textContent).toContain("Model oc-conv-a");
     expect(chipByLabel(a, "Auto-approve permissions: on")).not.toBeNull();
 
-    expect(b.container.textContent).toContain("row-agent-oc-conv-b");
-    expect(b.container.textContent).not.toContain("row-agent-oc-conv-a");
+    expect(b.container.textContent).toContain("agent-oc-conv-b");
+    expect(b.container.textContent).not.toContain("agent-oc-conv-a");
     expect(chipByLabel(b, "Agent")?.textContent).toContain("Agent oc-conv-b");
     expect(chipByLabel(b, "Model")?.textContent).toContain("Model oc-conv-b");
     expect(chipByLabel(b, "Auto-approve permissions: off")).not.toBeNull();

@@ -9,6 +9,10 @@
 import type { IDockviewPanelProps } from "dockview-react";
 import { OpenCodeChatHost } from "../../opencode/OpenCodeChatHost";
 import { parsePanelParams, type PanelParams } from "../dockviewParams";
+import {
+  useDisposeWorkspacePanelOnUnmount,
+  useIsWorkspacePanelStarted,
+} from "../state/workspaceActivation";
 import { usePanelVisibility } from "./usePanelVisibility";
 import { usePanelMountClaim } from "./usePanelMountClaim";
 
@@ -52,6 +56,18 @@ function BoundOpenCodePanel({
   visible: boolean;
 }) {
   const owned = usePanelMountClaim(tabKey);
+  const storeActivated = useIsWorkspacePanelStarted(tabKey);
+  // A real Dockview panel's immutable id IS its canonical tab key
+  // (dockviewController.addPanelForTabKey sets `id: tabKey`; OpenCode panels are
+  // never the aliased `chat:new` draft). Only such panels participate in the
+  // workspace activation contract. A mount with a synthetic id is not part of
+  // the managed workspace and has no activation lifecycle, so it runs its
+  // runtime immediately — this keeps direct harness mounts working.
+  const activated = panelId === tabKey ? storeActivated : true;
+  // Genuine removal (including canonical reconciliation, which skips
+  // onPanelClose) unmounts this component; hide/move do not. Pass the immutable
+  // panel id so the resolver can map it to the canonical key at disposal.
+  useDisposeWorkspacePanelOnUnmount(panelId);
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col overflow-hidden"
@@ -63,7 +79,7 @@ function BoundOpenCodePanel({
       data-visible={visible}
     >
       {owned ? (
-        <OpenCodeChatHost conversationId={refId} />
+        <OpenCodeChatHost conversationId={refId} activated={activated} />
       ) : (
         <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
           This conversation is already open in another panel.

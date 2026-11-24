@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { resetRuntimeTargetStoreForTests } from "@web/features/opencode/runtimeStatus.ts";
+import { useAvailabilityStore } from "@web/features/availability/availabilityStore.ts";
+import {
+  resetRuntimeTargetStoreForTests,
+  useRuntimeTargetStore,
+} from "@web/features/opencode/runtimeStatus.ts";
 import { resetRuntimeTargetEventsForTests } from "@web/features/opencode/runtimeTargetEvents.ts";
+import { resetStatusResourceForTests } from "@web/features/opencode/statusResource.ts";
 import { useOpenCodeRuntimeStatus } from "@web/features/opencode/useOpenCodeRuntimeStatus.ts";
 
 const BID = "backend-instance";
@@ -70,6 +75,16 @@ function Probe({ refreshKey, enabled }: { refreshKey: string; enabled?: boolean 
   return <div data-status={status?.mode ?? "none"} data-error={error ?? ""} />;
 }
 
+function MultiProbe({ keys }: { keys: readonly string[] }) {
+  return (
+    <>
+      {keys.map((key, index) => (
+        <Probe key={index} refreshKey={key} />
+      ))}
+    </>
+  );
+}
+
 interface Mounted {
   readonly root: Root;
   readonly container: HTMLElement;
@@ -81,6 +96,17 @@ async function mount(props: { refreshKey: string; enabled?: boolean }): Promise<
   const root = createRoot(container);
   await act(async () => {
     root.render(<Probe {...props} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return { root, container };
+}
+
+async function mountMany(keys: readonly string[]): Promise<Mounted> {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<MultiProbe keys={keys} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return { root, container };
@@ -116,8 +142,10 @@ afterEach(() => {
     kind: "json",
     body: { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
   };
+  resetStatusResourceForTests();
   resetRuntimeTargetEventsForTests();
   resetRuntimeTargetStoreForTests();
+  useAvailabilityStore.setState({ recoveryEpoch: 0 });
 });
 
 describe("useOpenCodeRuntimeStatus (managed-only)", () => {
@@ -150,10 +178,11 @@ describe("useOpenCodeRuntimeStatus (managed-only)", () => {
       kind: "json",
       body: { mode: "managed", backendInstanceId: BID, targetRevision: 2, targetId: 2 },
     };
-    const mounted = await mount({ refreshKey: "connected" });
+    const mounted = await mount({ refreshKey: "connecting" });
     expect(statusOf(mounted.container)).toBe("managed");
     nextResponse = { kind: "fail", message: "backend went away" };
-    await rerender(mounted, { refreshKey: "reconnecting" });
+    // The no-connected → connected transition is the coalesced shared trigger.
+    await rerender(mounted, { refreshKey: "connected" });
     expect(statusOf(mounted.container)).toBe("managed");
     expect(errorOf(mounted.container)).toBe("backend went away");
     unmount(mounted);
@@ -257,5 +286,77 @@ describe("useOpenCodeRuntimeStatus (managed-only)", () => {
     });
     expect(statusOf(mounted.container)).toBe("managed");
     unmount(mounted);
+  });
+
+  it("shares one read across multiple consumers with different connection types", async () => {
+    stubFetch();
+    stubEventSource();
+    const a = await mount({ refreshKey: "absent" });
+    const b = await mount({ refreshKey: "connecting" });
+    const c = await mount({ refreshKey: "reconnecting" });
+    expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(1);
+
+    // A non-connected → non-connected change is not the aggregate transition.
+    await rerender(b, { refreshKey: "failed" });
+    expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(1);
+
+    // First connected consumer: false → true, exactly one additional request.
+    await rerender(a, { refreshKey: "connected" });
+    expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(2);
+
+    // Another consumer connecting is true → true: no additional request.
+    await rerender(b, { refreshKey: "connected" });
+    expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(2);
+
+    unmount(a);
+    unmount(b);
+    unmount(c);
+  });
+
+  it("coalesces a batch of consumers, including a connected one, into one read", async () => {
+    stubFetch();
+    stubEventSource();
+    const mounted = await mountMany(["absent", "connected", "reconnecting"]);
+    expect(requests.filter((u) => u.includes("/api/opencode/status"))).toHaveLength(1);
+    unmount(mounted);
+  });
+
+  it("publishes read errors to the shared store, keeps status, and clears on success", async () => {
+    stubFetch();
+    stubEventSource();
+    const mounted = await mount({ refreshKey: "connected" });
+    expect(statusOf(mounted.container)).toBe("managed");
+    expect(errorOf(mounted.container)).toBe("");
+    expect(useRuntimeTargetStore.getState().error).toBeNull();
+
+    nextResponse = { kind: "fail", message: "backend went away" };
+    await act(async () => {
+      useAvailabilityStore.setState({ recoveryEpoch: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(statusOf(mounted.container)).toBe("managed");
+    expect(errorOf(mounted.container)).toBe("backend went away");
+    expect(useRuntimeTargetStore.getState().error).toBe("backend went away");
+
+    // A second consumer reads the same shared error without issuing a request.
+    const before = requests.length;
+    const second = await mount({ refreshKey: "connected" });
+    expect(requests.length).toBe(before);
+    expect(errorOf(second.container)).toBe("backend went away");
+
+    nextResponse = {
+      kind: "json",
+      body: { mode: "managed", backendInstanceId: BID, targetRevision: 1, targetId: 1 },
+    };
+    await act(async () => {
+      useAvailabilityStore.setState({ recoveryEpoch: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(errorOf(mounted.container)).toBe("");
+    expect(errorOf(second.container)).toBe("");
+    expect(useRuntimeTargetStore.getState().error).toBeNull();
+
+    unmount(mounted);
+    unmount(second);
   });
 });

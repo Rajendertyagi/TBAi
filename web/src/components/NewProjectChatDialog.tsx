@@ -32,7 +32,7 @@ export function NewProjectChatDialog({
 }) {
   const navigate = useNavigate();
   const folders = useFoldersStore((s) => s.folders);
-  const loadFolders = useFoldersStore((s) => s.loadFolders);
+  const ensureFoldersLoaded = useFoldersStore((s) => s.ensureFoldersLoaded);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [engine, setEngine] = useState<WelcomeEngine>("direct");
   const [busy, setBusy] = useState(false);
@@ -46,9 +46,9 @@ export function NewProjectChatDialog({
       setSelectedId(null);
       setEngine("direct");
       setCreateError(null);
-      void loadFolders();
+      void ensureFoldersLoaded();
     }
-  }, [open, loadFolders]);
+  }, [open, ensureFoldersLoaded]);
 
   const handleCreate = async () => {
     if (!selectedId) return;

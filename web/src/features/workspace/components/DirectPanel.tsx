@@ -8,6 +8,7 @@
 import type { IDockviewPanelProps } from "dockview-react";
 import { NEW_DRAFT_TAB_ID } from "../../chat/state/chatTabs";
 import { parsePanelParams, type PanelParams } from "../dockviewParams";
+import { useDisposeWorkspacePanelOnUnmount } from "../state/workspaceActivation";
 import { DirectChatHost } from "./DirectChatHost";
 import { DraftChatHost } from "./DraftChatHost";
 import { usePanelVisibility } from "./usePanelVisibility";
@@ -48,6 +49,10 @@ function BoundDirectPanel({
   visible: boolean;
 }) {
   const owned = usePanelMountClaim(tabKey);
+  // Genuine removal (including canonical reconciliation, which skips
+  // onPanelClose) unmounts this component; hide/move do not. Pass the immutable
+  // panel id so a materialized draft disposes its canonical `chat:<id>` state.
+  useDisposeWorkspacePanelOnUnmount(panelId);
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col overflow-hidden"

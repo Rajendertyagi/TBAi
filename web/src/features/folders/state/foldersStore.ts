@@ -18,6 +18,12 @@ interface FoldersState {
   loading: boolean;
   foldersLoaded: boolean;
   loadFolders: () => Promise<void>;
+  /**
+   * Mount-time loader for normal consumers. Reuses already-loaded folders and
+   * joins a concurrent load so per-panel mounts do not issue duplicate fetches.
+   * Mutations/explicit refreshes still call `loadFolders()` directly.
+   */
+  ensureFoldersLoaded: () => Promise<void>;
   loadGroups: () => Promise<void>;
   createFolder: (input: {
     path: string;
@@ -68,6 +74,9 @@ export const pruneSelectedFolderId = resolveSelectedFolderId;
 
 let foldersLoadEpoch = 0;
 
+/** Single-flight promise shared by all concurrent `ensureFoldersLoaded()` callers. */
+let ensureInFlight: Promise<void> | null = null;
+
 export const useFoldersStore = create<FoldersState>((set, get) => ({
   folders: [],
   folderGroups: [],
@@ -86,6 +95,18 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     } finally {
       if (epoch === foldersLoadEpoch) set({ loading: false });
     }
+  },
+
+  ensureFoldersLoaded: () => {
+    if (get().foldersLoaded) return Promise.resolve();
+    if (ensureInFlight) return ensureInFlight;
+    const promise = get()
+      .loadFolders()
+      .finally(() => {
+        ensureInFlight = null;
+      });
+    ensureInFlight = promise;
+    return promise;
   },
 
   loadGroups: async () => {

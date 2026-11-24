@@ -270,9 +270,10 @@ function startFetch(force: boolean): void {
     // Join an existing in-flight request when it already targets the current
     // required epoch and target context. Supersede when a newer authoritative
     // refresh is required (recovery epoch advanced or target changed).
+    // A target change clears `inFlight`, so a surviving request is never stale.
     const inFlightMatchesTarget =
       !knownTarget || !inFlightTarget || sameTarget(inFlightTarget, knownTarget) || !targetChanged;
-    if (!force || (inFlightEpoch === epoch && inFlightMatchesTarget && !needsRefreshForTarget)) {
+    if (!force || (inFlightEpoch === epoch && inFlightMatchesTarget)) {
       if (useCapabilitiesStore.getState().isLoading === false) {
         useCapabilitiesStore.setState({ isLoading: true, error: null });
       }

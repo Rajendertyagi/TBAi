@@ -112,6 +112,8 @@ export function sameOpenCodeRuntimeTarget(
 interface RuntimeTargetState {
   /** Latest successfully observed runtime status (shared invalidation signal). */
   status: OpenCodeRuntimeStatus | null;
+  /** Message from the last failed status read; null after a successful read. */
+  error: string | null;
   /** Recovery epoch associated with the last accepted runtime status publication. */
   acceptedRecoveryEpoch: number;
   /** Backend process instance of the last accepted runtime status publication. */
@@ -122,6 +124,7 @@ interface RuntimeTargetState {
 
 export const useRuntimeTargetStore = create<RuntimeTargetState>()(() => ({
   status: null,
+  error: null,
   acceptedRecoveryEpoch: -1,
   acceptedBackendInstanceId: null,
   supersededBackendInstanceId: null,
@@ -220,6 +223,7 @@ export function publishRuntimeTargetIdentity(
 export function resetRuntimeTargetStoreForTests(): void {
   useRuntimeTargetStore.setState({
     status: null,
+    error: null,
     acceptedRecoveryEpoch: -1,
     acceptedBackendInstanceId: null,
     supersededBackendInstanceId: null,

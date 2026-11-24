@@ -11,7 +11,10 @@ import { OPENCODE_INIT_TIMEOUT_MS } from "@/features/opencode/config";
 import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
-import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
+import {
+  useOpenCodeConversationConfig,
+  type OpenCodeConversationConfig,
+} from "./useOpenCodeConversationConfig";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { shouldReconnectForEpoch } from "./recoveryEpoch";
@@ -30,12 +33,59 @@ import { OpenCodeLifecycleNotice } from "./OpenCodeLifecycleNotice";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
 
 /**
+ * Thin activation gate for one OpenCode conversation.
+ *
+ * A Dockview panel mounts this host as soon as it is created, but its expensive
+ * runtime (session bootstrap, capabilities/config reads, event stream) must not
+ * start until the panel is first activated. Until then the gate renders a
+ * lightweight, DOM-identifiable placeholder that runs no OpenCode hooks. Once
+ * activated it mounts `ActivatedOpenCodeChatHost`, which stays mounted for the
+ * life of the panel — hiding or moving the panel never tears it down, and a
+ * genuine disposal unmounts the whole panel (Phase D clears activation state
+ * there). The gate is one-way: a true value latches, so a later false value
+ * cannot unmount an already-started runtime.
+ *
+ * `activated` defaults to `true` so direct mounts (tests, non-Dockview hosts)
+ * keep the full runtime. Only the Dockview panel passes the workspace
+ * activation signal.
+ */
+export function OpenCodeChatHost({
+  conversationId,
+  activated = true,
+}: {
+  conversationId: string;
+  activated?: boolean;
+}) {
+  const [hasActivated, setHasActivated] = useState(activated);
+
+  useEffect(() => {
+    if (activated) setHasActivated(true);
+  }, [activated]);
+
+  if (!hasActivated) {
+    return (
+      <div
+        className="flex h-full min-h-0 flex-col"
+        data-testid="opencode-dormant-panel"
+        data-conversation-id={conversationId}
+      />
+    );
+  }
+
+  return <ActivatedOpenCodeChatHost conversationId={conversationId} />;
+}
+
+/**
  * Route-independent OpenCode chat host. Owns the full production lifecycle for
  * one conversation: session bootstrap, runtime wiring, recovery, auto-policy
  * hydration, and the agent-mode ChatWindow composition. The conversation id is
  * canonical identity from chatTabs; route validation stays in the route adapter.
+ *
+ * Mounted only after the gate above records first activation. Once mounted it
+ * stays mounted for the life of the panel — hiding or moving the panel never
+ * tears it down, so no session is re-bootstrapped on revisit.
  */
-export function OpenCodeChatHost({ conversationId }: { conversationId: string }) {
+function ActivatedOpenCodeChatHost({ conversationId }: { conversationId: string }) {
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   // The session's directory scope, delivered by the same backend call that
   // mints `sessionId`. It is what makes the runtime's event subscription reach
@@ -181,6 +231,7 @@ export function OpenCodeChatHost({ conversationId }: { conversationId: string })
       defaultModel={defaultModelWithVariant}
       defaultAgent={defaultAgent}
       conversationId={conversationId}
+      conversationConfig={config}
       reusedExistingSession={reusedExistingSession}
     />
   );
@@ -192,6 +243,7 @@ function AgentRuntime({
   defaultModel,
   defaultAgent,
   conversationId,
+  conversationConfig,
   reusedExistingSession,
 }: {
   sessionId: string;
@@ -200,14 +252,15 @@ function AgentRuntime({
   defaultAgent?: string;
   /** The TBAi conversation this session belongs to — the Auto shield's owner. */
   conversationId: string;
+  /**
+   * The conversation's complete config, fetched once by the activated host and
+   * passed down. `opencodeAutoApprove` on it is the Auto shield's single source
+   * of truth — no second read, no store, no global.
+   */
+  conversationConfig: OpenCodeConversationConfig | null;
   /** Verified session reuse, from the same bootstrap result that produced `sessionId`. */
   reusedExistingSession: boolean;
 }) {
-  // The conversation's persisted OpenCode config, read through the existing
-  // path. `opencodeAutoApprove` on it is the Auto shield's single source of
-  // truth — no store, no context, no global.
-  const conversationConfig = useOpenCodeConversationConfig(conversationId);
-
   const { runtime, reconnect, reconcileAutoApprove, controller } = useOpenCodeRuntime(
     sessionId,
     conversationId,
@@ -277,6 +330,7 @@ function AgentRuntime({
   const runtimeContext = useMemo(
     () => ({
       conversationId,
+      config: conversationConfig,
       sessionId,
       reconcileAutoApprove,
       directory: eventDirectory,
@@ -291,7 +345,15 @@ function AgentRuntime({
           }
         : {}),
     }),
-    [conversationId, sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
+    [
+      conversationId,
+      conversationConfig,
+      sessionId,
+      reconcileAutoApprove,
+      eventDirectory,
+      defaultModel,
+      controller,
+    ],
   );
 
   return (
