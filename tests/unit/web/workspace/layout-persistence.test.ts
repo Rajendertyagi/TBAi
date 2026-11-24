@@ -108,6 +108,39 @@ describe("reconcileLayout", () => {
     expect(result?.activeGroup).toBeUndefined();
   });
 
+  it("retains a branch with a stale leaf and clears a stale active group", () => {
+    const layout = makeLayout();
+    Object.assign(layout.grid, {
+      root: {
+        type: "branch",
+        data: [
+          {
+            type: "leaf",
+            data: { id: "group-a", views: ["chat:a"], activeView: "chat:a" },
+            size: 50,
+          },
+          {
+            type: "leaf",
+            data: { id: "group-b", views: ["chat:b"], activeView: "chat:b" },
+            size: 50,
+          },
+        ],
+        size: 100,
+      },
+    });
+    layout.activeGroup = "group-gone";
+    const result = reconcileLayout(layout, ["chat:a"]);
+    expect(result).not.toBeNull();
+    expect(result!.grid.root.type).toBe("branch");
+    // pruneNode retains a leaf even when all its views are stale (it only drops
+    // empty branches), so both children survive; the stale one has empty views.
+    const children = result!.grid.root.data as unknown[];
+    expect(children.length).toBe(2);
+    expect(children[0]).toMatchObject({ data: { views: ["chat:a"] } });
+    expect(children[1]).toMatchObject({ data: { views: [] } });
+    expect(result!.activeGroup).toBeUndefined();
+  });
+
   it("intentionally drops floating/popout/edge groups in V1", () => {
     // These carry absolute screen coordinates and refs that cannot be safely
     // reconciled against canonical chatTabs. The grid (splits + group structure
@@ -151,4 +184,106 @@ describe("saveLayout / loadLayout", () => {
     clearLayout(undefined, storage);
     expect(storage.data.size).toBe(0);
   });
+
+  it("drops Dockview's undefined panel fields and still round-trips", () => {
+    const layout = makeLayout();
+    const undefinedFields = [
+      "tabComponent",
+      "minimumHeight",
+      "maximumHeight",
+      "minimumWidth",
+      "maximumWidth",
+      "pinned",
+    ] as const;
+    for (const panel of Object.values(layout.panels)) {
+      Object.assign(panel, {
+        tabComponent: undefined,
+        minimumHeight: undefined,
+        maximumHeight: undefined,
+        minimumWidth: undefined,
+        maximumWidth: undefined,
+        pinned: undefined,
+      });
+    }
+    const storage = fakeStorage();
+    saveLayout(layout, undefined, storage);
+    expect(storage.data.size).toBe(1);
+    const raw = storage.data.get("tbai:dockview-layout")!;
+    for (const key of undefinedFields) expect(raw.includes(key)).toBe(false);
+    const loaded = loadLayout(undefined, ["chat:a", "chat:b"], storage);
+    expect(Object.keys(loaded!.panels).sort()).toEqual(["chat:a", "chat:b"]);
+  });
+
+  const lossyParamFactories: ReadonlyArray<readonly [string, () => unknown]> = [
+    ["function", () => () => {}],
+    ["Date", () => new Date()],
+    ["NaN", () => Number.NaN],
+    [
+      "circular",
+      () => {
+        const cycle: Record<string, unknown> = {};
+        cycle.self = cycle;
+        return cycle;
+      },
+    ],
+  ];
+  for (const [label, makeValue] of lossyParamFactories) {
+    it(`refuses a ${label} inside panel params`, () => {
+      const layout = makeLayout();
+      Object.assign(layout.panels["chat:a"]!.params, { bad: makeValue() });
+      const storage = fakeStorage();
+      saveLayout(layout, undefined, storage);
+      expect(storage.data.size).toBe(0);
+    });
+  }
+
+  const lossyInjections: ReadonlyArray<readonly [string, (layout: SerializedDockview) => void]> = [
+    ["NaN in grid.root.size", (l) => Object.assign(l.grid.root, { size: Number.NaN })],
+    ["Infinity in grid.width", (l) => Object.assign(l.grid, { width: Number.POSITIVE_INFINITY })],
+    ["function property on root", (l) => Object.assign(l.grid.root, { fn: () => {} })],
+    ["symbol-valued property on root", (l) => Object.assign(l.grid.root, { sym: Symbol("x") })],
+    ["Date in activeGroup", (l) => Object.assign(l, { activeGroup: new Date() })],
+    [
+      "Map in views",
+      (l) =>
+        Object.assign(l.grid.root, {
+          data: { id: "group-1", views: [new Map()], activeView: "chat:a" },
+        }),
+    ],
+    [
+      "Set in views",
+      (l) =>
+        Object.assign(l.grid.root, {
+          data: { id: "group-1", views: [new Set()], activeView: "chat:a" },
+        }),
+    ],
+    ["custom toJSON() on root", (l) => Object.assign(l.grid.root, { toJSON: () => ({}) })],
+    [
+      "circular ref on layout",
+      (l) => {
+        Object.assign(l, { self: l });
+      },
+    ],
+    [
+      "symbol-keyed property on panel",
+      (l) => Object.assign(l.panels["chat:a"]!, { [Symbol("s")]: "x" }),
+    ],
+    [
+      "undefined array element in views",
+      (l) =>
+        Object.assign(l.grid.root, {
+          data: { id: "group-1", views: ["chat:a", undefined], activeView: "chat:a" },
+        }),
+    ],
+    ["bigint on root", (l) => Object.assign(l.grid.root, { big: 1n })],
+  ];
+  for (const [label, inject] of lossyInjections) {
+    it(`refuses ${label}`, () => {
+      const layout = makeLayout();
+      inject(layout);
+      const storage = fakeStorage();
+      saveLayout(layout, undefined, storage);
+      expect(storage.data.size).toBe(0);
+    });
+  }
 });

@@ -14,6 +14,7 @@ import { startControlledProvider, type ControlledProvider } from "../helpers/con
  *  - two real Direct chats open as independent panels with distinct identities
  *  - a panel move does not close the conversation or dispose its host
  *  - composer text survives a real Dockview panel move
+ *  - a real Dockview split creates a separate spatial group (new group identity)
  *  - an active response continues while its panel is hidden
  *  - chat -> settings -> chat keeps the workspace mounted and the host alive
  *  - deep link /chat/:id opens and focuses the correct panel
@@ -103,6 +104,43 @@ async function openFromSidebar(page: Page, title: string): Promise<void> {
 /** The Dockview tab for a conversation, matched by its exact title attribute. */
 function dockviewTab(page: Page, title: string) {
   return page.locator(`[role="tab"][title="${title}"]`);
+}
+
+/**
+ * The real Dockview tab for a conversation. Dockview tabs carry the canonical
+ * panel id (`chat:<ref>`) in `data-tab-panel-id` and an `aria-label`, NOT a
+ * `title` attribute — `dockviewTab()` above matches the dnd-kit Chat Threads
+ * strip instead. Use this helper when the assertion is about Dockview itself.
+ */
+function realDockviewTab(page: Page, conversationId: string) {
+  return page.locator(
+    `[data-testid="dockview-workspace"] .dv-tab[data-tab-panel-id="chat:${conversationId}"]`,
+  );
+}
+
+/** Tag each Dockview group element so group identity can be tracked across a DnD split. */
+async function tagGroups(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.querySelectorAll(".dv-groupview").forEach((group, index) => {
+      group.setAttribute("data-e2e-group-tag", `g${index}`);
+    });
+  });
+}
+
+/** The tag of the Dockview group containing a conversation's tab, or null for a new group. */
+async function groupTagFor(page: Page, conversationId: string): Promise<string | null> {
+  return page.evaluate((id) => {
+    const tab = document.querySelector(`.dv-tab[data-tab-panel-id="chat:${id}"]`);
+    return tab?.closest(".dv-groupview")?.getAttribute("data-e2e-group-tag") ?? null;
+  }, conversationId);
+}
+
+/** Shared workspace membership from the API — the authoritative "not closed" signal. */
+async function getSharedTabIds(request: APIRequestContext): Promise<string[]> {
+  const res = await request.get("/api/preferences");
+  expect(res.ok()).toBe(true);
+  const body = (await res.json()) as { sharedTabs?: Array<{ ref: string }> };
+  return (body.sharedTabs ?? []).map((tab) => tab.ref);
 }
 
 test.describe("Dockview workspace (hermetic)", () => {
@@ -196,6 +234,154 @@ test.describe("Dockview workspace (hermetic)", () => {
     );
   });
 
+  test("a real Dockview split creates a separate group and preserves the panel runtime", async ({
+    page,
+    request,
+  }) => {
+    const a = await seedConversation(request, { title: `${MARKER}-split-a` });
+    const b = await seedConversation(request, { title: `${MARKER}-split-b` });
+    created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
+    await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
+
+    // Type a draft into A's composer so we can prove its runtime survives the split.
+    await realDockviewTab(page, a.id).click();
+    const aPanel = page.locator(
+      `[data-testid="dockview-direct-panel"][data-conversation-id="${a.id}"]`,
+    );
+    const draft = "draft that must survive a real Dockview split";
+    await aPanel.getByRole("textbox", COMPOSER).fill(draft);
+    await expect(aPanel.getByRole("textbox", COMPOSER)).toHaveValue(draft);
+
+    // Capture A's host identity and group membership before the split.
+    const hostIdBefore = await aPanel
+      .getByTestId("direct-chat-host")
+      .getAttribute("data-thread-id");
+    expect(hostIdBefore).toBe(a.id);
+    await tagGroups(page);
+    const aGroupBefore = await groupTagFor(page, a.id);
+    const bGroupBefore = await groupTagFor(page, b.id);
+    expect(aGroupBefore).not.toBeNull();
+    expect(aGroupBefore).toBe(bGroupBefore); // both tabs in the one shared group
+    await expect(page.locator(".dv-groupview")).toHaveCount(1);
+
+    // Drive a REAL Dockview split. The tab element's own drop target only accepts
+    // left/right (tab-group merge), so the drag must land on the group's
+    // `.dv-content-container` near an edge: the default 20% activation band
+    // resolves to a `left` split, creating a new group. Playwright's dragTo
+    // cannot be used here because the active panel's `.dv-render-overlay`
+    // covers the content container and intercepts pointer events; raw mouse
+    // moves dispatch the drag at coordinates and let it bubble to the drop target.
+    const aTab = realDockviewTab(page, a.id);
+    const bContent = page.locator(".dv-content-container").last();
+    const tabBox = await aTab.boundingBox();
+    const contentBox = await bContent.boundingBox();
+    if (!tabBox || !contentBox) throw new Error("Dockview tab/content box not found");
+    const sx = tabBox.x + tabBox.width / 2;
+    const sy = tabBox.y + tabBox.height / 2;
+    const tx = contentBox.x + 6;
+    const ty = contentBox.y + contentBox.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 10, sy + 10, { steps: 5 });
+    await page.mouse.move(tx, ty, { steps: 20 });
+    await page.mouse.up();
+
+    // A separate spatial group now exists, and A moved into a NEW group while B
+    // stayed in the original one — a changed group identity, not a tab merge.
+    await expect(page.locator(".dv-groupview")).toHaveCount(2, { timeout: 15000 });
+    const aGroupAfter = await groupTagFor(page, a.id);
+    const bGroupAfter = await groupTagFor(page, b.id);
+    expect(aGroupAfter).not.toBe(bGroupAfter);
+    expect(aGroupAfter).not.toBe(aGroupBefore); // A's group identity changed
+    expect(bGroupAfter).toBe(bGroupBefore); // B stayed in the original group
+
+    // Both panels survive with unchanged identities; A's runtime and draft are intact.
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
+    await expect(aPanel.getByTestId("direct-chat-host")).toHaveAttribute(
+      "data-thread-id",
+      hostIdBefore as string,
+    );
+    await expect(aPanel.getByRole("textbox", COMPOSER)).toHaveValue(draft);
+
+    // No close semantics were triggered: both conversations remain in shared membership.
+    const shared = await getSharedTabIds(request);
+    expect(shared).toContain(a.id);
+    expect(shared).toContain(b.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
+  });
+
+  /**
+   * The 2-arg form is required: Playwright 1.64.1 mis-parses the 3-arg
+   * title/details/body form and skips every test in the file.
+   */
+  test("the two-group layout restores after a page reload", async ({ page, request }) => {
+    const a = await seedConversation(request, { title: `${MARKER}-reload-a` });
+    const b = await seedConversation(request, { title: `${MARKER}-reload-b` });
+    created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
+    await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
+
+    const aTab = realDockviewTab(page, a.id);
+    const bContent = page.locator(".dv-content-container").last();
+    const tabBox = await aTab.boundingBox();
+    const contentBox = await bContent.boundingBox();
+    if (!tabBox || !contentBox) throw new Error("Dockview tab/content box not found");
+    const sx = tabBox.x + tabBox.width / 2;
+    const sy = tabBox.y + tabBox.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 10, sy + 10, { steps: 5 });
+    await page.mouse.move(contentBox.x + 6, contentBox.y + contentBox.height / 2, {
+      steps: 20,
+    });
+    await page.mouse.up();
+    await expect(page.locator(".dv-groupview")).toHaveCount(2, { timeout: 15000 });
+
+    // The layout write is debounced (250ms). Poll until the two-group layout is
+    // actually in localStorage before reloading, or the reload reads stale data.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            ({ aId, bId }) => {
+              const raw = localStorage.getItem("tbai:dockview-layout");
+              if (!raw) return false;
+              try {
+                const rec = JSON.parse(raw);
+                const root = rec?.layout?.grid?.root;
+                return (
+                  root?.type === "branch" &&
+                  Array.isArray(root?.data) &&
+                  root.data.length === 2 &&
+                  raw.includes(aId) &&
+                  raw.includes(bId)
+                );
+              } catch {
+                return false;
+              }
+            },
+            { aId: a.id, bId: b.id },
+          ),
+        { timeout: 5000, intervals: [100, 250, 500] },
+      )
+      .toBe(true);
+
+    await page.reload();
+    await expect(page.getByTestId("dockview-workspace")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
+    await expect(page.locator(".dv-groupview")).toHaveCount(2, { timeout: 15000 });
+    const ids = await page
+      .getByTestId("dockview-direct-panel")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-conversation-id")));
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+  });
+
   test("an active response continues while its panel is hidden", async ({ page, request }) => {
     const a = await seedConversation(request, { title: `${MARKER}-hidden` });
     const b = await seedConversation(request, { title: `${MARKER}-hidden-other` });
@@ -267,18 +453,73 @@ test.describe("Dockview workspace (hermetic)", () => {
     page,
     request,
   }) => {
-    const a = await seedConversation(request, { title: `${MARKER}-layout` });
-    created.push(a.id);
+    const a = await seedConversation(request, { title: `${MARKER}-layout-a` });
+    const b = await seedConversation(request, { title: `${MARKER}-layout-b` });
+    created.push(a.id, b.id);
+    await addToSharedTabs(request, [a.id, b.id]);
     await openPanel(page, a.id);
+    await waitForSharedTabs(page, [a.title, b.title]);
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
 
-    // Reload: the saved layout restores the panel.
+    // Drive a real split so the persisted layout has a branch root with two groups.
+    const aTab = realDockviewTab(page, a.id);
+    const bContent = page.locator(".dv-content-container").last();
+    const tabBox = await aTab.boundingBox();
+    const contentBox = await bContent.boundingBox();
+    if (!tabBox || !contentBox) throw new Error("Dockview tab/content box not found");
+    const sx = tabBox.x + tabBox.width / 2;
+    const sy = tabBox.y + tabBox.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 10, sy + 10, { steps: 5 });
+    await page.mouse.move(contentBox.x + 6, contentBox.y + contentBox.height / 2, { steps: 20 });
+    await page.mouse.up();
+    await expect(page.locator(".dv-groupview")).toHaveCount(2, { timeout: 15000 });
+
+    // The layout write is debounced (250ms). Poll until the two-group layout is
+    // actually in localStorage before reloading, or the reload reads stale data.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            ({ aId, bId }) => {
+              const raw = localStorage.getItem("tbai:dockview-layout");
+              if (!raw) return false;
+              try {
+                const rec = JSON.parse(raw);
+                const root = rec?.layout?.grid?.root;
+                return (
+                  root?.type === "branch" &&
+                  Array.isArray(root?.data) &&
+                  root.data.length === 2 &&
+                  raw.includes(aId) &&
+                  raw.includes(bId)
+                );
+              } catch {
+                return false;
+              }
+            },
+            { aId: a.id, bId: b.id },
+          ),
+        { timeout: 5000, intervals: [100, 250, 500] },
+      )
+      .toBe(true);
+
+    // Reload: the saved two-group layout restores both panels and both groups.
     await page.reload();
-    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByTestId("dockview-workspace")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
+    await expect(page.locator(".dv-groupview")).toHaveCount(2, { timeout: 15000 });
+    const ids = await page
+      .getByTestId("dockview-direct-panel")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-conversation-id")));
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
 
     // Corrupt the saved layout; the app must fall back without crashing.
     await page.evaluate(() => localStorage.setItem("tbai:dockview-layout", "{not json"));
     await page.reload();
     await expect(page.getByTestId("dockview-workspace")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2, { timeout: 15000 });
   });
 });

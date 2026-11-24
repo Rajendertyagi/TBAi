@@ -51,4 +51,15 @@ describe("DockviewWorkspace adapter contract", () => {
   it("never subscribes to a non-existent DockviewApi visibility event", () => {
     expect(source).not.toContain("api.onDidVisibilityChange");
   });
+
+  it("starts restoration before exposing the handle or notifying the focus controller", () => {
+    // Ordering invariant, not line layout: a focus call made from onHandleReady
+    // must observe the restored layout. Swapping these two statements regresses
+    // the deep-link-before-hydration case.
+    const startAt = source.indexOf("controller.start()");
+    const readyAt = source.indexOf("onHandleReady?.()");
+    expect(startAt).toBeGreaterThan(-1);
+    expect(readyAt).toBeGreaterThan(-1);
+    expect(startAt).toBeLessThan(readyAt);
+  });
 });

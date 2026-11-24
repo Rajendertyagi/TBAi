@@ -60,6 +60,9 @@ const COMPONENTS: Record<string, FunctionComponent<IDockviewPanelProps<PanelPara
   [OPENCODE_COMPONENT]: OpenCodePanel,
 };
 
+/** Shown when authoritative preferences never hydrate and no explicit allowlist was supplied. */
+const WORKSPACE_HYDRATION_ERROR = "Workspace unavailable — reconnecting…";
+
 /** Imperative focus handle populated on `handleRef` once the API is ready. */
 export interface DockviewWorkspaceHandle {
   /** Focus the panel for a canonical tab key, opening it when absent. */
@@ -134,7 +137,14 @@ export function DockviewWorkspace({
   onHandleReady,
 }: DockviewWorkspaceProps) {
   const controllerRef = useRef<DockviewController | null>(null);
+  const startedRef = useRef(false);
   const canonicalKeys = useCanonicalOpenTabKeys();
+
+  // Explicit subscriptions: `useCanonicalOpenTabKeys()` reads `snapshot.sharedTabs`
+  // but NOT `hydration`. Without these, the startup effect below would not
+  // re-render when authoritative preferences finish hydrating.
+  const hydration = usePreferencesStore((s) => s.hydration);
+  const snapshot = usePreferencesStore((s) => s.snapshot);
 
   // Draft materialization keeps the SAME panel (and therefore the same live
   // runtime) across first send. The alias state machine maps the materialized
@@ -164,6 +174,38 @@ export function DockviewWorkspace({
   storageKeyRef.current = storageKey;
   const activeTabKeyRef = useRef(activeTabKey);
   activeTabKeyRef.current = activeTabKey;
+
+  /**
+   * Start the controller exactly once, and only once the authoritative open-tab
+   * allowlist is known. With an explicit `openTabKeys` prop (tests/harnesses) the
+   * allowlist is already authoritative, so no hydration gate applies. Otherwise
+   * `hydration` must be "ready" with a snapshot: starting earlier would restore
+   * a saved layout against an empty/stale allowlist and drop live panels.
+   *
+   * Reads the store at call time (not via a dep) so the callback stays stable
+   * while still observing the latest hydration state.
+   */
+  const maybeStart = useCallback(() => {
+    if (startedRef.current) return;
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const prefs = usePreferencesStore.getState();
+    if (openTabKeysProp === undefined && (prefs.hydration !== "ready" || !prefs.snapshot)) return;
+    startedRef.current = true;
+    // Refresh keys BEFORE start so restoration uses the authoritative allowlist.
+    controller.setOpenTabKeys(openTabKeysRef.current);
+    controller.start();
+    // Expose the handle only AFTER start: a focus call arriving at onHandleReady
+    // must see the restored layout, not an empty one.
+    if (handleRef) {
+      handleRef.current = { focusOrOpen: (tabKey) => controller.focusOrOpen(panelIdFor(tabKey)) };
+    }
+    onHandleReady?.();
+    // A deep link may have set localActiveKey before the Dockview API existed.
+    // Converge the restored layout onto that selection after restoration.
+    const initial = activeTabKeyRef.current;
+    if (initial) controller.focusOrOpen(panelIdFor(initial));
+  }, [openTabKeysProp, handleRef, panelIdFor, onHandleReady]);
 
   const onReady = useCallback(
     (event: DockviewReadyEvent) => {
@@ -221,20 +263,12 @@ export function DockviewWorkspace({
         debounceMs: DOCKVIEW_LAYOUT_PERSIST_DEBOUNCE_MS,
       });
       controllerRef.current = controller;
-      if (handleRef) {
-        handleRef.current = { focusOrOpen: (tabKey) => controller.focusOrOpen(panelIdFor(tabKey)) };
-      }
-      // Notify the focus controller that the handle is now usable so a deep
-      // link set before onReady can be re-driven (the one-shot effect may have
-      // run while handleRef.current was still null).
-      onHandleReady?.();
-      controller.start();
-      // A deep link may have set localActiveKey before the Dockview API existed.
-      // Converge the initially restored/created layout onto that selection.
-      const initial = activeTabKeyRef.current;
-      if (initial) controller.focusOrOpen(panelIdFor(initial));
+      // Defer start/handle exposure to the hydration-aware gate. `onReady` only
+      // constructs the controller; `maybeStart` owns the load-bearing order:
+      // setOpenTabKeys → start → handle → onHandleReady → deep-link focus.
+      maybeStart();
     },
-    [canonicalKeyFor, panelIdFor, handleRef, alias, onHandleReady],
+    [canonicalKeyFor, alias, maybeStart],
   );
 
   // Activate the window-level selected panel on initial restore, deep-link
@@ -250,7 +284,16 @@ export function DockviewWorkspace({
     activateWorkspacePanel(activeTabKey);
   }, [activeTabKey, panelIdFor]);
 
+  // Reactive startup gate. `hydration`/`snapshot` are explicit subscriptions so
+  // this effect re-runs when authoritative preferences arrive. `maybeStart` is
+  // stable and no-ops once started, so repeated renders cannot double-start.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `hydration` and `snapshot` are not read in the body on purpose - they are the re-triggers. `maybeStart` reads the store at call time, so without them the effect would never re-run when authoritative preferences finish hydrating.
   useEffect(() => {
+    maybeStart();
+  }, [hydration, snapshot, maybeStart]);
+
+  useEffect(() => {
+    if (!startedRef.current) return;
     controllerRef.current?.setOpenTabKeys(openTabKeys);
     // Reconciliation adds panels in a microtask; Dockview makes the last added
     // panel active. Re-assert the canonical active key AFTER that settles so a
@@ -279,6 +322,7 @@ export function DockviewWorkspace({
     return () => {
       controllerRef.current?.dispose();
       controllerRef.current = null;
+      startedRef.current = false;
       if (handleRef) handleRef.current = null;
     };
   }, [handleRef]);
@@ -289,7 +333,13 @@ export function DockviewWorkspace({
       data-testid="dockview-workspace"
     >
       <div className="min-h-0 min-w-0 flex-1">
-        <DockviewReact theme={tbaiTheme} components={COMPONENTS} onReady={onReady} />
+        {hydration === "error" && !snapshot && openTabKeysProp === undefined ? (
+          <div data-testid="workspace-hydration-error" role="status">
+            {WORKSPACE_HYDRATION_ERROR}
+          </div>
+        ) : (
+          <DockviewReact theme={tbaiTheme} components={COMPONENTS} onReady={onReady} />
+        )}
       </div>
     </div>
   );

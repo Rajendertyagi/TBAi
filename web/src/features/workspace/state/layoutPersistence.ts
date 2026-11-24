@@ -11,7 +11,7 @@
  * localStorage helpers, no new persistence framework, no Zustand store.
  */
 import type { SerializedDockview } from "dockview-react";
-import { isJsonSerializable, parsePanelParams } from "../dockviewParams";
+import { parsePanelParams } from "../dockviewParams";
 import { desiredPanelKeys } from "../panelRegistry";
 
 export const DOCKVIEW_LAYOUT_STORAGE_KEY = "tbai:dockview-layout";
@@ -55,6 +55,80 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;
   const proto = Object.getPrototypeOf(value) as unknown;
   return proto === Object.prototype || proto === null;
+}
+
+/** True for a canonical array index key (not "length", not a named property). */
+function isArrayIndex(key: string): boolean {
+  const n = Number(key);
+  return Number.isInteger(n) && n >= 0 && String(n) === key && n < 2 ** 32 - 1;
+}
+
+/**
+ * True when JSON.stringify would silently change or drop part of `value`.
+ * Undefined object properties are the one allowed exception: Dockview's
+ * toJSON() emits them and `normalizeLayout` strips them before the write.
+ * Everything else that cannot survive a JSON round-trip is rejected so a
+ * corrupt layout is never persisted.
+ */
+function hasLossyValue(value: unknown, ancestors: Set<object> = new Set()): boolean {
+  if (value === undefined) return true;
+  if (value === null) return false;
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return false;
+    case "number":
+      return !Number.isFinite(value) || Object.is(value, -0);
+    case "bigint":
+    case "function":
+    case "symbol":
+      return true;
+    case "object":
+      break;
+    default:
+      return true;
+  }
+  const obj = value as object;
+  if (ancestors.has(obj)) return true;
+  ancestors.add(obj);
+  try {
+    if (!Array.isArray(obj) && !isPlainObject(obj)) return true;
+    if (typeof (obj as { toJSON?: unknown }).toJSON === "function") return true;
+    if (Array.isArray(obj)) {
+      const arr: readonly unknown[] = obj;
+      for (let i = 0; i < arr.length; i++) {
+        if (hasLossyValue(arr[i], ancestors)) return true;
+      }
+      for (const key of Reflect.ownKeys(obj)) {
+        if (key === "length") continue;
+        if (typeof key === "symbol" || !isArrayIndex(key)) return true;
+      }
+      return false;
+    }
+    for (const key of Reflect.ownKeys(obj)) {
+      if (typeof key === "symbol") return true;
+      const child = obj[key];
+      if (child === undefined) continue;
+      if (hasLossyValue(child, ancestors)) return true;
+    }
+    return false;
+  } finally {
+    ancestors.delete(obj);
+  }
+}
+
+/** Deep-copy a value, dropping only undefined object properties. */
+function normalizeLayout(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeLayout);
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (child === undefined) continue;
+      out[key] = normalizeLayout(child);
+    }
+    return out;
+  }
+  return value;
 }
 
 function isSerializedDockview(value: unknown): value is SerializedDockview {
@@ -155,11 +229,14 @@ export function saveLayout(
   const target = storage ?? defaultStorage();
   if (!target) return;
   try {
-    if (!isJsonSerializable(layout)) return;
+    if (!isSerializedDockview(layout)) return;
+    if (hasLossyValue(layout)) return;
+    const normalized: unknown = normalizeLayout(layout);
+    if (!isSerializedDockview(normalized)) return;
     const record: PersistedLayout = {
       version: DOCKVIEW_LAYOUT_VERSION,
       savedAt: Date.now(),
-      layout,
+      layout: normalized,
     };
     target.setItem(keyFor(storageKey), JSON.stringify(record));
   } catch {
