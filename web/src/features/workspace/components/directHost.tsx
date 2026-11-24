@@ -1,20 +1,23 @@
 /**
  * The ONE Direct-host assistant-ui contract.
  *
- * Every Direct host (the bound panel host, the POC host, and the future
- * draft-aware host) must use this config and these data UIs. Before this module
- * existed `DirectChatHost` used `AuiConfig({})` and mounted no data UIs, while
- * the root AppShell provider registered tools, suggestions, progress stages and
- * the compaction divider — so a Direct panel silently lost all of them.
+ * Two distinct responsibilities, deliberately split by provider:
  *
- * DECISION — data UIs mount PER HOST, inside that host's runtime provider:
+ * - `DirectHostProvider` is an ISOLATION-ONLY boundary. `extends={null}` with an
+ *   EMPTY config makes `useRemoteThreadListRuntime` see a root client (it throws
+ *   when nested). It owns no toolkit, suggestions, or data UIs.
+ * - `createDirectAuiConfig()` is the shared tools + suggestions config. Each host
+ *   passes it to its OWN `AssistantRuntimeProvider` via the official `config`
+ *   prop, because that provider installs the `AuiProvider` whose client scope
+ *   `part.toolUI` reads. Putting the config on the outer boundary leaves that
+ *   scope empty and every tool part falls through to `ToolFallback`.
+ *
+ * `DirectDataUIs` mounts PER HOST, inside that host's runtime provider:
  * `makeAssistantDataUI` registers a renderer into the nearest assistant-ui
- * context while mounted. A Direct host is isolated (`AuiProvider extends={null}`)
- * and cannot see a renderer mounted in a different provider, so a single global
- * mount cannot reach it. Mounting here is the only location that gives every
- * isolated host the same tool UI, suggestions, progress and compaction divider.
+ * context while mounted, and an isolated host cannot see a renderer mounted in
+ * a different provider.
  */
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   AuiConfig,
   AuiProvider,
@@ -64,15 +67,18 @@ export function DirectDataUIs() {
   );
 }
 
+/** Empty config for the isolation-only boundary; it owns no scopes. */
+const emptyConfig = AuiConfig({});
+
 /**
  * The isolation boundary for a Direct host. `extends={null}` is the official
  * assistant-ui contract required because `useRemoteThreadListRuntime` throws
- * when nested; the shared config keeps tool/suggestion parity with AppShell.
+ * when nested; the config is deliberately EMPTY — tools, suggestions and data
+ * UIs belong to each host's `AssistantRuntimeProvider`, not here.
  */
 export function DirectHostProvider({ children }: { children: ReactNode }) {
-  const config = useMemo(() => createDirectAuiConfig(), []);
   return (
-    <AuiProvider extends={null} config={config}>
+    <AuiProvider extends={null} config={emptyConfig}>
       {children}
     </AuiProvider>
   );

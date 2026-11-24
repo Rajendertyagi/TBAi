@@ -12,7 +12,7 @@
  * guarantee — otherwise two runtimes would both call `initialize()` and bind the
  * same id twice.
  */
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { threadListAdapter } from "../../../app/adapter";
 import { useAppChatRuntime } from "../../../runtime";
@@ -22,7 +22,7 @@ import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../chat/state/
 import { getWelcomeEngineSnapshot } from "../../chat/state/welcomeEngine";
 import { peekMaterializedEngine } from "../../chat/state/materializeDraft";
 import { logger } from "../../../lib/logger";
-import { DirectDataUIs, DirectHostProvider } from "./directHost";
+import { createDirectAuiConfig, DirectDataUIs, DirectHostProvider } from "./directHost";
 
 /** Mount exactly one of these for the `chat:new` draft panel. */
 export function DraftChatHost() {
@@ -53,8 +53,10 @@ function DraftChatInner() {
   // `adapter.initialize()`, the single materialization owner, which reports the
   // new id through the callback above. No draft is materialized here directly.
   const runtime = useAppChatRuntime(threadListAdapter, undefined, onThreadIdChange);
+  // Same contract as DirectChatHost: the shared config belongs to THIS provider.
+  const config = useMemo(() => createDirectAuiConfig(), []);
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider runtime={runtime} config={config}>
       <DirectDataUIs />
       <div
         className="flex h-full min-h-0 flex-col"

@@ -345,6 +345,8 @@ mock.module("@web/features/chat/components/ChatHeader", () => ({
 mock.module("@web/features/workspace/components/directHost", () => ({
   DirectHostProvider: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DirectDataUIs: () => <div data-testid="direct-data-uis" />,
+  // The hosts now import this and pass it to their (mocked) runtime provider.
+  createDirectAuiConfig: () => ({}),
 }));
 
 // --- Real modules under test (imported only after every mock is registered) -

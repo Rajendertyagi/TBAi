@@ -41,6 +41,13 @@ const STUB_PORT = process.env.TBAI_E2E_STUB_PORT ?? "3199";
 const STUB = `http://127.0.0.1:${STUB_PORT}`;
 
 /**
+ * Dockview keeps every chat host mounted (`renderer:"always"`), so an approval
+ * card from another panel can match a page-wide locator. Scope to the visible
+ * Direct panel — the one the current route drives.
+ */
+const ACTIVE_PANEL = '[data-testid="dockview-direct-panel"][data-visible="true"]';
+
+/**
  * The tool to invoke.
  *
  * `scheduler` with `action: "list"` is chosen deliberately: it needs no
@@ -337,7 +344,7 @@ test.describe("F5 — a settled tool result is persisted, not just rendered", ()
       // Established by reading the rendered page, not from the component source:
       // an earlier version of this test looked for "Allow once" and simply never
       // found its selector, which reads the same as "no approval gate exists".
-      const approve = page.locator("button:has-text('Approve')").first();
+      const approve = page.locator(`${ACTIVE_PANEL} button:has-text('Approve')`).first();
       await expect(approve).toBeVisible({ timeout: 60_000 });
 
       await expect
@@ -365,7 +372,7 @@ test.describe("F5 — a settled tool result is persisted, not just rendered", ()
       // Whether the gate survives a reload is itself the finding. If it does not,
       // the state is unreachable in production and that is a legitimate result to
       // record - but it must be OBSERVED, not assumed.
-      const approveAfterReload = page.locator("button:has-text('Approve')").first();
+      const approveAfterReload = page.locator(`${ACTIVE_PANEL} button:has-text('Approve')`).first();
       const survived = await approveAfterReload
         .isVisible({ timeout: 30_000 })
         .then(() => true)

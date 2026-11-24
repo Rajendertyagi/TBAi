@@ -48,12 +48,19 @@ mock.module("@assistant-ui/react", () => ({
   ),
   AssistantRuntimeProvider: ({
     runtime,
+    config,
     children,
   }: {
     runtime: { id?: string };
+    config: { tools?: unknown; suggestions?: { values?: string[] } };
     children?: ReactNode;
   }) => (
-    <div data-testid="runtime-provider" data-runtime-id={String(runtime?.id ?? "unknown")}>
+    <div
+      data-testid="runtime-provider"
+      data-runtime-id={String(runtime?.id ?? "unknown")}
+      data-has-tools={String(Boolean(config?.tools))}
+      data-suggestions={String(config?.suggestions?.values?.length ?? 0)}
+    >
       {children}
     </div>
   ),
@@ -226,12 +233,17 @@ describe("Direct panel composition parity", () => {
 
     const providers = queryAll(panel, "aui-provider");
     expect(providers).toHaveLength(1);
-    expect(providers[0]?.getAttribute("data-has-tools")).toBe("true");
-    expect(providers[0]?.getAttribute("data-suggestions")).toBe("3");
+    // The outer boundary is isolation-only: an empty config, no scopes.
+    expect(providers[0]?.getAttribute("data-has-tools")).toBe("false");
+    expect(providers[0]?.getAttribute("data-suggestions")).toBe("0");
 
     const runtime = query(panel, "runtime-provider");
     expect(runtime).not.toBeNull();
     expect(providers[0]?.contains(runtime ?? null)).toBe(true);
+    // The shared tools + suggestions config now lives on the runtime provider —
+    // the one that installs the client scope `part.toolUI` reads.
+    expect(runtime?.getAttribute("data-has-tools")).toBe("true");
+    expect(runtime?.getAttribute("data-suggestions")).toBe("3");
 
     expect(query(panel, "chat-header")?.getAttribute("data-thread-id")).toBe("conv-A");
     expect(query(panel, "chat-window")?.getAttribute("data-draft")).toBe("false");

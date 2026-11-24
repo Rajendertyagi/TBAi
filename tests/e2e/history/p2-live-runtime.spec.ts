@@ -22,8 +22,13 @@ import {
 // Long enough that the transcript genuinely overflows its viewport, so "scrolled
 // away from the end" is a real state rather than a no-op scroll.
 const LONG_REPLY = "streamed-reply-sentence-numbered-for-length. ".repeat(400);
-const scroller = (page: Page) => page.locator('[data-testid="virtual-transcript-scroller"]');
-const rows = (page: Page) => page.locator("[data-row-key]");
+// Dockview keeps every chat host mounted (`renderer:"always"`), so several
+// transcripts can be in the DOM at once. Scope to the visible Direct panel —
+// the one the current route drives — instead of matching every scroller.
+const ACTIVE_PANEL = '[data-testid="dockview-direct-panel"][data-visible="true"]';
+const scroller = (page: Page) =>
+  page.locator(`${ACTIVE_PANEL} [data-testid="virtual-transcript-scroller"]`);
+const rows = (page: Page) => page.locator(`${ACTIVE_PANEL} [data-row-key]`);
 
 /** How far the transcript is from its live end. */
 async function distanceFromEnd(page: Page): Promise<number> {
@@ -260,8 +265,10 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
       // unpacked those names off the ELEMENT instead — both `undefined`, so
       // `distance <= threshold` was always false and `isAtEnd` always reported
       // false. The reading looked plausible and no assertion could catch it.
-      (_el, { anchorKey, threshold }) => {
-        const el = document.querySelector('[data-testid="virtual-transcript-scroller"]')!;
+      // Use the LOCATED element directly: a page-wide `document.querySelector`
+      // would pick a scroller from a hidden Dockview panel when several hosts
+      // are mounted (`renderer:"always"`), defeating the scoping above.
+      (el, { anchorKey, threshold }) => {
         const mountedKeys = Array.from(el.querySelectorAll("[data-row-key]"))
           .map((row) => row.getAttribute("data-row-key"))
           .filter((k): k is string => k !== null);

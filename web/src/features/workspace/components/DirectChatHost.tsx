@@ -1,9 +1,10 @@
+import { useMemo } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { threadListAdapter } from "../../../app/adapter";
 import { useAppChatRuntime } from "../../../runtime";
 import { ChatWindow } from "../../../components/ChatWindow";
 import { ChatHeader } from "../../chat/components/ChatHeader";
-import { DirectDataUIs, DirectHostProvider } from "./directHost";
+import { createDirectAuiConfig, DirectDataUIs, DirectHostProvider } from "./directHost";
 
 // Stable identity: a fresh closure each render can cause needless runtime
 // reconfiguration. Panel hosts never rebind their thread from the runtime.
@@ -40,8 +41,11 @@ export function DirectChatHost({
 
 function DirectChatInner({ threadId, isDraft }: { threadId: string; isDraft: boolean }) {
   const runtime = useAppChatRuntime(threadListAdapter, threadId, noopThreadIdChange);
+  // The tools/suggestions config belongs to THIS provider — the one that
+  // installs the client scope `part.toolUI` reads. Stable for the host's life.
+  const config = useMemo(() => createDirectAuiConfig(), []);
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider runtime={runtime} config={config}>
       <DirectDataUIs />
       <div
         className="flex h-full min-h-0 flex-col"

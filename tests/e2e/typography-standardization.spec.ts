@@ -25,6 +25,13 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
  * see tests/dom/appearance/typography.test.tsx.
  */
 
+/**
+ * Dockview keeps every chat host mounted (`renderer:"always"`), so a tool
+ * payload or approval card from another panel can match a page-wide locator.
+ * Scope chat-surface DOM reads to the visible Direct panel.
+ */
+const ACTIVE_PANEL = '[data-testid="dockview-direct-panel"][data-visible="true"]';
+
 const V3_DEFAULTS = {
   version: 3,
   interfaceFontFamily: "inter",
@@ -401,7 +408,7 @@ test.describe("structured tool payload follows the Code channel", () => {
       expect(armed.ok(), "arming the stub tool call failed").toBeTruthy();
 
       await sendMessage(page, "list the scheduled jobs for the typography probe");
-      const payload = page.locator('[data-slot="code-payload"]').first();
+      const payload = page.locator(`${ACTIVE_PANEL} [data-slot="code-payload"]`).first();
       await expect(payload).toBeVisible({ timeout: 60_000 });
 
       const atDefault = await payload.evaluate((element) => {
@@ -412,7 +419,7 @@ test.describe("structured tool payload follows the Code channel", () => {
       expect(atDefault.family).toContain("JetBrains Mono");
 
       await applyTypography(page, { interfaceFontSize: 24, codeFontSize: 13 }, request);
-      const afterResize = page.locator('[data-slot="code-payload"]').first();
+      const afterResize = page.locator(`${ACTIVE_PANEL} [data-slot="code-payload"]`).first();
       await expect(afterResize).toBeVisible({ timeout: 60_000 });
       const computed = await afterResize.evaluate((element) =>
         Number.parseFloat(getComputedStyle(element).fontSize),
@@ -453,7 +460,10 @@ test.describe("structured tool payload follows the Code channel", () => {
 
       await sendMessage(page, "run a failing command for the typography probe");
 
-      const approveBtn = page.getByRole("button", { name: /^Approve\b/i }).first();
+      const approveBtn = page
+        .locator(ACTIVE_PANEL)
+        .getByRole("button", { name: /^Approve\b/i })
+        .first();
       await expect(approveBtn).toBeVisible({ timeout: 30_000 });
       await approveBtn.click();
 
