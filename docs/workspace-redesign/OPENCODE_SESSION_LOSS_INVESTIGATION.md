@@ -2,7 +2,7 @@
 
 **Status:** INVESTIGATION + PLAN ONLY. No implementation authorized.
 **Date:** 2026-11-25 (revised after independent review and owner architecture direction)
-**Branch / HEAD:** `ui-foundation-upgrade` @ `aa90fd4` (local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`)
+**Branch / HEAD:** `ui-foundation-upgrade` @ `eb673df` (review baseline; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`)
 **Mode:** documentation and investigation only. No source code, configuration, database, session, WAL, backup, or Git state was modified by this revision. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
 
 > **Architecture correction (owner direction, mandatory).** The previous revision recommended a private TBAi OpenCode database via `OPENCODE_DB`, a `VACUUM INTO` snapshot, and isolation from other clients. **That direction is reversed.** TBAi must continue using the **shared OpenCode database** so that conversations created by OpenCode CLI, desktop, and other clients remain discoverable and importable. No private DB, no `OPENCODE_DB` override, no database copy/migration, and no disabling of other OpenCode clients. Historical recovery is out of scope. This document preserves the historical investigation as background evidence and replaces the prevention plan with a **future session-storage, discovery, import, and lifecycle reliability plan** on the shared database.
@@ -19,12 +19,12 @@ The product requirement is the opposite of isolation: TBAi must keep sharing the
 - **External discovery** — unarchived sessions created by any OpenCode client appear in `/api/opencode/importable`.
 - **Import reliability** — importing binds a TBAi conversation to the existing session without copying, duplicating, or modifying its messages.
 - **Ownership safety** — visibility or importability never implies ownership; service-owner checks gate every history read.
-- **Deletion safety** — only the exact session a request observed can be removed, with a durable marker and late ownership re-check.
-- **Concurrency safety** — singleflight, caller-supplied idempotent IDs, and atomic journal operations prevent races.
-- **Restart recovery** — durable intents, orphan records, and recovery passes settle interrupted work.
+- **Deletion safety** — **conversation deletion unlinks sessions; it does not delete them.** The TBAi pointer and row are removed; the shared OpenCode session and its children remain. Only a separately authorized cleanup with a durable, atomic claim may ever delete a session.
+- **Concurrency safety** — singleflight, caller-supplied idempotent IDs, atomic journal operations, and a durable cleanup claim prevent races between reconciliation, unlinking, and importing.
+- **Restart recovery** — durable intents, orphan records, and recovery passes settle interrupted work; a claimed cleanup is re-validated from durable state after a crash, never resumed blindly.
 - **Upgrade compatibility** — official V2 schema/migration handling is used; no V1 compatibility is retained by TBAi.
 
-The current implementation already contains most of these safeguards. The plan is to **verify them with targeted regression tests and close the specific gaps identified below**, not to redesign the storage layer.
+The current implementation already contains most of these safeguards. The plan is to **verify them with targeted regression tests and close the specific gaps identified below**, not to redesign the storage layer. Where a strictly safe coordination protocol cannot be established, the fallback is to **disable automatic remote deletion** rather than risk shared-session loss.
 
 ---
 
@@ -32,8 +32,8 @@ The current implementation already contains most of these safeguards. The plan i
 
 | Category | Content in this report |
 |---|---|
-| **Independently verified through GitHub** | Remote branch HEAD `aa90fd4` matched local HEAD at the start of this revision (`git ls-remote`). The pushed report at that commit is the review source of truth; this revision is local and uncommitted. |
-| **Verified through repository implementation (this session)** | All `src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `aa90fd4`. |
+| **Independently verified through GitHub** | Remote branch HEAD `eb673df` matched local HEAD at the start of this revision (`git ls-remote`). The pushed report at that commit is the review baseline; this revision is local and uncommitted. |
+| **Verified through repository implementation (this session)** | All `src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `eb673df`. |
 | **Agent-reported workstation evidence (not independently re-checked by the owner)** | The nine missing session IDs, DB file sizes, log counts, credential metadata, and legacy-table absence in §3. These were measured on this workstation by the agent; the owner has not independently re-run the queries. |
 | **Verified through CI results** | None in this revision. No tests were run for this documentation task. |
 | **Not verified / unresolved** | Exact deleter of the nine sessions; historical recoverability; live-credential E2E failures; Tauri zoom on the owner's machine. |
@@ -160,7 +160,7 @@ Other verified properties of the existing path:
 
 ### 4.11 Verification evidence — code paths and tests
 
-Every safeguard claimed above is tied to a file/line and an existing test. These were read directly from the checkout at `aa90fd4`; **no test was executed for this documentation task**, so they are evidence of coverage, not a claim that the suite passed now.
+Every safeguard claimed above is tied to a file/line and an existing test. These were read directly from the checkout at `eb673df`; **no test was executed for this documentation task**, so they are evidence of coverage, not a claim that the suite passed now.
 
 | Safeguard | Code path | Existing test (assertion) |
 |---|---|---|
@@ -236,6 +236,26 @@ The previous revision's instruction to "keep the deletion marker as an audit rec
 
 So merely stamping `resolved_at` does not stop a pass already in flight. A safe design needs both a non-actionable journal state and a current-state guard immediately before removal.
 
+### 4.15 Coordination protocol — atomic cleanup claim
+
+The remaining race is between the reconciler's final validation and the remote `session.remove`. A read-then-delete cannot be made safe by re-reading: the state can change between the last check and the DELETE. The design therefore uses a **durable cleanup claim** in TBAi's own SQLite database (`chat.db`), acquired atomically with the final validation and held across the remote operation.
+
+**Claim record (new additive table, owner: `src/db/schema/opencode-session-orphans.ts`):**
+`opencode_session_cleanup_claims(session_id PRIMARY KEY, claim_id, state, conversation_id, service_owner, opencode_base_url, created_at, completed_at)`.
+`state` is `claimed` → `completed` | `aborted`. There is **no expiry field** — a time-based lease could expire while an OpenCode DELETE is still executing. The existing reconciler's in-memory `inFlight` flag (`orphanReconciler.ts:259`) is process-local and is not a claim.
+
+**Protocol rules:**
+
+1. **Atomic acquisition (reconciler).** In ONE SQLite transaction: re-read the current journal row (not the listed snapshot), re-read the current conversation row, and verify all of: journal phase is actionable (`intent`/`orphan`), `resolved_at IS NULL`, no claim row exists for the session, the conversation does not point at the session, and no import association exists. Insert the claim with `state='claimed'` and a unique `claim_id`. Only a committed transaction authorizes the remote DELETE. This removes the TOCTOU window: validation and claim are one atomic unit.
+2. **Hold across the remote operation.** The claim remains `claimed` while `removeUnboundSession` runs. It is durable, so a crash mid-DELETE leaves `state='claimed'`.
+3. **Terminal settlement.** After a confirmed absence, atomically set `state='completed'` and settle the journal row. On failure/inconclusive removal, set `state='aborted'` and retain the journal row for a later pass — never retry indefinitely within one pass.
+4. **Crash/restart recovery.** On startup, scan for `state='claimed'` rows. **Never resume a DELETE directly.** Probe the remote session: if absent, mark `completed` and settle; if present, mark `aborted` and leave the session untouched. A later pass may claim again only after fresh atomic validation. This is durable re-validation, not an in-memory mutex or an expiring lease.
+5. **Unlink coordination.** Unlinking is ONE SQLite transaction that: verifies no `claimed` claim exists for the session; retires the journal row into a non-actionable audit state (`phase='unlinked'`, `resolved_at` set); clears the TBAi pointer; and deletes the TBAi conversation row. If a claim exists, unlink **fails closed** — it does not complete, and the user is told the session is being cleaned up and must retry. Unlinking can never complete while a destructive cleanup can still proceed.
+6. **Import coordination.** Import is ONE SQLite transaction that: verifies no `claimed` claim exists for the session; and creates the conversation with `opencodeSessionId` committed atomically (`conversationService.create` already inserts the pointer in the same INSERT — `src/services/storage/conversations.ts:175,185`). If a claim exists, import fails closed with a retryable error. Once the association is committed, rule 1's atomic acquisition sees the pointer and refuses to claim. This protects both orderings: cleanup that started before the import cannot delete afterward, and cleanup that starts after import cannot claim at all.
+7. **Fallback.** If the claim table, atomic transaction, or reliable remote-absence probe cannot be established, **disable automatic remote deletion** — the reconciler becomes log-only and never calls `session.remove`. Losing cleanup automation is preferable to losing a shared session.
+
+**Why this is safe across all three actors:** every destructive decision requires an atomic claim that is mutually exclusive with unlinking and importing. No actor can observe a stale snapshot and then act on it, because the claim is acquired in the same transaction as the final validation and is durable across process boundaries and restarts.
+
 ---
 
 ## 5. Risks and safeguards for the eight reliability requirements
@@ -246,7 +266,7 @@ So merely stamping `resolved_at` does not stop a pass already in flight. A safe 
 | 2 | External discovery | `/importable` lists all unarchived shared-DB sessions via `session.list()` | Document explicitly that external sessions are intentionally visible; test that a session created outside TBAi appears (§8) |
 | 3 | Import reliability | `sourceRef` freshness, duplicate check, authoritative `session.get()`, no message copy, UNIQUE race handling | Test re-import and message-history preservation explicitly (§8) |
 | 4 | Ownership safety | `assertSameHistoryOwner`, owner-filtered recovery, proxy authorization | Test that a visible/importable session is not treated as owned before import (§8) |
-| 5 | Deletion safety | Entry snapshot, durable marker, late ownership re-check, confirmed removal (§4.5, §4.11) | **Three confirmed gaps:** (a) `opencodeImported` is absent from the deletion entry snapshot, so imported external sessions are deleted; (b) official `session.remove` deletes children and no atomic conditional-delete API exists, so a child-list preflight is not a safety guarantee; (c) an unresolved `phase='delete'` journal row remains actionable by the background reconciler after unlinking (§4.14). **Fail-safe policy:** the conversation-deletion path becomes **non-destructive unlinking by default** — clear the pointer, delete the TBAi row, never call `session.remove`. **Safe journal behavior:** do not create a deletion obligation for an unlink; retire any existing cleanup row into a non-actionable audit state; add a current-journal-state guard immediately before the reconciler's removal so an in-flight pass cannot delete an unlinked session; keep genuine `intent`/`orphan` recovery for incomplete TBAi-created sessions. Actual session deletion becomes a separate, explicitly authorized operation requiring an atomic mechanism that does not exist today. |
+| 5 | Deletion safety | Entry snapshot, durable marker, late ownership re-check, confirmed removal (§4.5, §4.11) | **Three confirmed gaps:** (a) `opencodeImported` is absent from the deletion entry snapshot; (b) `session.remove` deletes children with no atomic conditional-delete API; (c) an unresolved `phase='delete'` row stays actionable after unlinking (§4.14). **Fail-safe policy:** conversation deletion is **non-destructive unlinking** — clear pointer, delete TBAi row, never call `session.remove`. **Coordination:** all destructive cleanup requires the durable atomic cleanup claim in §4.15, acquired in the same transaction as final validation and held across the remote DELETE; unlink and import fail closed while a claim exists; crash recovery re-validates from durable state. Fallback: disable automatic remote deletion if the protocol cannot be established. |
 | 6 | Concurrency | Per-conversation singleflight; atomic journal settlement; idempotent IDs | Test concurrent use by multiple OpenCode clients against the shared DB (§8) |
 | 7 | Restart recovery | Durable intents, orphan records, owner-filtered recovery passes | Test interrupted import and DB write failure (§8) |
 | 8 | Upgrade compatibility | Capability probing, wire validation, official V2 migration | Test V2 schema migration without breaking discovery/import (§8) |
@@ -262,7 +282,7 @@ So merely stamping `resolved_at` does not stop a pass already in flight. A safe 
 | Imported into TBAi | Bound by a TBAi conversation with `opencodeImported: true`; messages remain in OpenCode; interaction operations in §4.13 are allowed; a missing session is reported, never recreated |
 | Linked to multiple TBAi conversations | **Not supported today** — the UNIQUE constraint on `(serviceOwner, sessionId)` rejects a second import. Keep this rule; do not add multi-link without an explicit decision |
 | Becomes unavailable or deleted externally | Imported conversation reports `OpenCodeImportedSessionMissingError`; native conversation with a stale pointer recreates only if not imported; no auto-repair of imported history |
-| TBAi conversation deleted by user | **Non-destructive unlinking:** clear the TBAi pointer and delete the TBAi row; leave the OpenCode session and all its children intact. No `session.remove` from this path. Rebind still yields 409. **No deletion obligation is created**; any existing cleanup row is retired into a non-actionable audit state before the row is deleted, and the reconciler re-checks current journal state before any removal (§4.14, §5, §7). The user manages the shared session in OpenCode if they want it deleted |
+| TBAi conversation deleted by user | **Non-destructive unlinking:** in one transaction, verify no cleanup claim exists, retire the journal row into a non-actionable audit state, clear the TBAi pointer, and delete the TBAi row. Leave the OpenCode session and all its children intact. No `session.remove` from this path. Rebind still yields 409. If a claim exists, unlink **fails closed** and must be retried (§4.15). The user manages the shared session in OpenCode if they want it deleted |
 
 **Non-destructive default:** a disappearing TBAi reference never authorizes deleting a shared OpenCode session. Deleting a TBAi conversation unlinks it; it does not delete the OpenCode session or any child. This **changes existing behavior** for both imported and TBAi-created conversations: today both are terminated by `session.remove` (§4.5). The impact is that OpenCode sessions outlive their TBAi conversation rows and remain visible to other OpenCode clients; this is correct for a shared history store and is the only policy that eliminates the imported-session deletion bug and the child-cascade TOCTOU race without an atomic API. Any future destructive deletion requires explicit owner authorization and an atomic mechanism that v2.4.0 does not provide.
 
@@ -272,13 +292,14 @@ So merely stamping `resolved_at` does not stop a pass already in flight. A safe 
 
 1. **Document the shared-DB architecture decision** in `docs/decisions.md`: no private DB, no `OPENCODE_DB` override, no snapshot, no disabling other clients; external import is a required capability.
 2. **Non-destructive conversation deletion** (§4.5, §5): add `opencodeImported` to the deletion entry snapshot and make the OpenCode branch unlink-only — clear the pointer and delete the TBAi row without calling `session.remove`. Remove the destructive call from the conversation-deletion path for all OpenCode sessions. Do **not** add a child-list preflight as a safety guarantee; no atomic API exists and the check is racy (§4.5).
-3. **Safe journal behavior for unlinking** (§4.14): do not call `recordDeletionIntent()` on an unlink. Before deleting the TBAi row, retire any existing cleanup record for that `(conversationId, sessionId)` into a non-actionable audit state that `listUnresolvedOrphans()` will not return. A resolved timestamp alone is insufficient — the phase must also be non-actionable. Preserve `intent`/`orphan` rows for genuine incomplete TBAi-created session recovery.
-4. **In-flight reconciler guard** (§4.14): immediately before `removeUnboundSession` (`orphanReconciler.ts:703`), re-read the current journal state and refuse removal when the row is resolved or converted to a non-actionable phase. Change the `getOpenSessionRisk` fall-through at `:666` so `"absent"` (settled/retired) also stops the pass, not just `"risk"`. This prevents a pass that listed the row before unlinking from deleting afterward.
-5. **Ownership terminology** (§4.12): document the five distinct concepts in the owning module and stop describing `opencodeServiceOwner` as proof of exclusive ownership. No runtime behavior change.
-6. **Shared-session mutation policy** (§4.13): document allowed interaction operations and protected lifecycle operations, grounded in the proxy allowlist. No runtime behavior change.
-7. **Regression tests** from §8, written before any behavior change where practical, each proven able to fail against the defect it guards.
-8. **Log-only integrity signal** for imported sessions that 404 (no repair, no rebind, no delete), using the existing logger contract.
-9. **Verification** of the full gate (`bun run verify`, `test:locations`, `test:dom`, targeted e2e) with exact commands and exit codes recorded.
+3. **Durable cleanup-claim table and atomic acquisition** (§4.15): add the additive claim table in `src/db/schema/opencode-session-orphans.ts`; make the reconciler's final validation and claim insertion one SQLite transaction; hold the claim across `removeUnboundSession`; settle to `completed`/`aborted` atomically. No expiry field and no reliance on the in-memory `inFlight` flag.
+4. **Coordinated unlink and import** (§4.15): make unlinking one transaction that checks for a claim, retires the journal row, clears the pointer, and deletes the conversation row; make import one transaction that checks for a claim and commits the association. Both fail closed while a claim exists. Add crash/restart recovery that probes the remote session for `claimed` rows and never resumes a DELETE blindly.
+5. **Fallback switch** (§4.15): if the atomic claim protocol cannot be established, disable automatic remote deletion (log-only reconciler) rather than risk shared-session loss.
+6. **Ownership terminology** (§4.12): document the five distinct concepts in the owning module and stop describing `opencodeServiceOwner` as proof of exclusive ownership. No runtime behavior change.
+7. **Shared-session mutation policy** (§4.13): document allowed interaction operations and protected lifecycle operations, grounded in the proxy allowlist. No runtime behavior change.
+8. **Regression tests** from §8, written before any behavior change where practical, each proven able to fail against the defect it guards.
+9. **Log-only integrity signal** for imported sessions that 404 (no repair, no rebind, no delete), using the existing logger contract.
+10. **Verification** of the full gate (`bun run verify`, `test:locations`, `test:dom`, targeted e2e) with exact commands and exit codes recorded.
 
 No change to the shared DB path, no new database, no credential handling, no filesystem-permission change, and no change to the Direct/OpenCode runtime boundary.
 
@@ -303,6 +324,11 @@ Each test must verify both the expected behavior **and** that unrelated shared s
 | Deletion while reconciliation is already running | Start a reconciliation pass that has listed the row, unlink the conversation mid-pass, then let the pass finish; the current-journal-state guard stops removal and the session survives |
 | Reconciler never deletes an unlinked session | After unlinking, run repeated reconciliation passes (including past the absence horizon); no pass deletes the session; unrelated genuine orphans are still processed |
 | Genuine incomplete TBAi-created session recovery still works | Seed an unresolved `intent`/`orphan` row for a session TBAi created but never bound; the reconciler still removes it under the existing risk/horizon rules — the new guard must not disable real recovery cleanup |
+| **Barrier: unlink immediately after the reconciler's final journal check** | Pause the reconciler after its last validation read but before the claim transaction commits; unlink the conversation; resume; the claim transaction fails, no `session.remove` is issued, and the session survives |
+| **Barrier: unlink while remote cleanup is about to execute** | Pause after `state='claimed'` commits but before `removeUnboundSession`; attempt unlink; it fails closed with a retryable error; resume cleanup; the session is removed only under the genuine-orphan rules, and no unlink completed during the claim |
+| **Barrier: import while cleanup is in progress** | Pause after `state='claimed'` commits; attempt import of that session; it fails closed with a retryable error; abort the claim; import then succeeds and commits the association atomically |
+| **Barrier: application restart during a claimed cleanup** | Kill the process after `state='claimed'` commits but before the remote DELETE completes; restart; recovery probes the remote session and never resumes a DELETE blindly — if present it aborts the claim, if absent it completes it; no session is deleted without fresh validation |
+| **Barrier: genuine recovery after restart** | Kill during a claimed cleanup of a real incomplete TBAi-created session; after restart, fresh validation re-claims and completes the cleanup under the existing risk/horizon rules |
 | External session deletion | Imported conversation reports missing; no auto-recreate; other sessions untouched |
 | Interrupted import / DB write failure | Durable intent/orphan record retained; no half binding; reconciler settles without deleting unrelated sessions |
 | Stale session references and reconciliation | Late ownership re-check wins; a bare 404 does not clear a risk-bearing row; unrelated sessions untouched |
@@ -327,7 +353,9 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 11. **Shared-session mutation:** allowed interaction operations and protected lifecycle operations are documented per §4.13; no protected lifecycle operation is reachable from conversation deletion, cleanup, reconciliation, or compensation for an imported session.
 12. **Safe journal behavior:** unlinking creates no deletion obligation — `recordDeletionIntent()` is not called; any existing cleanup row is retired into a non-actionable audit state that `listUnresolvedOrphans()` does not return; a resolved timestamp alone is not treated as sufficient. Genuine `intent`/`orphan` rows for incomplete TBAi-created sessions remain actionable.
 13. **In-flight reconciliation safety:** a pass that listed a row before unlinking cannot delete the session afterward; the current journal state is re-checked immediately before `removeUnboundSession`, and `"absent"`/retired states stop the pass rather than falling through to removal. Repeated passes, including past the absence horizon, never delete an unlinked session.
-14. **Reliability:** all tests in §8 pass, including the "unrelated sessions untouched" assertion; all quality gates exit 0; no session was deleted, rebound, or duplicated by the work.
+14. **Atomic cleanup claim:** every destructive cleanup acquires a durable claim in the same SQLite transaction as its final validation; the claim is held across the remote DELETE, has no expiry, and is settled to `completed`/`aborted` atomically. No deletion is based on a stale journal or conversation snapshot.
+15. **Coordinated actors:** unlink and import each run in one transaction that checks for a claim and fail closed while one exists; crash/restart recovery probes the remote session and never resumes a DELETE blindly; genuine incomplete TBAi-created session recovery still works. If the protocol cannot be established, automatic remote deletion is disabled.
+16. **Reliability:** all tests in §8 pass, including the "unrelated sessions untouched" assertion; all quality gates exit 0; no session was deleted, rebound, or duplicated by the work.
 
 ---
 
@@ -352,7 +380,12 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 | **Shared-session mutation** — allowed vs protected operations | §4.13 grounded in `proxyRoutes.ts:105-205`; §9.11 |
 | **Durable deletion marker / background reconciler** — unresolved `delete` row remains actionable after unlink | §4.14 verifies `recordDeletionIntent` → `listUnresolvedOrphans` → `runOrphanReconciliationOnce` → `removeUnboundSession`; §5/§6/§7 specify non-actionable audit state and an in-flight guard; §8 and §9.12–9.13 cover it |
 | **Ownership statement in §9.5** — "writes only sessions it owns" | §9.5 corrected: interaction with shared sessions is allowed; exclusive lifecycle/deletion authority is not assumed |
-| **Branch/HEAD reference** | corrected to `aa90fd4` in the header and evidence categories |
+| **TOCTOU between journal validation and remote DELETE** | §4.15 defines a durable atomic cleanup claim acquired with final validation and held across the DELETE; §9.14 |
+| **Coordination of reconciler / unlink / import** | §4.15 rules 5–6 make unlink and import single transactions that fail closed on a claim; §9.15 |
+| **Crash/restart during claimed cleanup** | §4.15 rule 4: probe remote, never resume a DELETE blindly, no expiring lease; §8 barrier scenarios |
+| **Fallback if no safe protocol** | §4.15 rule 7 and §1: disable automatic remote deletion rather than risk shared-session loss |
+| **Executive summary** | §1 now states conversation deletion unlinks sessions and does not delete them |
+| **Branch/HEAD reference** | corrected to `eb673df` in the header and evidence categories |
 
 ---
 
@@ -362,6 +395,7 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 - **Child-session deletion risk** — `session.remove` deletes children and no TBAi code checks `parentID` today. The non-destructive unlink policy is specified in §5/§6/§7/§8; it is **not implemented** and must be tested before any deletion behavior changes.
 - **TOCTOU residual risk** — no atomic conditional-delete API exists in OpenCode v2.4.0. A child-list preflight cannot guarantee safety because a child can be created between check and use. The plan does not claim otherwise; it removes the destructive call from the deletion path instead.
 - **Journal/reconciler risk** — an unresolved `phase='delete'` row is actionable by `runOrphanReconciliationOnce()` after unlinking (§4.14). Resolving the row alone does not stop a pass already in flight. The plan requires a non-actionable audit state plus a current-journal-state guard before removal; both are **not implemented** and must be tested before any deletion behavior changes.
+- **Coordination risk** — the atomic cleanup claim in §4.15 is a new durable structure and is **not implemented**. Until it exists and the barrier tests pass, automatic remote deletion must remain disabled; an in-memory mutex or expiring lease is explicitly rejected as a substitute.
 - **Behavior change** — unlink-only deletion means OpenCode sessions outlive their TBAi conversation rows. This is intentional for a shared history store but must be confirmed by the owner before implementation.
 - **Restart-recovery limitations** — plain `opencode serve` persists no lifecycle events beyond the synced marker, and `session_inbox.enqueued_seq` is not exposed by the public inbox schema (§4.11). Recovery relies on durable session/inbox state, not an event log.
 - **Live-credential E2E failures** — 8 pass / 7 fail / 3 skip against OpenCode 2.4.0; failures are stale spec expectations and a stub-provider harness issue, not verified product defects. Not part of the standard gate.
