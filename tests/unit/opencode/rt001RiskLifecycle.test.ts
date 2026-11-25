@@ -119,8 +119,6 @@ const reconcilerDeps = {
   }) => opencodeOrphanService.recordProbe(input),
   settleOwned: (conversationId: string, sessionId: string, at: number) =>
     opencodeOrphanService.settleOwnedSession({ conversationId, sessionId, at }),
-  settleDeleted: (conversationId: string, sessionId: string, at: number) =>
-    opencodeOrphanService.settleConfirmedDeletion({ conversationId, sessionId, at }),
   settleAbsent: (input: {
     conversationId: string;
     sessionId: string;
