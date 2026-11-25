@@ -514,18 +514,17 @@ app.delete("/api/conversations/:id", async (c) => {
     // clean up the hidden chat folder afterward.
     const conv = await conversationService.get(id);
     const folderId = conv?.workspaceFolderId ?? null;
-    // RT-011: an OpenCode row owns a remote session. The entry snapshot is the
-    // only binding this request may act on: the coordinator arms a durable
-    // marker before its first decision read, terminates only that session, and
-    // refuses to delete a row that was rebound after the snapshot. Direct rows
-    // keep the plain teardown below.
+    // OpenCode rows are torn down locally: the coordinator deletes TBAi's
+    // conversation and messages without any remote OpenCode request. The
+    // shared session remains in OpenCode. The entry snapshot is the only
+    // binding this request may act on, so a row rebound after the snapshot is
+    // preserved with a 409. Direct rows keep the plain teardown below.
     if (conv?.engine === "opencode") {
       const outcome = await deleteOpenCodeConversation({
         conversationId: id,
         entry: {
           engine: conv.engine,
           opencodeSessionId: conv.opencodeSessionId ?? null,
-          opencodeServiceOwner: conv.opencodeServiceOwner ?? null,
         },
       });
       if (outcome.kind === "conflict") {
@@ -534,13 +533,6 @@ app.delete("/api/conversations/:id", async (c) => {
           reason: outcome.reason,
         });
         return c.json({ error: "session_rebound" }, 409);
-      }
-      if (outcome.kind === "unavailable") {
-        logger.error("opencode", "conversation.delete_cleanup_unavailable", {
-          conversationId: id,
-          reason: outcome.reason,
-        });
-        return c.json({ error: "session_cleanup_unavailable" }, 503);
       }
       // Cleanup hidden chat folder if no other conversations reference it.
       if (folderId) {
