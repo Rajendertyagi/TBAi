@@ -240,6 +240,7 @@ const {
 const { OpenCodeSessionPersistError, OpenCodeSessionIntentError } = await import(
   "@/services/opencode/sessions.ts"
 );
+const { OpenCodeImportedSessionMissingError } = await import("@/services/opencode/errors.ts");
 const { OpenCodeHistoryBoundaryError } = await import("@/services/opencode/historyBoundary.ts");
 const { resetConnectionStateForTests } = await import("@/services/opencode/connectionState.ts");
 const { logger } = await import("@/lib/logger.ts");
@@ -1142,5 +1143,33 @@ describe("ensureOpenCodeSession â€” legacy external-bound conversations", (
     expect(updates).toEqual([]);
     expect(intentRecords).toEqual([]);
     expect(ensureBaseUrlCalls).toBe(0);
+  });
+});
+
+describe("ensureOpenCodeSession — imported session integrity", () => {
+  it("logs a missing imported session without repairing or recreating it", async () => {
+    conversation = {
+      engine: "opencode",
+      opencodeSessionId: "ses_missing_imported",
+      opencodeImported: true,
+      opencodeDirectory: "D:\\ws\\imported",
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+    const before = logger.lastSeq;
+
+    const error = await ensureOpenCodeSession("conv-1").catch((cause) => cause);
+
+    expect(error).toBeInstanceOf(OpenCodeImportedSessionMissingError);
+    // Only the read-only liveness probe runs; no create, remove or pointer write.
+    expect(calls).toEqual(["get:ses_missing_imported"]);
+    expect(createArgs).toEqual([]);
+    expect(updates).toEqual([]);
+    const events = logger
+      .getRecentEntries(before)
+      .filter((entry) => entry.event === "opencode.session_missing");
+    expect(events.length).toBe(1);
+    expect(JSON.stringify(events[0])).not.toContain("ses_missing_imported");
   });
 });

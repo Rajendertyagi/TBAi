@@ -827,6 +827,9 @@ async function ensureOpenCodeSessionInner(
     }
     // Remote session not found:
     if (conversation.opencodeImported) {
+      // Log-only integrity signal: the imported session is gone from OpenCode.
+      // No repair, no rebind, no delete — the user manages it in OpenCode.
+      logger.warn("opencode", "opencode.session_missing", { conversationId });
       throw new OpenCodeImportedSessionMissingError(conversationId, conversation.opencodeSessionId);
     }
     // Stale pointer (e.g. server restarted since the session was stored):
