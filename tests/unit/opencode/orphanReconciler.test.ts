@@ -5,9 +5,6 @@ import type { OpenCodeTransport } from "@/services/opencode/http";
 import { OpenCodeError } from "@/services/opencode/errors";
 import type { OpenCodeOrphanRecord } from "@/services/storage/opencodeSessionOrphans";
 import {
-  DEFAULT_ORPHAN_RECONCILE_GRACE_MS,
-  DEFAULT_ORPHAN_RECONCILE_INTERVAL_MS,
-  DEFAULT_ORPHAN_RECONCILE_LIMIT,
   drainOrphanReconciliation,
   getOrphanReconciliationState,
   runOrphanReconciliationOnce,

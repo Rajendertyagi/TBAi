@@ -232,11 +232,9 @@ mock.module("@/services/opencode/client", () => ({
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
 const { createOpenCodeClient } = await import("@/services/opencode/client.ts");
 const { OpenCodeError } = await import("@/services/opencode/errors.ts");
-const {
-  terminateOpenCodeSession,
-  isOpenCodeSessionLive,
-  ensureOpenCodeSession,
-} = await import("@/services/opencode/sessions.ts");
+const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } = await import(
+  "@/services/opencode/sessions.ts"
+);
 const { OpenCodeSessionPersistError, OpenCodeSessionIntentError } = await import(
   "@/services/opencode/sessions.ts"
 );

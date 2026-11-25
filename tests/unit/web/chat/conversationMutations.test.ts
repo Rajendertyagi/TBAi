@@ -50,19 +50,19 @@ describe("Conversation Mutations Domain Module", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("deleteConversation performs server teardown and DELETE", async () => {
+  it("deleteConversation issues only the local DELETE, with no OpenCode terminate", async () => {
     const calls: string[] = [];
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: string | URL | Request) => {
       const u = url.toString();
       calls.push(u);
-      return { ok: true, json: async () => ({ terminated: true }) } as Response;
+      return { ok: true, json: async () => ({}) } as Response;
     }) as any;
 
     const res = await deleteConversation("c999");
     expect(res.conversationId).toBe("c999");
-    expect(calls.some((u) => u.includes("/api/opencode/session/terminate"))).toBe(true);
+    expect(calls.some((u) => u.includes("/api/opencode/session/terminate"))).toBe(false);
     expect(calls.some((u) => u.includes("/api/conversations/c999"))).toBe(true);
 
     globalThis.fetch = originalFetch;

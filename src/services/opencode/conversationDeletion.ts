@@ -96,9 +96,7 @@ async function finalizeDeletion(
   return { kind: "missing", sessionCleanup: "none" };
 }
 
-async function finishMissing(
-  conversationId: string,
-): Promise<OpenCodeConversationDeletionOutcome> {
+async function finishMissing(conversationId: string): Promise<OpenCodeConversationDeletionOutcome> {
   await conversationService.deleteIfNoOpenCodeSession(conversationId);
   return { kind: "missing", sessionCleanup: "none" };
 }

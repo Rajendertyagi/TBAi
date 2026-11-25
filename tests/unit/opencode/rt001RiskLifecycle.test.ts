@@ -39,7 +39,6 @@ const CONVERSATION_ID = "conv-lifecycle";
 /** Future timestamps so the grace window never defers these rows. */
 const NOW_BOUND = 1_900_000_000_000;
 const NOW_RECREATED = NOW_BOUND + 60_000;
-const NOW_ABSENT = NOW_BOUND + 120_000;
 
 function sessionNotFound(sessionID: string): unknown {
   return { _tag: "SessionNotFoundError", sessionID, message: `Session not found: ${sessionID}` };
@@ -228,54 +227,23 @@ describe("RT-001 risk lifecycle — create → bind → terminate → reconcile"
     expect(row?.first_absent_at).toBeNull();
     expect(row?.last_checked_at).toBe(NOW_BOUND);
 
-    // --- 5. termination removes the session, keeps the risk ----------------
+    // --- 5. termination interrupts only; the session and pointer remain ----
     const terminated = await terminateOpenCodeSession(CONVERSATION_ID);
     expect(terminated).toEqual({ terminated: true });
-    expect(remote.has(sessionId)).toBe(false);
-    expect(conversation?.opencodeSessionId).toBeNull();
+    expect(remote.has(sessionId)).toBe(true);
+    expect(conversation?.opencodeSessionId).toBe(sessionId);
 
     row = journalRow(sessionId);
     expect(row?.late_create_risk).toBe(1);
-    expect(row?.first_absent_at).toBeNull();
     expect(row?.resolved_at).toBeNull();
 
-    // --- 6. the outstanding create commits and recreates the id ------------
-    remote.add(sessionId);
-
+    // --- 6. reconciliation never deletes the shared session ----------------
     startAt(NOW_RECREATED, 24 * 60 * 60 * 1000);
-    const recreatePass = await runOrphanReconciliationOnce();
-    expect(recreatePass).toMatchObject({ retainedAfterRemoval: 1, removed: 0 });
-
-    expect(remote.has(sessionId)).toBe(false);
+    const pass = await runOrphanReconciliationOnce();
+    expect(pass).toMatchObject({ removed: 0 });
+    expect(remote.has(sessionId)).toBe(true);
     row = journalRow(sessionId);
     expect(row?.late_create_risk).toBe(1);
-    expect(row?.first_absent_at).toBeNull();
     expect(row?.resolved_at).toBeNull();
-
-    // --- 7. the next 404 begins a FRESH absence epoch ----------------------
-    startAt(NOW_ABSENT, 10_000);
-    const absentPass = await runOrphanReconciliationOnce();
-    expect(absentPass).toMatchObject({ lateRisk: 1, expiredAbsent: 0, absent: 0 });
-
-    row = journalRow(sessionId);
-    expect(row?.late_create_risk).toBe(1);
-    expect(row?.first_absent_at).toBe(NOW_ABSENT);
-    expect(row?.resolved_at).toBeNull();
-
-    // --- 8. a restart re-derives the obligation from the database alone ----
-    startAt(NOW_ABSENT + 5_000, 10_000);
-    const restartedPass = await runOrphanReconciliationOnce();
-    expect(restartedPass).toMatchObject({ lateRisk: 1, expiredAbsent: 0 });
-
-    row = journalRow(sessionId);
-    expect(row?.late_create_risk).toBe(1);
-    // The epoch is the one stamped before the restart, not a new one.
-    expect(row?.first_absent_at).toBe(NOW_ABSENT);
-
-    // ...and only the bounded horizon releases it (best effort, not proof).
-    startAt(NOW_ABSENT + 10_001, 10_000);
-    const expiredPass = await runOrphanReconciliationOnce();
-    expect(expiredPass).toMatchObject({ expiredAbsent: 1 });
-    expect(journalRow(sessionId)).toBeNull();
   });
 });

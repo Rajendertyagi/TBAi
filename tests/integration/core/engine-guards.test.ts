@@ -625,7 +625,7 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     expect(gone).toBeNull();
   }, 30000);
 
-  it("opencode conversation with bound session: termination attempted + deleted", async () => {
+  it("opencode conversation with bound session: deleted locally with no remote call", async () => {
     await seedGuardProvider();
     const conv = await conversationService.create(
       conversationInput({
@@ -638,7 +638,6 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       }),
     );
     await withFakeOpencodeServer(async ({ calls }) => {
-      // Bind a session id on the row so terminateOpenCodeSession has a pointer.
       await conversationService.update(conv.id, {
         opencodeSessionId: "sess-p6-bound",
       });
@@ -651,25 +650,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
         sessionCleanup: string;
       };
       expect(body.success).toBe(true);
-      expect(body.sessionCleanup).toBe("removed");
-      // Termination attempted: interrupt then remove against the fake server.
-      expect(calls).toContain("interrupt:sess-p6-bound");
-      expect(calls).toContain("remove:sess-p6-bound");
-      // The durable delete marker survives the confirmed removal: a create
-      // whose response was lost may still recreate the freed id.
+      expect(body.sessionCleanup).toBe("none");
+      // No remote request: the shared session remains in OpenCode.
+      expect(calls).toEqual([]);
       const marker = db
         .query(
-          `SELECT phase, late_create_risk, resolved_at FROM opencode_session_orphans
+          `SELECT phase FROM opencode_session_orphans
             WHERE conversation_id = ? AND session_id = ?`,
         )
-        .get(conv.id, "sess-p6-bound") as {
-        phase: string;
-        late_create_risk: number;
-        resolved_at: number | null;
-      } | null;
-      expect(marker).not.toBeNull();
-      expect(marker?.phase).toBe("delete");
-      expect(marker?.resolved_at).toBeNull();
+        .get(conv.id, "sess-p6-bound") as { phase: string } | null;
+      expect(marker).toBeNull();
     });
     const gone = await conversationService.get(conv.id);
     expect(gone).toBeNull();
@@ -703,7 +693,7 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     expect(gone).toBeNull();
   }, 30000);
 
-  it("treats an already-absent remote session as a confirmed removal", async () => {
+  it("deletes locally regardless of the remote session state", async () => {
     await seedGuardProvider();
     const conv = await conversationService.create(
       conversationInput({
@@ -715,12 +705,10 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
         engine: "opencode",
       }),
     );
-    await withFakeOpencodeServer(async () => {
+    await withFakeOpencodeServer(async ({ calls }) => {
       await conversationService.update(conv.id, {
         opencodeSessionId: "sess-p6-gone",
       });
-      // The fake removes successfully and the confirming lookup answers 404,
-      // which is positive evidence of absence: the delete is a normal 200.
       const res = await app.request(`/api/conversations/${conv.id}`, {
         method: "DELETE",
       });
@@ -730,13 +718,14 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
         sessionCleanup: string;
       };
       expect(body.success).toBe(true);
-      expect(body.sessionCleanup).toBe("removed");
+      expect(body.sessionCleanup).toBe("none");
+      expect(calls).toEqual([]);
     });
     const gone = await conversationService.get(conv.id);
     expect(gone).toBeNull();
   }, 30000);
 
-  it("remote termination failure: Option A deletes the row and retains the durable marker", async () => {
+  it("deletes locally with no remote call even when the server is unreachable", async () => {
     await seedGuardProvider();
     const conv = await conversationService.create(
       conversationInput({
@@ -752,28 +741,13 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       opencodeSessionId: "sess-p6-fail",
     });
 
-    // Seam: make ensureBaseUrl point at a dead port so the client transport
-    // call throws. The coordinator sees an unconfirmed removal; the durable
-    // delete marker is re-affirmed and the row is still deleted (Option A).
+    // A dead transport cannot block local deletion: no remote request is made.
     const { openCodeServerManager: smModule } = await import(
       "@/services/opencode/serverManager.ts"
     );
     const sm = smModule as unknown as ServerManagerLike;
     const real = sm.ensureBaseUrl;
-    // A port that nothing is listening on → fetch fails → transport error.
-    const deadPort = 1;
-    sm.ensureBaseUrl = () => Promise.resolve(`http://127.0.0.1:${deadPort}`);
-
-    // Enable capture for the opencode scope BEFORE the request so the warn
-    // entry emitted inside terminateOpenCodeSession's catch is buffered in
-    // the ring (the global level is "error" in beforeEach, which would
-    // filter warn out).
-    logger.configure({
-      level: "warn",
-      targets: [{ scope: "opencode", level: "warn" }],
-      file: null,
-      fileEnabled: false,
-    });
+    sm.ensureBaseUrl = () => Promise.resolve("http://127.0.0.1:1");
     let res: Response;
     try {
       res = await app.request(`/api/conversations/${conv.id}`, {
@@ -781,7 +755,6 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       });
     } finally {
       sm.ensureBaseUrl = real;
-      logger.configure({ level: "error", targets: [], file: null, fileEnabled: false });
     }
 
     expect(res.status).toBe(200);
@@ -790,25 +763,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       sessionCleanup: string;
     };
     expect(body.success).toBe(true);
-    // The conversation was still deleted despite the failed termination —
-    // Option A: the durable marker is the handle that keeps the session
-    // recoverable, so teardown is not blocked.
-    expect(body.sessionCleanup).toBe("retained");
+    expect(body.sessionCleanup).toBe("none");
     const gone = await conversationService.get(conv.id);
     expect(gone).toBeNull();
     const marker = db
       .query(
-        `SELECT phase, late_create_risk, resolved_at FROM opencode_session_orphans
+        `SELECT phase FROM opencode_session_orphans
           WHERE conversation_id = ? AND session_id = ?`,
       )
-      .get(conv.id, "sess-p6-fail") as {
-      phase: string;
-      late_create_risk: number;
-      resolved_at: number | null;
-    } | null;
-    expect(marker?.phase).toBe("delete");
-    expect(marker?.late_create_risk).not.toBe(0);
-    expect(marker?.resolved_at).toBeNull();
+      .get(conv.id, "sess-p6-fail") as { phase: string } | null;
+    expect(marker).toBeNull();
 
     // The service seam recorded its best-effort failure behaviorally: a
     // failed termination is swallowed as terminated:false (never blocks the

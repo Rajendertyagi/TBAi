@@ -111,9 +111,11 @@ async function createOpenCodeConversation(sessionId: string | null): Promise<str
 
 function journalRows(conversationId: string): number {
   return (
-    (db
-      .query("SELECT COUNT(*) AS n FROM opencode_session_orphans WHERE conversation_id = ?")
-      .get(conversationId) as { n: number } | null)?.n ?? 0
+    (
+      db
+        .query("SELECT COUNT(*) AS n FROM opencode_session_orphans WHERE conversation_id = ?")
+        .get(conversationId) as { n: number } | null
+    )?.n ?? 0
   );
 }
 
