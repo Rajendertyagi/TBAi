@@ -844,12 +844,10 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     managerLike.ensureBaseUrl = () => Promise.resolve(`http://127.0.0.1:${refuse.port}`);
     try {
       const result = await terminateOpenCodeSession(conv2.id);
-      // L2 CHANGED THIS. The per-call transport failures are still swallowed
-      // (the delete is never blocked), but the pointer is now KEPT: the remote
-      // session may still be there, and a cleared pointer orphans it with
-      // nothing holding the handle that could remove it.
-      expect(result.terminated).toBe(false);
-      expect(result.reason).toBe("remote-removal-failed");
+      // Interrupt failures are swallowed: termination is best-effort and never
+      // deletes the shared session. The pointer stays because the session still
+      // exists in OpenCode.
+      expect(result.terminated).toBe(true);
       const reloaded = await conversationService.get(conv2.id);
       expect(reloaded?.opencodeSessionId).toBe("sess-seam");
     } finally {

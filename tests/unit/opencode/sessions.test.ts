@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+﻿import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { ClientError } from "@opencode/client";
 import * as realOpenCodeClient from "@/services/opencode/client.ts";
 
@@ -6,7 +6,7 @@ import * as realOpenCodeClient from "@/services/opencode/client.ts";
  * Tests for session termination (V2 interrupt -> remove), the liveness probe,
  * and the RT-001 create/persist window.
  *
- * Isolation: `sessions.ts` reaches the outside world through four seams —
+ * Isolation: `sessions.ts` reaches the outside world through four seams â€”
  * `conversationService` (storage), `opencodeOrphanService` (the durable
  * journal), `openCodeServerManager.ensureBaseUrl` (process ownership) and
  * `createOpenCodeClient` (the official V2 client). All four are stubbed, so no
@@ -234,7 +234,6 @@ const { createOpenCodeClient } = await import("@/services/opencode/client.ts");
 const { OpenCodeError } = await import("@/services/opencode/errors.ts");
 const {
   terminateOpenCodeSession,
-  terminateSessionForConversationDeletion,
   isOpenCodeSessionLive,
   ensureOpenCodeSession,
 } = await import("@/services/opencode/sessions.ts");
@@ -304,129 +303,24 @@ beforeEach(() => {
   verifyFailsAfterEntryRead = null;
 });
 
-describe("terminateOpenCodeSession — V2 call mapping", () => {
-  it("B/C. calls session.interrupt then session.remove with the stored id", async () => {
+describe("terminateOpenCodeSession - interrupt only", () => {
+  it("issues interrupt and never removes the shared session", async () => {
     const result = await terminateOpenCodeSession("conv-1");
-    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
     expect(result).toEqual({ terminated: true });
-  });
-
-  it("D. preserves lifecycle order: interrupt strictly before remove", async () => {
-    await terminateOpenCodeSession("conv-1");
-    expect(calls.indexOf(`interrupt:${LIVE_ID}`)).toBeLessThan(calls.indexOf(`remove:${LIVE_ID}`));
-  });
-
-  it("clears the persisted pointer after a successful termination", async () => {
-    await terminateOpenCodeSession("conv-1");
-    // The pointer and the owning-service key describe one binding, so they are
-    // cleared in the same update. A surviving key would claim a history that no
-    // longer exists (H3/B3).
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: null, opencodeServiceOwner: null } },
-    ]);
-    // The journal is SETTLED, never deleted outright: a risk-bearing row must
-    // survive so a lost create request that recreates the id stays recoverable.
-    expect(settledSessions).toEqual([
-      { conversationId: "conv-1", sessionId: LIVE_ID, at: expect.any(Number) },
-    ]);
-    expect(deletedIntents).toEqual([]);
-  });
-
-  it("retains a risk-bearing journal row after a successful termination", async () => {
-    settleImpl = async () => "retained";
-
-    const result = await terminateOpenCodeSession("conv-1");
-
-    expect(result).toEqual({ terminated: true });
-    expect(settledSessions).toHaveLength(1);
-    expect(deletedIntents).toEqual([]);
-    // The remote session is gone, so the pointer still reflects reality.
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: null, opencodeServiceOwner: null } },
-    ]);
-  });
-
-  it("releases a risk-free intent through settlement, never by an unconditional delete", async () => {
-    settleImpl = async () => "released";
-
-    const result = await terminateOpenCodeSession("conv-1");
-
-    expect(result).toEqual({ terminated: true });
-    expect(settledSessions).toHaveLength(1);
-    expect(deletedIntents).toEqual([]);
-  });
-
-  it("deletes nothing when settlement fails, and still clears the pointer", async () => {
-    settleImpl = async () => {
-      throw new Error("database is closed");
-    };
-
-    const result = await terminateOpenCodeSession("conv-1");
-
-    // The remote removal was confirmed, so `terminated` is unchanged; the
-    // journal failure fails CLOSED (no delete) and is logged.
-    expect(result).toEqual({ terminated: true });
-    expect(deletedIntents).toEqual([]);
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: null, opencodeServiceOwner: null } },
-    ]);
-  });
-
-  it("D. stays best-effort: a failing interrupt still lets remove run", async () => {
-    interruptImpl = async () => {
-      throw sessionNotFound(LIVE_ID);
-    };
-    const result = await terminateOpenCodeSession("conv-1");
-    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
-    expect(result).toEqual({ terminated: true });
-  });
-
-  it("L2: a failing remove KEEPS the pointer, so the session is not orphaned", async () => {
-    // L2 CHANGED THIS. The old behaviour cleared the pointer even when the
-    // remote removal failed, which ORPHANED the session: the server still had
-    // it, and nothing held the handle that could remove it. A kept pointer is
-    // recoverable - the next attempt tries again.
-    removeImpl = async () => {
-      throw sessionNotFound(LIVE_ID);
-    };
-    const result = await terminateOpenCodeSession("conv-1");
-    expect(result.terminated).toBe(false);
-    expect(result.reason).toBe("remote-removal-failed");
-    // The pointer is NOT cleared and the journal obligation is NOT settled:
-    // the remote session may still be live.
+    expect(calls).toEqual([`interrupt:${LIVE_ID}`]);
+    // The pointer stays: the session still exists in OpenCode.
     expect(updates).toEqual([]);
     expect(settledSessions).toEqual([]);
     expect(deletedIntents).toEqual([]);
   });
 
-  it("L2: a failing remove keeps the pointer, but a SUCCESSFUL one clears it", async () => {
-    removeImpl = async () => {
-      throw sessionNotFound(LIVE_ID);
-    };
-    await terminateOpenCodeSession("conv-1");
-    expect(updates).toEqual([]);
-
-    // The next attempt succeeds, and only then is the pointer cleared.
-    removeImpl = async () => undefined;
-    const result = await terminateOpenCodeSession("conv-1");
-    expect(result.terminated).toBe(true);
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: null, opencodeServiceOwner: null } },
-    ]);
-  });
-
-  it("stays best-effort when BOTH calls fail", async () => {
+  it("stays best-effort when interrupt fails", async () => {
     interruptImpl = async () => {
       throw new ClientError("Transport", { cause: new Error("boom") });
     };
-    removeImpl = async () => {
-      throw new ClientError("UnexpectedStatus", { cause: { status: 500 } });
-    };
     const result = await terminateOpenCodeSession("conv-1");
-    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
-    // The removal failed, so the pointer is kept and the reason is reported.
-    expect(result.terminated).toBe(false);
-    expect(result.reason).toBe("remote-removal-failed");
+    expect(calls).toEqual([`interrupt:${LIVE_ID}`]);
+    expect(result).toEqual({ terminated: true });
     expect(updates).toEqual([]);
   });
 
@@ -434,19 +328,11 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
     conversation = { engine: "opencode", opencodeSessionId: null };
     const result = await terminateOpenCodeSession("conv-1");
     expect(calls).toEqual([]);
-    expect(updates).toEqual([]);
-    expect(result).toEqual({ terminated: false });
-  });
-
-  it("does nothing when the conversation does not exist", async () => {
-    conversation = null;
-    const result = await terminateOpenCodeSession("conv-1");
-    expect(calls).toEqual([]);
     expect(result).toEqual({ terminated: false });
   });
 });
 
-describe("isOpenCodeSessionLive — liveness semantics", () => {
+describe("isOpenCodeSessionLive â€” liveness semantics", () => {
   it("G. reads a healthy V2 response as live", async () => {
     getImpl = async () => ({ id: LIVE_ID });
     expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(true);
@@ -509,7 +395,7 @@ describe("isOpenCodeSessionLive — liveness semantics", () => {
   });
 });
 
-describe("ensureOpenCodeSession — the binding carries the event-stream scope", () => {
+describe("ensureOpenCodeSession â€” the binding carries the event-stream scope", () => {
   // The browser runtime addresses a session's event stream by its directory: an
   // unscoped `GET /event` is a stub that carries no session events, which is why
   // a finished reply used to appear only after a refresh. The seam therefore has
@@ -600,18 +486,18 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
 });
 
 /**
- * RT-001 — the create→persist window. A successful remote create must never be
+ * RT-001 â€” the createâ†’persist window. A successful remote create must never be
  * followed by a persistence failure that silently loses TBAi's only handle to
  * the remote session. These cases force `conversationService.update` to fail
  * immediately after a real (mocked) remote create and assert the resulting
- * state — no false success, no silent orphan, no unredacted log leak.
+ * state â€” no false success, no silent orphan, no unredacted log leak.
  *
  * Three-outcome verification: a read that FAILS is "unknown", and the code
  * must NOT treat it as absence. The remote session stays put, an open
  * durable record is written via `opencodeOrphanService`, and the operation
  * still fails.
  */
-describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
+describe("ensureOpenCodeSession â€” RT-001 create/persist window", () => {
   /** A create-path conversation: no stored pointer, so `create` runs. */
   function noPointerConversation(): void {
     conversation = { engine: "opencode", opencodeSessionId: null };
@@ -709,13 +595,9 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(orphanRecords[0]!.persistErrorCategory).toBeDefined();
   });
 
-  it("D. removes the exact remote session when absence is confirmed and the removal is confirmed", async () => {
+  it("D. keeps the remote session and its journal record when the pointer write fails", async () => {
     noPointerConversation();
     failPersistAndNotPersisted();
-    // Confirmation lookup: the session is gone after removal.
-    getImpl = async (args) => {
-      throw sessionNotFound(args.sessionID);
-    };
 
     let caught: unknown;
     try {
@@ -726,20 +608,20 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
 
     expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
     const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    expect(failure.cleanup).toBe("confirmed_removed");
+    expect(failure.cleanup).toBe("retained");
     expect(failure.sessionId).toBe(createdId());
     expect(failure.cause).toBeInstanceOf(Error);
-    // Removal targeted THIS id and was confirmed by a follow-up lookup.
-    expect(calls).toEqual([
-      `create:${SUBMITTED_DIRECTORY}`,
-      `remove:${createdId()}`,
-      `get:${createdId()}`,
-    ]);
-    // No binding was handed back, no orphan record: the session is gone.
+    // No remote mutation: the shared session is left in OpenCode.
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
     expect(conversation?.opencodeSessionId).toBeNull();
-    expect(orphanRecords).toEqual([]);
-    // The intent is no longer needed once the id is proven absent.
-    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: createdId() }]);
+    // The unresolved intent/orphan record survives for user diagnostics.
+    expect(failure.recorded).toBe(true);
+    expect(orphanRecords).toHaveLength(1);
+    expect(orphanRecords[0]).toMatchObject({
+      conversationId: "conv-1",
+      sessionId: createdId(),
+    });
+    expect(deletedIntents).toEqual([]);
   });
 
   it("D2. retains the intent when a retried create may still be outstanding", async () => {
@@ -771,60 +653,28 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
     const id = createdId();
     expect(createArgs.map((args) => args.id)).toEqual([id, id]);
-    // The compensating removal was confirmed gone at that instant...
-    expect(failure.cleanup).toBe("confirmed_removed");
+    // No compensating removal: the shared session is retained in OpenCode.
+    expect(failure.cleanup).toBe("retained");
     expect(failure.sessionId).toBe(id);
-    // ...but the durable intent is deliberately KEPT, because an outstanding
-    // same-id create can recreate the session after the removal. The error
-    // still reports that a recovery record exists.
     expect(failure.recorded).toBe(true);
     expect(deletedIntents).toEqual([]);
     expect(intentRecords.length).toBe(1);
-    expect(orphanRecords).toEqual([]);
+    expect(orphanRecords).toHaveLength(1);
     expect(conversation?.opencodeSessionId).toBeNull();
     expect(calls).toEqual([
       `create:${SUBMITTED_DIRECTORY}`,
       `get:${id}`,
       `create:${SUBMITTED_DIRECTORY}`,
-      `remove:${id}`,
-      `get:${id}`,
     ]);
   });
 
-  it("E. records the orphan durably when removal fails", async () => {
+  it("E. records the orphan durably regardless of any remote failure injection", async () => {
     noPointerConversation();
     failPersistAndNotPersisted();
+    // No remote cleanup is attempted, so injected remove/probe failures are inert.
     removeImpl = async () => {
       throw new ClientError("Transport", { cause: new Error("offline") });
     };
-
-    let caught: unknown;
-    try {
-      await ensureOpenCodeSession("conv-1");
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
-    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    expect(failure.cleanup).toBe("removal_failed");
-    expect(failure.sessionId).toBe(createdId());
-    expect(failure.recorded).toBe(true);
-    expect(failure.cleanupError).toBeDefined();
-    // A durable record was written; the error does not claim removal succeeded.
-    expect(orphanRecords.length).toBe(1);
-    expect(orphanRecords[0]).toMatchObject({
-      conversationId: "conv-1",
-      sessionId: createdId(),
-      cleanupErrorCategory: "network",
-    });
-  });
-
-  it("F. keeps the outcome conservative when removal succeeded but the confirmation lookup was inconclusive", async () => {
-    noPointerConversation();
-    failPersistAndNotPersisted();
-    // Remove resolves; the confirmation lookup itself fails (transport).
-    removeImpl = async () => undefined;
     getImpl = async () => {
       throw new ClientError("Transport", { cause: new Error("offline") });
     };
@@ -838,41 +688,16 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
 
     expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
     const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    // A failed lookup is NOT positive evidence of absence.
-    expect(failure.cleanup).toBe("lookup_inconclusive");
+    expect(failure.cleanup).toBe("retained");
     expect(failure.sessionId).toBe(createdId());
     expect(failure.recorded).toBe(true);
-    // The outcome is recorded conservatively, not claimed as removed.
+    expect(failure.cleanupError).toBeUndefined();
     expect(orphanRecords.length).toBe(1);
     expect(orphanRecords[0]).toMatchObject({
       conversationId: "conv-1",
       sessionId: createdId(),
-      cleanupErrorCategory: "network",
     });
-  });
-
-  it("H. reports removal_failed when the remove call resolves but the session remains", async () => {
-    noPointerConversation();
-    failPersistAndNotPersisted();
-    // The remove call succeeds, but the follow-up lookup still finds it. A
-    // resolved call is not proof of removal.
-    removeImpl = async () => undefined;
-    getImpl = async (args) => ({ id: args.sessionID });
-
-    let caught: unknown;
-    try {
-      await ensureOpenCodeSession("conv-1");
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
-    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    expect(failure.cleanup).toBe("removal_failed");
-    expect(failure.recorded).toBe(true);
-    expect(orphanRecords.length).toBe(1);
-    // The intent is NOT deleted: the session may still be live.
-    expect(deletedIntents).toEqual([]);
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
   });
 
   it("G. does not leak the session id into log messages (redaction regression)", async () => {
@@ -1283,8 +1108,8 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
 
     expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
     const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    expect(failure.cleanup).toBe("removal_failed");
-    // The pre-create intent is still an open, actionable recovery record.
+    expect(failure.cleanup).toBe("retained");
+    // The pre-create intent is still an open recovery record for diagnostics.
     expect(failure.recorded).toBe(true);
     expect(intentRecords.length).toBe(1);
     expect(deletedIntents).toEqual([]);
@@ -1292,111 +1117,10 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
 });
 
 /**
- * RT-011: the deletion coordinator's remote half. It must terminate ONLY the
- * exact session the request snapshot named, and it must never write the pointer
- * or settle the journal itself — those belong to the coordinator.
+ * Legacy external-bound conversations are refused without probing or starting
+ * or settle the journal itself â€” those belong to the coordinator.
  */
-describe("terminateSessionForConversationDeletion — entry-snapshot guard", () => {
-  it("terminates the matching session and leaves journal/pointer untouched", async () => {
-    removeImpl = async () => {
-      throw sessionNotFound(LIVE_ID);
-    };
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result).toEqual({ outcome: "removed", error: undefined });
-    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
-    // Settlement and pointer clearing are the coordinator's job.
-    expect(updates).toEqual([]);
-    expect(settledSessions).toEqual([]);
-    expect(deletedIntents).toEqual([]);
-  });
-
-  it("refuses without any remote call when the conversation no longer exists", async () => {
-    conversation = null;
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result).toEqual({ outcome: "missing" });
-    expect(calls).toEqual([]);
-  });
-
-  it("refuses when the engine changed after the snapshot", async () => {
-    conversation = { engine: "direct", opencodeSessionId: LIVE_ID };
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result).toEqual({ outcome: "blocked" });
-    expect(calls).toEqual([]);
-  });
-
-  it("refuses when the pointer was rebound to a different session", async () => {
-    conversation = { engine: "opencode", opencodeSessionId: "ses_other0001" };
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result).toEqual({ outcome: "blocked" });
-    expect(calls).toEqual([]);
-  });
-
-  it("reports unconfirmed when removal fails, without clearing anything", async () => {
-    removeImpl = async () => {
-      throw new ClientError("Transport", { cause: new Error("offline") });
-    };
-
-    const result = await terminateSessionForConversationDeletion({
-      conversationId: "conv-1",
-      expectedSessionId: LIVE_ID,
-      directory: SUBMITTED_DIRECTORY,
-    });
-
-    expect(result.outcome).toBe("unconfirmed");
-    expect(updates).toEqual([]);
-    expect(settledSessions).toEqual([]);
-  });
-
-  it("reports unreachable when the managed server cannot provide a base URL", async () => {
-    const sm = openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> };
-    const real = sm.ensureBaseUrl;
-    sm.ensureBaseUrl = async () => {
-      throw new Error("server unavailable");
-    };
-    try {
-      const result = await terminateSessionForConversationDeletion({
-        conversationId: "conv-1",
-        expectedSessionId: LIVE_ID,
-        directory: SUBMITTED_DIRECTORY,
-      });
-      expect(result.outcome).toBe("unreachable");
-      expect(calls).toEqual([]);
-      expect(updates).toEqual([]);
-    } finally {
-      sm.ensureBaseUrl = real;
-    }
-  });
-});
-
-/**
- * Managed-only runtime: legacy external-bound conversations fail closed and
- * never reach the managed service.
- */
-describe("ensureOpenCodeSession — legacy external-bound conversations", () => {
+describe("ensureOpenCodeSession â€” legacy external-bound conversations", () => {
   it("refuses a legacy remote-bound conversation without probing or starting managed runtime", async () => {
     conversation = {
       engine: "opencode",
