@@ -10,8 +10,6 @@ export interface DeleteConversationResult {
   conversationId: string;
   /** A locally-tracked run was found and a server cancel was issued. */
   runCancelled: boolean;
-  /** The managed OpenCode session was terminated (false = nothing to do). */
-  opencodeTerminated: boolean;
 }
 
 /**
@@ -47,44 +45,20 @@ export async function cancelActiveRun(threadKey: string | null | undefined): Pro
  * ONLY, in fixed order:
  *   1. cancel a locally-tracked active run (server-owned work must not
  *      outlive the delete);
- *   2. best-effort terminate/invalidate the OpenCode session (never blocks);
- *   3. delete the conversation row + messages (authoritative; throws).
+ *   2. delete the conversation row + messages (authoritative; throws).
  *
- * Never touches tabs, routes, or runtime state — the UI layer
+ * Deleting a conversation never touches the shared OpenCode session: no
+ * terminate request is issued. Stopping active work is a separate, explicit
+ * operation. Never touches tabs, routes, or runtime state — the UI layer
  * (`useDeleteConversation`) consumes the result for those, keeping domain and
- * projection structurally separate. Idempotent: absent runs, sessions, and
- * rows (404) resolve as already-complete. Throws ONLY when the authoritative
- * row delete fails; callers must surface that (nothing was removed).
+ * projection structurally separate. Idempotent: absent runs and rows (404)
+ * resolve as already-complete. Throws ONLY when the authoritative row delete
+ * fails; callers must surface that (nothing was removed).
  *
  * @param ref - conversation id (remoteId) being deleted.
  */
 export async function deleteConversation(ref: string): Promise<DeleteConversationResult> {
   const runCancelled = await cancelActiveRun(ref);
-
-  let opencodeTerminated = false;
-  try {
-    const res = await apiFetch("/api/opencode/session/terminate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId: ref }),
-    });
-    if (res.ok) {
-      const data = (await res.json().catch(() => ({}))) as {
-        terminated?: boolean;
-      };
-      opencodeTerminated = data.terminated === true;
-    } else {
-      logger.debug("chat", "opencode_terminate_skipped", {
-        threadId: ref,
-        status: res.status,
-      });
-    }
-  } catch (err) {
-    logger.debug("chat", "opencode_terminate_skipped", {
-      threadId: ref,
-      errorType: err instanceof Error ? err.name : typeof err,
-    });
-  }
 
   const res = await apiFetch(`/api/conversations/${ref}`, { method: "DELETE" });
   // 404 means already gone (repeat call or raced delete): the desired end
@@ -101,7 +75,7 @@ export async function deleteConversation(ref: string): Promise<DeleteConversatio
     /* best effort */
   }
 
-  return { conversationId: ref, runCancelled, opencodeTerminated };
+  return { conversationId: ref, runCancelled };
 }
 
 /**
