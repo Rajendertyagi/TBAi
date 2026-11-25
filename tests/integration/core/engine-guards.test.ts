@@ -774,11 +774,8 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       .get(conv.id, "sess-p6-fail") as { phase: string } | null;
     expect(marker).toBeNull();
 
-    // The service seam recorded its best-effort failure behaviorally: a
-    // failed termination is swallowed as terminated:false (never blocks the
-    // delete). The warn entry may be filtered by the logger's level gate, so
-    // we verify the contract at the service seam: terminateOpenCodeSession
-    // against a dead transport returns { terminated: false } without throwing.
+    // The service seam verifies that a failed interrupt is reported honestly
+    // as terminated:false and never throws or deletes the shared session.
     const { terminateOpenCodeSession } = await import("@/services/opencode/sessions.ts");
     const conv2 = await conversationService.create(
       conversationInput({
@@ -791,9 +788,8 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
       }),
     );
     await conversationService.update(conv2.id, { opencodeSessionId: "sess-seam" });
-    // For the service-seam half: make the transport calls themselves fail
-    // (a server that refuses the interrupt/remove) so terminateOpenCodeSession
-    // reports the failure without throwing.
+    // For the service-seam half: make the transport refuse the interrupt so
+    // terminateOpenCodeSession reports the failure without throwing.
     const { openCodeServerManager: smMod2 } = await import("@/services/opencode/serverManager.ts");
     const managerLike = smMod2 as unknown as ServerManagerLike;
     const real2 = managerLike.ensureBaseUrl;
@@ -808,10 +804,9 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     managerLike.ensureBaseUrl = () => Promise.resolve(`http://127.0.0.1:${refuse.port}`);
     try {
       const result = await terminateOpenCodeSession(conv2.id);
-      // Interrupt failures are swallowed: termination is best-effort and never
-      // deletes the shared session. The pointer stays because the session still
-      // exists in OpenCode.
-      expect(result.terminated).toBe(true);
+      // A failed interrupt is reported as terminated:false; no session is
+      // deleted and the pointer stays because the session still exists.
+      expect(result.terminated).toBe(false);
       const reloaded = await conversationService.get(conv2.id);
       expect(reloaded?.opencodeSessionId).toBe("sess-seam");
     } finally {

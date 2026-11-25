@@ -313,13 +313,13 @@ describe("terminateOpenCodeSession - interrupt only", () => {
     expect(deletedIntents).toEqual([]);
   });
 
-  it("stays best-effort when interrupt fails", async () => {
+  it("does not claim work stopped when the interrupt fails", async () => {
     interruptImpl = async () => {
       throw new ClientError("Transport", { cause: new Error("boom") });
     };
     const result = await terminateOpenCodeSession("conv-1");
     expect(calls).toEqual([`interrupt:${LIVE_ID}`]);
-    expect(result).toEqual({ terminated: true });
+    expect(result).toEqual({ terminated: false });
     expect(updates).toEqual([]);
   });
 

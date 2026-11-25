@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   D1 Direct  + simple (Chat mode): draft → send → /chat/<id> → reload → delete
  *   D2 Direct  + project: folder "+" → preset → send → highlight → reload → delete
  *   D3 OpenCode + simple: draft (OpenCode engine) → send → /code/<id> →
- *      session bound → reload resumes → terminate clears pointer → delete
+ *      session bound → reload resumes → terminate interrupts only → delete
  *   D4 OpenCode + project: New Project dialog (OpenCode) → /code/<id> →
  *      highlight → send → reload → delete
  *
@@ -314,7 +314,7 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
 // D3 OpenCode + simple (quota-free: session bind/resume/terminate need no
 // model call — only sends do, and D1 proves the send leg).
 // ---------------------------------------------------------------------------
-test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminate clears", async ({
+test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminate keeps it", async ({
   page,
 }) => {
   const created = await createConv(page, {
@@ -343,13 +343,14 @@ test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminat
     const rowAfter = await getConv(page, convId);
     expect(rowAfter.opencodeSessionId).toBe(sessionA);
 
-    // Terminate: pointer cleared, server-side session ended.
+    // Terminate interrupts active work only. The shared OpenCode session and
+    // the TBAi pointer remain; the user manages session lifetime in OpenCode.
     const term = await page.request.post("/api/opencode/session/terminate", {
       data: { conversationId: convId },
     });
     expect(term.ok(), `terminate → ${term.status()}`).toBe(true);
     const after = await getConv(page, convId);
-    expect(after.opencodeSessionId).toBeNull();
+    expect(after.opencodeSessionId).toBe(sessionA);
   } finally {
     await rmConv(page, convId);
   }

@@ -156,6 +156,22 @@ describe("DELETE /api/conversations/:id — local-only teardown", () => {
     expect(preserved?.opencodeSessionId).toBe("ses_rebind_s2");
   });
 
+  it("preserves child sessions when the parent conversation is deleted", async () => {
+    const convId = await createOpenCodeConversation("ses_parent");
+    await withFake(async (fake) => {
+      fake.sessions.add("ses_parent");
+      fake.sessions.add("ses_child_1");
+      fake.sessions.add("ses_child_2");
+      const res = await app.request(`/api/conversations/${convId}`, { method: "DELETE" });
+      expect(res.status).toBe(200);
+      expect(fake.calls).toEqual([]);
+      expect(fake.sessions.has("ses_parent")).toBe(true);
+      expect(fake.sessions.has("ses_child_1")).toBe(true);
+      expect(fake.sessions.has("ses_child_2")).toBe(true);
+    });
+    expect(await conversationService.get(convId)).toBeNull();
+  });
+
   it("deletes a conversation with no session pointer without any remote request", async () => {
     const convId = await createOpenCodeConversation(null);
     await withFake(async (fake) => {

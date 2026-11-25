@@ -196,14 +196,12 @@ app.post("/session/reconcile-directory", async (c) => {
 });
 
 /**
- * Session termination for conversation teardown. Best-effort by contract (see
- * `terminateOpenCodeSession`): aborts live work, deletes the server-side
- * session, clears the persisted pointer. Missing conversation/session/server
- * surfaces as `{ terminated: false }`, never an error, so the deletion
- * coordinator can call it unconditionally. A failed REMOVAL also reports
- * `{ terminated: false, reason }` and keeps the pointer, because a cleared
- * pointer orphans a session the server still has. Registered before the proxy
- * catch-all below.
+ * Explicit interruption of active work for one conversation. Best-effort by
+ * contract (see `terminateOpenCodeSession`): calls `session.interrupt` and
+ * leaves the shared OpenCode session and the persisted pointer intact. TBAi
+ * never deletes a shared session. Missing conversation/session or a failed
+ * interrupt surfaces as `{ terminated: false }`, never an error. Registered
+ * before the proxy catch-all below.
  */
 app.post("/session/terminate", async (c) => {
   const parsed = sessionRequestSchema.safeParse(await c.req.json().catch(() => ({})));

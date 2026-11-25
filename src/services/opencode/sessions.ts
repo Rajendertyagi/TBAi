@@ -144,20 +144,14 @@ export class OpenCodeSessionMismatchError extends Error {
  * conversation (RT-001). Carries enough state for diagnosis and recovery:
  *
  *  - `cleanup` classifies what happened after the persistence failure:
- *    `confirmed_removed` (positive evidence of absence), `removal_failed`
- *    (the remove call itself failed and the session may still be live),
- *    `lookup_inconclusive` (the confirmation lookup could not establish
- *    absence), `verification_unknown` (the pointer state itself was
- *    unknown, so removal was refused and no claim about the session's
- *    current state is made).
+ *    `retained` (the remote session was kept in OpenCode for the user to
+ *    manage) or `verification_unknown` (the pointer state itself was unknown,
+ *    so no claim about the session's current state is made). TBAi never
+ *    deletes a shared session from a failed create.
  *  - `recorded` is true when a durable recovery record was actually written
  *    (or was already open) â€” the answer to "can a future reconciler act on
  *    this?". A false here means the journal write itself failed and the
  *    only record is the error-level log.
- *    `confirmed_removed` with `recorded: true` is a deliberate combination:
- *    the session is gone NOW, but a create attempt whose response was lost may
- *    still recreate the id, so the risk-bearing intent was kept for the
- *    reconciler rather than deleted.
  *
  * The class carries the session id on purpose: it is the handle the recovery
  * record needs, and it stays on the error object rather than in a log
@@ -169,24 +163,13 @@ export class OpenCodeSessionPersistError extends Error {
   constructor(
     readonly conversationId: string,
     readonly sessionId: string,
-    readonly cleanup:
-      | "confirmed_removed"
-      | "removal_failed"
-      | "lookup_inconclusive"
-      | "verification_unknown"
-      | "retained",
+    readonly cleanup: "verification_unknown" | "retained",
     readonly recorded: boolean,
     readonly cleanupError: unknown,
     options: ErrorOptions,
   ) {
     super(
       {
-        confirmed_removed:
-          "OpenCode session could not be persisted; the remote session was confirmed removed",
-        removal_failed:
-          "OpenCode session could not be persisted and remote removal could not complete",
-        lookup_inconclusive:
-          "OpenCode session could not be persisted; removal was attempted but the outcome is inconclusive",
         verification_unknown:
           "OpenCode session could not be persisted and its pointer state is unknown; no cleanup was attempted",
         retained:
@@ -426,8 +409,8 @@ export async function isOpenCodeSessionLive(
  *  - `bound` â€” the read succeeded and the row carries exactly this session
  *    id. The remote session is TBAi's; keep it.
  *  - `unbound` â€” the read succeeded and the row has no pointer or a different
- *    one. No TBAi handle exists; a failed compensating removal may be
- *    recorded as an orphan.
+ *    one. No TBAi handle exists; the remote session is kept and recorded as an
+ *    orphan diagnostic.
  *  - `unknown` â€” the read failed. The caller may NOT delete the session.
  *
  * @returns The outcome; never throws.
@@ -592,7 +575,8 @@ async function settleBoundIntent(
  * operation already has to fail), but it is surfaced as an error-level log
  * with enough context for diagnosis. A durable record is still open in every
  * case that reaches here: the create path runs only after a mandatory intent,
- * and that intent is only deleted once the session is provably bound or gone.
+ * and that intent is only deleted when the server definitively rejected the
+ * create (no session exists).
  * So `recorded` reports true rather than claiming every durable trace was lost.
  *
  * @returns True when a durable record is (still) open and actionable.
@@ -1305,11 +1289,12 @@ export async function terminateOpenCodeSession(
     try {
       await client.session.interrupt({ sessionID: sessionId });
     } catch (err) {
-      // An idle run has nothing to interrupt; this is expected on the happy path.
-      logger.debug("opencode", "opencode.session_interrupt_skipped", {
+      // The interrupt did not reach the server: do not claim work was stopped.
+      logger.warn("opencode", "opencode.session_interrupt_failed", {
         conversationId,
         ...classifyError(toOpenCodeError(err)),
       });
+      return { terminated: false };
     }
     logger.info("opencode", "opencode.session_interrupted", {
       conversationId,
