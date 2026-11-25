@@ -2,6 +2,15 @@
  * The OpenCode proxy's upstream route allowlist, and the scope classification
  * that tells the proxy where a route's workspace comes from.
  *
+ * Shared-session mutation policy: the allowlist is the complete set of
+ * operations TBAi may perform on a shared OpenCode session, including imported
+ * ones. Allowed: reads (session.get, message.list, inbox.list, form.list,
+ * permission.list, event.subscribe) and interactions (prompt, compact,
+ * interrupt, inbox.cancel, revert.*, form.reply/cancel, permission.reply,
+ * switchModel, switchAgent). Protected lifecycle operations — session.remove,
+ * move, fork, archive/unarchive, update, environment, export — are absent and
+ * must stay absent. TBAi never deletes a shared session.
+ *
  * ## WHY AN ALLOWLIST
  *
  * The proxy used to forward **every** path under `/api/opencode/*` to the

@@ -1,6 +1,19 @@
 /**
  * OpenCode conversation history boundary and scope resolution.
  *
+ * Terminology — these are five distinct concepts and must not be collapsed:
+ *  1. session creator — the client that called `session.create` (TBAi or an
+ *     external OpenCode client); not stored by TBAi.
+ *  2. shared service identity — which service scope addresses the history
+ *     (`local` or `remote:<origin>`); this module resolves it. It is a routing
+ *     key, NOT proof of exclusive session ownership.
+ *  3. TBAi conversation association — a `conversations` row pointing at a
+ *     session id; association is not ownership.
+ *  4. permission to interact — a compatible owner plus an associated row allow
+ *     reads and supported operations (prompts, interrupts, model switches).
+ *  5. authority to delete — never inferred from the above. TBAi does not
+ *     automatically delete shared OpenCode sessions.
+ *
  * Provides a simple two-scope history ownership model:
  *
  * 1. "local" (canonical owner key: "local"):
