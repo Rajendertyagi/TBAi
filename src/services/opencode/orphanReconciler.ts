@@ -10,11 +10,7 @@ import { createManagedFallbackTransport } from "./connectionState";
 import { canonicalizeServiceOwner, LOCAL_HISTORY_OWNER } from "./historyBoundary";
 import type { OpenCodeTransport } from "./http";
 import { openCodeServerManager } from "./serverManager";
-import {
-  fetchOpenCodeSession,
-  isOpenCodeSessionCreateInFlight,
-  removeUnboundSession,
-} from "./sessions";
+import { fetchOpenCodeSession, isOpenCodeSessionCreateInFlight } from "./sessions";
 
 /**
  * Bounded, restart-safe reconciliation of the OpenCode session journal
@@ -142,17 +138,6 @@ export interface OpenCodeOrphanReconcilerDeps {
     at: number,
   ): Promise<"retained" | "cleared" | "absent">;
   /**
-   * Settles a `delete` marker after this pass confirmed the remote removal.
-   * Such a marker is audit-kept: a nonzero risk is reopened and retained (an
-   * outstanding create may recreate the freed id), a risk-free marker is
-   * stamped resolved. The generic ownership settlement never touches it.
-   */
-  settleDeleted(
-    conversationId: string,
-    sessionId: string,
-    at: number,
-  ): Promise<"retained" | "released" | "absent">;
-  /**
    * Settles a positive-404 observation against the CURRENT durable row, in one
    * transaction. `recordProbe` has already stamped the epoch; this decides
    * whether the absence releases the row. A risk-bearing row is retained until
@@ -211,8 +196,10 @@ export interface OpenCodeOrphanReconcileReport {
   retainedBound: number;
   /** Rows cleared because the remote session is positively absent. */
   absent: number;
-  /** Rows cleared because their remote session was removed and confirmed gone. */
+  /** Rows cleared because their remote session was removed and confirmed gone. Always 0: TBAi never deletes shared sessions. */
   removed: number;
+  /** Unbound rows observed for diagnostics only; no remote mutation was issued. */
+  observed: number;
   /**
    * Risk-bearing sessions removed and confirmed gone, whose journal row was
    * deliberately KEPT: a create request may still be outstanding and recreate
@@ -318,85 +305,6 @@ async function settleOwnedRow(
 }
 
 /**
- * Settles the journal after this pass confirmed the remote removal.
- *
- * The same current-row rule decides the outcome: a risk-bearing row is kept
- * (removal frees the id, and an outstanding create may recreate it), a
- * risk-free row is cleared. Deciding from the listed record instead would let
- * a freshly re-armed obligation be cleared right after its session was
- * removed.
- */
-async function settleRemovedRow(
-  record: OpenCodeOrphanRecord,
-  reconcilerDeps: OpenCodeOrphanReconcilerDeps,
-  report: OpenCodeOrphanReconcileReport,
-): Promise<void> {
-  // A delete marker has its own terminal settlement: it is kept as an audit
-  // row rather than deleted, and a nonzero risk reopens it.
-  if (record.phase === "delete") {
-    try {
-      const outcome = await reconcilerDeps.settleDeleted(
-        record.conversationId,
-        record.sessionId,
-        now(),
-      );
-      if (outcome === "retained") {
-        report.retainedAfterRemoval += 1;
-        logger.info("opencode", "opencode.orphan_deleted_marker_retained", {
-          conversationId: record.conversationId,
-        });
-        return;
-      }
-      if (outcome === "absent") {
-        logger.debug("opencode", "opencode.orphan_deleted_marker_closed", {
-          conversationId: record.conversationId,
-        });
-      }
-      report.removed += 1;
-    } catch (error) {
-      report.unresolved += 1;
-      logger.warn("opencode", "opencode.orphan_deleted_marker_settle_failed", {
-        conversationId: record.conversationId,
-        ...classifyError(error),
-      });
-    }
-    return;
-  }
-
-  try {
-    const outcome = await reconcilerDeps.settleOwned(
-      record.conversationId,
-      record.sessionId,
-      now(),
-    );
-    if (outcome === "retained") {
-      report.retainedAfterRemoval += 1;
-      logger.info("opencode", "opencode.orphan_removed_retained", {
-        conversationId: record.conversationId,
-        phase: record.phase,
-      });
-      return;
-    }
-    // `cleared` and `absent` both leave no obligation this pass must carry:
-    // the removal was confirmed, and the row is settled.
-    if (outcome === "absent") {
-      logger.debug("opencode", "opencode.orphan_reconcile_removed_row_settled_concurrently", {
-        conversationId: record.conversationId,
-        phase: record.phase,
-      });
-    }
-    report.removed += 1;
-  } catch (error) {
-    report.unresolved += 1;
-    logger.warn("opencode", "opencode.orphan_reconcile_removed_settle_failed", {
-      conversationId: record.conversationId,
-      phase: record.phase,
-      ...classifyError(error),
-    });
-  }
-}
-
-/**
  * Runs one reconciliation pass. Never throws: this is background bookkeeping,
  * and a failure must not take the server down.
  *
@@ -425,6 +333,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
     retainedBound: 0,
     absent: 0,
     removed: 0,
+    observed: 0,
     retainedAfterRemoval: 0,
     lateRisk: 0,
     expiredAbsent: 0,
@@ -699,25 +608,14 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
 
-      // Rule 5: removal must be confirmed, not merely issued.
-      const { outcome } = await removeUnboundSession(client, record.sessionId);
-      if (outcome !== "removed") {
-        report.unresolved += 1;
-        logger.warn("opencode", "opencode.orphan_reconcile_remove_unconfirmed", {
-          conversationId: record.conversationId,
-          phase: record.phase,
-          outcome,
-        });
-        continue;
-      }
-      // Rule 6: the session is gone, but removal is not settlement. A create
-      // whose response was lost may still commit and recreate this exact id, so
-      // the journal decides against its CURRENT row: a risk-bearing obligation
-      // is kept (the present probe above already ended the absence epoch, so
-      // the next 404 starts a NEW post-removal horizon), while a risk-free row
-      // is released. If the id reappears, the next pass sees it and removes it
-      // again under the same rules.
-      await settleRemovedRow(record, reconcilerDeps, report);
+      // Diagnostic-only: TBAi never deletes a shared OpenCode session. The
+      // unbound row stays in the journal so the user can inspect it in
+      // OpenCode; no remote mutation is issued by this pass.
+      logger.warn("opencode", "opencode.orphan_reconcile_unbound_observed", {
+        conversationId: record.conversationId,
+        phase: record.phase,
+      });
+      report.observed += 1;
     }
 
     ticks += 1;
@@ -728,6 +626,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
       report.retainedBound > 0 ||
       report.removed > 0 ||
       report.retainedAfterRemoval > 0 ||
+      report.observed > 0 ||
       report.unresolved > 0
     ) {
       logger.info("opencode", "opencode.orphan_reconciled", {
@@ -739,6 +638,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         retainedBound: report.retainedBound,
         absent: report.absent,
         removed: report.removed,
+        observed: report.observed,
         retainedAfterRemoval: report.retainedAfterRemoval,
         lateRisk: report.lateRisk,
         expiredAbsent: report.expiredAbsent,
@@ -822,8 +722,6 @@ export const openCodeOrphanReconcilerDeps: OpenCodeOrphanReconcilerDeps = {
   },
   settleOwned: (conversationId, sessionId, at) =>
     opencodeOrphanService.settleOwnedSession({ conversationId, sessionId, at }),
-  settleDeleted: (conversationId, sessionId, at) =>
-    opencodeOrphanService.settleConfirmedDeletion({ conversationId, sessionId, at }),
   settleAbsent: (input) => opencodeOrphanService.settleAbsentSession(input),
   getOpenSessionRisk: (conversationId, sessionId) =>
     opencodeOrphanService.getOpenSessionRisk(conversationId, sessionId),
