@@ -2,8 +2,9 @@
 
 **Status:** INVESTIGATION + PLAN ONLY. No implementation authorized.
 **Date:** 2026-11-25 (revised after independent review and owner architecture direction)
-**Branch / HEAD:** `ui-foundation-upgrade` @ `42ce23c` (review baseline; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`)
-**Mode:** documentation and investigation only. No source code, configuration, database, session, WAL, backup, or Git state was modified by this revision. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
+**Report revision:** `ui-foundation-upgrade` @ `ef89107` (this report is committed and pushed; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`).
+**Source-code review baseline:** `42ce23c` — the last commit whose implementation was audited. All later commits are documentation-only, so the source described here is unchanged.
+**Mode:** documentation and investigation only. No source code, configuration, database, session, WAL, or backup state was modified. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
 
 > **Architecture correction (owner direction, mandatory).** The previous revision recommended a private TBAi OpenCode database via `OPENCODE_DB`, a `VACUUM INTO` snapshot, and isolation from other clients. **That direction is reversed.** TBAi must continue using the **shared OpenCode database** so that conversations created by OpenCode CLI, desktop, and other clients remain discoverable and importable. No private DB, no `OPENCODE_DB` override, no database copy/migration, and no disabling of other OpenCode clients. Historical recovery is out of scope. This document preserves the historical investigation as background evidence and replaces the prevention plan with a **future session-storage, discovery, import, and lifecycle reliability plan** on the shared database.
 
@@ -35,8 +36,8 @@ This is deliberately smaller than a claim-based design. We accept a small possib
 
 | Category | Content in this report |
 |---|---|
-| **Independently verified through GitHub** | Remote branch HEAD `42ce23c` matched local HEAD at the start of this revision (`git ls-remote`). The pushed report at that commit is the review baseline; this revision is local and uncommitted. |
-| **Verified through repository implementation (this session)** | All `src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `42ce23c`. |
+| **Independently verified through GitHub** | Remote branch HEAD `ef89107` matches local HEAD (`git ls-remote`). This report revision is committed and pushed; the source-code review baseline is the earlier `42ce23c`. |
+| **Verified through repository implementation (this session)** | All `src/...`, `web/src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `42ce23c`; no source changed in later documentation-only commits. |
 | **Agent-reported workstation evidence (not independently re-checked by the owner)** | The nine missing session IDs, DB file sizes, log counts, credential metadata, and legacy-table absence in §3. These were measured on this workstation by the agent; the owner has not independently re-run the queries. |
 | **Verified through CI results** | None in this revision. No tests were run for this documentation task. |
 | **Not verified / unresolved** | Exact deleter of the nine sessions; historical recoverability; live-credential E2E failures; Tauri zoom on the owner's machine. |
@@ -137,6 +138,8 @@ A full-tree search found exactly **two** `client.session.remove(...)` call sites
 
 **Conclusion:** because no atomic conditional-delete exists and all four flows share the same destructive primitive, the only lean and durable safeguard is to **remove remote deletion from all four flows**. The browser cannot reach `session.remove` through the proxy (`proxyRoutes.ts:105-205` has no delete-session route); the risk is entirely backend cleanup.
 
+**Frontend pre-delete step (fifth path, verified):** `web/src/features/chat/state/deleteConversation.ts:61-105` performs, in order: `cancelActiveRun(ref)` (`:62`), `POST /api/opencode/session/terminate` (`:66`), then `DELETE /api/conversations/:id` (`:89`). The terminate endpoint is flow 4 above (`routes/opencode.ts:214` → `sessions.ts:1477`), so **conversation deletion still makes a remote OpenCode request before the local delete**, contradicting the "no remote request" rule. Under the lean policy this pre-delete terminate call must be **removed from the frontend deletion flow**. Stopping active work stays as `cancelActiveRun` (a separate, explicit operation); the shared OpenCode session is not touched by deleting a TBAi conversation.
+
 ### 4.6 Orphan reconciliation — `src/services/opencode/orphanReconciler.ts`
 - A bare 404 never clears a risk-bearing row; an absence horizon (24 h) bounds retention (`orphanReconciler.ts:97-107`, `156-165`).
 - Ownership is re-checked immediately before removal, so a pointer that appeared during the probe wins (`orphanReconciler.ts:65-67`, `276-318`).
@@ -162,7 +165,7 @@ A full-tree search found exactly **two** `client.session.remove(...)` call sites
 
 ### 4.11 Verification evidence — code paths and tests
 
-Every safeguard claimed above is tied to a file/line and an existing test. These were read directly from the checkout at `42ce23c`; **no test was executed for this documentation task**, so they are evidence of coverage, not a claim that the suite passed now.
+Every safeguard claimed above is tied to a file/line and an existing test. These were read directly from the source-code review baseline `42ce23c`; **no test was executed for this documentation task**, so they are evidence of coverage, not a claim that the suite passed now.
 
 | Safeguard | Code path | Existing test (assertion) |
 |---|---|---|
@@ -262,7 +265,7 @@ The earlier finding that an unresolved `phase='delete'` row is actionable by `ru
 | Linked to multiple TBAi conversations | **Not supported today** — the UNIQUE constraint on `(serviceOwner, sessionId)` rejects a second import. Keep this rule; do not add multi-link without an explicit decision |
 | Becomes unavailable or deleted externally | Imported conversation reports `OpenCodeImportedSessionMissingError`; native conversation with a stale pointer recreates only if not imported; no auto-repair of imported history |
 | TBAi conversation deleted by user | **Local-only deletion:** one ordinary SQLite transaction deletes TBAi's conversation and messages. The OpenCode session and all its children remain untouched. No remote OpenCode request is part of the operation. Rebind still yields 409. The user manages the shared session in OpenCode if they want it deleted |
-| Failed session creation | Keep the remote session; log the orphan. No compensating remote DELETE (`sessions.ts:1123`) |
+| Failed session creation | Keep the remote session; **retain the unresolved intent/orphan record** so durable diagnostics survive. No compensating remote DELETE and no `discardCreateIntent` on the retained path (`sessions.ts:1123`, `:1141`) |
 | Orphan reconciliation | Diagnostic only: probe and log, never issue a remote DELETE (`orphanReconciler.ts:703`) |
 | Explicit terminate | Stop local work and clear the TBAi pointer; do not call `client.session.remove` (`sessions.ts:1477`) |
 
@@ -273,13 +276,14 @@ The earlier finding that an unresolved `phase='delete'` row is actionable by `ru
 ## 7. Proposed implementation tasks (dependency order — not authorized)
 
 1. **Document the shared-DB architecture decision** in `docs/decisions.md`: no private DB, no `OPENCODE_DB` override, no snapshot, no disabling other clients; external import is a required capability.
-2. **Remove remote deletion from all four flows** (§4.5): conversation deletion (`conversationDeletion.ts:107` / `sessions.ts:565`), orphan reconciliation (`orphanReconciler.ts:703`), failed-create compensation (`sessions.ts:1123`), and explicit terminate (`sessions.ts:1477`). Delete only TBAi's local conversation and messages in one ordinary SQLite transaction; no remote OpenCode request in that operation.
-3. **Keep the journal as diagnostics** (§4.6, §4.14): the orphan reconciler may probe and log but must never call `removeUnboundSession`/`removeAndConfirm`. No new tables, migrations, claims, leases, or state machines.
-4. **Ownership terminology** (§4.12): document the five distinct concepts in the owning module and stop describing `opencodeServiceOwner` as proof of exclusive ownership. No runtime behavior change.
-5. **Shared-session mutation policy** (§4.13): document allowed interaction operations and protected lifecycle operations, grounded in the proxy allowlist. No runtime behavior change.
-6. **Regression tests** from §8, written before any behavior change where practical, each proven able to fail against the defect it guards.
-7. **Log-only integrity signal** for imported sessions that 404 (no repair, no rebind, no delete), using the existing logger contract.
-8. **Verification** of the full gate (`bun run verify`, `test:locations`, `test:dom`, targeted e2e) with exact commands and exit codes recorded.
+2. **Remove remote deletion from all four backend flows** (§4.5): conversation deletion (`conversationDeletion.ts:107` / `sessions.ts:565`), orphan reconciliation (`orphanReconciler.ts:703`), failed-create compensation (`sessions.ts:1123`), and explicit terminate (`sessions.ts:1477`). Delete only TBAi's local conversation and messages in one ordinary SQLite transaction; no remote OpenCode request in that operation.
+3. **Remove the frontend pre-delete terminate** (§4.5): delete the `POST /api/opencode/session/terminate` call from `web/src/features/chat/state/deleteConversation.ts:66-87`. Keep `cancelActiveRun` as the separate, explicit way to stop active work. Deleting a conversation must not touch the shared OpenCode session.
+4. **Retain failed-create journal records** (§6): on the retained-session path, do not call `discardCreateIntent` (`sessions.ts:1141`); keep the unresolved intent/orphan row so the diagnostic survives. The reconciler may probe and log but must never call `removeUnboundSession`/`removeAndConfirm` (§4.6, §4.14). No new tables, migrations, claims, leases, or state machines.
+5. **Ownership terminology** (§4.12): document the five distinct concepts in the owning module and stop describing `opencodeServiceOwner` as proof of exclusive ownership. No runtime behavior change.
+6. **Shared-session mutation policy** (§4.13): document allowed interaction operations and protected lifecycle operations, grounded in the proxy allowlist. No runtime behavior change.
+7. **Regression tests** from §8, written before any behavior change where practical, each proven able to fail against the defect it guards.
+8. **Log-only integrity signal** for imported sessions that 404 (no repair, no rebind, no delete), using the existing logger contract.
+9. **Verification** of the full gate (`bun run verify`, `test:locations`, `test:dom`, targeted e2e) with exact commands and exit codes recorded.
 
 No change to the shared DB path, no new database, no credential handling, no filesystem-permission change, and no change to the Direct/OpenCode runtime boundary.
 
@@ -301,7 +305,8 @@ Each test must verify both the expected behavior **and** that unrelated shared s
 | Preservation of child sessions | Seed a parent with one or more children; delete the TBAi conversation; every child session and its messages remain present and unmodified |
 | Concurrent child creation during deletion | Start a deletion, create a child of the target session while it is in flight, then finish; the child still exists afterward. This proves the design does not depend on a racy child-list preflight |
 | Orphan reconciliation never deletes | Seed an unresolved `intent`/`orphan`/`delete` row, run `runOrphanReconciliationOnce()` repeatedly (including past the absence horizon); the reconciler logs but never calls `session.remove`; the session survives |
-| Failed-create compensation keeps the remote session | Force a pointer-write failure with confirmed unbound verification; the remote session remains in OpenCode and an orphan is logged; no compensating DELETE |
+| Failed-create compensation keeps the remote session and its journal record | Force a pointer-write failure with confirmed unbound verification; the remote session remains in OpenCode; `discardCreateIntent` is not called and the unresolved intent/orphan row survives for diagnostics; no compensating DELETE |
+| Frontend deletion makes no remote OpenCode request | Drive `deleteConversation(ref)` with a mocked API; assert no `POST /api/opencode/session/terminate` occurs, `cancelActiveRun` still runs, and only `DELETE /api/conversations/:id` is issued; the shared session remains in OpenCode |
 | Explicit terminate is local-only | Call `POST /api/opencode/session/terminate`; local work stops and the pointer is cleared, but `client.session.remove` is never called and the session remains in OpenCode |
 | Genuine incomplete TBAi-created session recovery still works | Seed an unresolved `intent`/`orphan` row for a session TBAi created but never bound; the reconciler still detects and logs it under the existing risk/horizon rules — removing deletion must not disable detection |
 | No new database structures | Assert the schema has no cleanup-claim table and no migration adding one; local deletion uses one ordinary SQLite transaction with no remote OpenCode request |
@@ -327,7 +332,7 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 9. **Child preservation:** parent and child sessions survive conversation deletion, including when a child is created concurrently with the deletion; no design claim relies on a child-list preflight as a safety guarantee.
 10. **Ownership terminology:** `opencodeServiceOwner` is documented and used only as a service-scope key, never as proof of exclusive session ownership; the five concepts in §4.12 are distinguished in the owning module.
 11. **Shared-session mutation:** allowed interaction operations and protected lifecycle operations are documented per §4.13; no protected lifecycle operation is reachable from conversation deletion, cleanup, reconciliation, or compensation for an imported session.
-12. **No automatic remote deletion:** none of the four flows in §4.5 calls `client.session.remove`. Conversation deletion is one ordinary SQLite transaction with no remote OpenCode request. Failed-create compensation keeps the remote session; orphan reconciliation is diagnostic-only; explicit terminate is local-only.
+12. **No automatic remote deletion:** none of the four backend flows in §4.5 calls `client.session.remove`, and the frontend `deleteConversation` flow makes no `/api/opencode/session/terminate` request. Conversation deletion is one ordinary SQLite transaction with no remote OpenCode request. Failed-create compensation keeps the remote session **and its unresolved journal record**; orphan reconciliation is diagnostic-only; explicit terminate is local-only.
 13. **No new coordination machinery:** no cleanup-claim table, lease, state machine, migration, or cross-process deletion protocol is added. Orphan sessions remain in OpenCode and appear in the existing importable list; the user removes them there.
 14. **Reliability:** all tests in §8 pass, including the "unrelated sessions untouched" assertion; all quality gates exit 0; no session was deleted, rebound, or duplicated by the work.
 
@@ -357,7 +362,10 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 | **All four destructive flows** | §4.5 audits conversation deletion, orphan reconciliation, failed-create compensation, and explicit terminate; §7 task 2 removes remote deletion from all four; §8 and §9.12 cover it |
 | **Claim protocol rejected** | §4.14: no new tables, migrations, claims, leases, or cross-process coordination; orphan accumulation accepted as a small, unproven risk |
 | **Executive summary** | §1 states the single rule: TBAi does not automatically delete sessions from the shared OpenCode database |
-| **Branch/HEAD reference** | corrected to `42ce23c` in the header and evidence categories |
+| **Stale report metadata** | report revision `ef89107` (committed/pushed) separated from source-code review baseline `42ce23c`; removed "local and uncommitted" and "Git state not modified" claims |
+| **Frontend pre-delete terminate** | §4.5 verifies `deleteConversation.ts:66` calls `/api/opencode/session/terminate` before the local delete; §7 task 3 removes it; §8 and §9.12 cover it |
+| **Failed-create journal retention** | §6 and §7 task 4 require keeping the unresolved intent/orphan row and not calling `discardCreateIntent` on the retained path; §8 and §9.12 cover it |
+| **Branch/HEAD reference** | report revision `ef89107`; source-code review baseline `42ce23c` |
 
 ---
 
