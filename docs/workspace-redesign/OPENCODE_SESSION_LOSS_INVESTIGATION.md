@@ -2,7 +2,7 @@
 
 **Status:** IMPLEMENTED AND PUSHED. The plan in §7 was authorized and implemented; this report is now a record of the investigation, the approved design, and its verification.
 **Date:** 2026-11-26 (implementation and verification record added)
-**Report revision:** `ui-foundation-upgrade` @ `ef13dba` (implementation tip; this report update is committed on top of it).
+**Report revision:** `ui-foundation-upgrade` @ `a16e2e2` (current branch HEAD). **Implementation tip:** `ef13dba` (the last source-code commit; this report update is documentation only).
 **Source-code review baseline:** `42ce23c` — the commit whose implementation was audited when the plan was written. The implementation range is `0b603b6..ef13dba` (12 commits).
 **Mode:** documentation and investigation only for this report update. No database, session, WAL, or backup state was modified. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
 
@@ -38,7 +38,7 @@ This is deliberately smaller than a claim-based design. We accept a small possib
 
 | Category | Content in this report |
 |---|---|
-| **Independently verified through GitHub** | Remote branch HEAD `ef13dba` matches local HEAD (`git ls-remote`). The implementation is pushed; this report update is committed on top of it. The source-code review baseline is the earlier `42ce23c`. |
+| **Independently verified through GitHub** | Remote branch HEAD `a16e2e2` matches local HEAD (`git ls-remote`). The implementation is pushed; the last source-code commit is `ef13dba`. The source-code review baseline is the earlier `42ce23c`. |
 | **Verified through repository implementation (this session)** | All `src/...`, `web/src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `42ce23c`; the later implementation commits are listed in the implementation range above. |
 | **Agent-reported workstation evidence (not independently re-checked by the owner)** | The nine missing session IDs, DB file sizes, log counts, credential metadata, and legacy-table absence in §3. These were measured on this workstation by the agent; the owner has not independently re-run the queries. |
 | **Verified through CI results** | None in this revision. No tests were run for this documentation task. |
@@ -324,7 +324,7 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 ## 9. Acceptance criteria
 
 1. **Import-list behavior:** `/api/opencode/importable` returns unarchived, not-yet-imported sessions from all OpenCode clients on the shared DB; archived and already-imported sessions are excluded; future external sessions appear without any TBAi-side rescan or snapshot.
-2. **Credential handling:** no database copy is performed, so no credential is copied, exposed, or modified by TBAi. The single shared-DB credential row was inspected by metadata only (`integration_id=opencode`, `label=RT`, `connector_id=null`, `method_id=null`, `active=1`); the secret value was never read or printed. **Owner approval is required** for this "no copy, no credential change" treatment before implementation.
+2. **Credential handling:** no database copy is performed, so no credential is copied, exposed, or modified by TBAi. The single shared-DB credential row was inspected by metadata only (`integration_id=opencode`, `label=RT`, `connector_id=null`, `method_id=null`, `active=1`); the secret value was never read or printed. This "no copy, no credential change" treatment was part of the approved plan; no credential handling was changed by the implementation.
 3. **Filesystem permissions:** no new private database or directory is created, so no new ACL/permission requirement arises. Verified fact: TBAi creates `DATA_DIR` with `fs.mkdirSync(DATA_DIR, { recursive: true })` and **no explicit mode** (`src/db/index.ts:23`), so owner-only protection is **not** currently asserted. Any future private storage would require an explicit mode/ACL and a verification test; none is proposed here.
 4. **Environment consistency:** TBAi does not set `OPENCODE_DB` or redirect XDG roots; the managed server and `opencode debug paths db` use the same inherited environment. No environment change is proposed.
 5. **Source preservation:** TBAi performs no snapshot, copy, `VACUUM`, `DELETE`, `REINDEX`, or WAL checkpoint on the shared DB. TBAi **can interact with shared sessions** — prompts, reads, compacts, interrupts, model/agent switches and the other operations in §4.13 are intentional and allowed on imported sessions. It must not assume **exclusive authority over their lifecycle or deletion**: no `session.remove`, move, fork, archive, or bulk deletion from conversation deletion, cleanup, reconciliation, or compensation for an imported or unlinked session. Concurrent external writes are normal shared-DB activity; no global service is disabled and no other application is stopped.
@@ -345,7 +345,7 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 | Finding | Resolution |
 |---|---|
 | **Importable sessions** — false claim that unrelated sessions are not exposed | §4.1 corrects it: all unarchived shared-DB sessions are intentionally importable; §9.1 and §8 tests cover it |
-| **Credential handling** — one credential row; never print the secret | §9.2 records metadata only, no copy, and requires owner approval for the treatment |
+| **Credential handling** — one credential row; never print the secret | §9.2 records metadata only, no copy; the no-change treatment was part of the approved plan |
 | **Filesystem permissions** — do not claim owner-only without evidence | §9.3 states the verified `mkdirSync` fact and declines to claim owner-only; no new directory is proposed |
 | **Snapshot integrity** — distinguish TBAi writes from concurrent external writes | §9.5: no snapshot; TBAi may interact with shared sessions but has no exclusive lifecycle/deletion authority; external writes are normal; no service disabling |
 | **Final acceptance criteria** | §9 includes all seven requested categories plus reliability |
@@ -381,11 +381,11 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 - **Restart-recovery limitations** — plain `opencode serve` persists no lifecycle events beyond the synced marker, and `session_inbox.enqueued_seq` is not exposed by the public inbox schema (§4.11). Recovery relies on durable session/inbox state, not an event log.
 - **Live-credential E2E failures** — 8 pass / 7 fail / 3 skip against OpenCode 2.4.0; failures are stale spec expectations and a stub-provider harness issue, not verified product defects. Not part of the standard gate.
 - **Tauri zoom** — cannot be reproduced on this workstation; awaiting owner machine test.
-- **Owner confirmation required** — the no-copy credential treatment (§9.2) and the overall plan before any implementation. The child-session behavior is now fixed by the fail-safe rule above and is no longer an open decision.
+- **Owner confirmation** — the overall plan was approved and implemented; no further confirmation is pending. The no-copy credential treatment (§9.2) was part of that approved plan and no credential handling was changed. A different credential treatment would be a separate future decision, not an unresolved blocker.
 
 ---
 
-## 12. Verification commands (for implementation, not now)
+## 12. Verification commands (re-run to reproduce the recorded results)
 
 ```
 git ls-remote origin refs/heads/ui-foundation-upgrade   # confirm review source
