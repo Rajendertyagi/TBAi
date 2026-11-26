@@ -1,10 +1,10 @@
 # TBAi — Unified Workspace Redesign (durable handoff)
 
-**Read `WORKSPACE_ARCHITECTURE_PLAN.md` first — it is the authoritative architecture plan.** This README is the durable handoff and background context; where it conflicts with the plan, the plan wins.
+**Start with `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — it is the authoritative product direction and implementation roadmap.** For the implemented Dockview specification and verification record, read `DOCKVIEW_INTEGRATION_PLAN.md` and the Dockview ADR in `docs/decisions.md`. This README is a historical handoff; where it conflicts with those documents, they win.
 
-## Current status (2026-11-22, revision 6)
+## Current status (superseded snapshot — 2026-11-22, revision 6)
 
-- **Phase:** the five confirmed multi-chat fixes from `multi-chat-architecture-audit.md` are implemented and committed. The authoritative, implementation-ready `WORKSPACE_ARCHITECTURE_PLAN.md` is complete and awaits owner review; no further implementation is authorized by it.
+- **Historical phase:** the five confirmed multi-chat fixes from `multi-chat-architecture-audit.md` were implemented and committed. `WORKSPACE_ARCHITECTURE_PLAN.md` was **superseded by Dockview** on 2026-11-23; its custom recursive layout-tree proposal was never implemented. See `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` for the current roadmap and `DOCKVIEW_INTEGRATION_PLAN.md` for the implemented architecture.
 - **Production code:** the five fixes are committed (thread-list cache, operation ownership, Direct model/reasoning selection, history visit ownership, stable workspace panel hosts). No dependencies were added. See `docs/decisions.md` for the `features/workspace/` ownership decision. The working tree is clean at the audited HEAD apart from untracked prototype screenshots.
 - **Verification (agent-reported, not re-run in the latest audit):** typecheck, build, lint, format, test-locations exit 0; unit 4999 pass / 3 skip / 0 fail, integration 1037 pass / 85 skip / 0 fail, DOM 828 pass / 0 fail. No live browser/Tauri E2E was run, and no CI results exist for this branch.
 - **Prototype:** `prototype/index.html` — standalone, zero dependencies, interactive, dark + light. Rebuilt in revision 4 around generic panels + content types. Interaction test: 16/16 PASS, zero console errors.
@@ -16,15 +16,16 @@
 
 **One application. Multiple workspaces. Shared context.**
 
-Two regions are permanent:
-1. **Chat Threads** — conversation navigation for both Direct Chat and OpenCode sessions, far left.
-2. **Primary Chat** — a permanent main conversation **position** immediately right. It is NOT a runtime; it can hold a Direct Chat or an OpenCode Chat.
+Current vocabulary (the older "Primary Chat" concept is explicitly removed):
+- **Chat Threads** — conversation navigation for both Direct Chat and OpenCode sessions.
+- **Chat workspace** — the area where conversation and other content panels appear. There is no privileged main position.
+- **Panel** — a generic spatial container. **Tab** — a piece of content inside a panel. **Content type** — what a panel renders. **Runtime** — the independent execution system (Direct or OpenCode). **Layout** — the spatial arrangement managed by Dockview.
 
-Everything else is an optional **generic panel** to the right. Panels are containers, not features. A **tab** determines what content appears (Direct Chat, OpenCode Chat, File Tree, File Viewer, Browser). Direct Chat and OpenCode Chat are separate runtimes that may appear in any panel, side by side, or as tabs in the same panel.
+In production today only two content types are registered: Direct Chat and OpenCode Chat. File Tree, File Viewer, Browser, Editor and Terminal appear only in the prototype and design documents; see `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` for their planned status. Direct Chat and OpenCode Chat are separate runtimes that may appear in any panel, side by side, or as tabs in the same panel.
 
 ## Confirmed decisions (owner-approved)
 
-1. Chat Threads and Primary Chat are permanent; Primary Chat is a position, not a runtime.
+1. Chat Threads is the permanent conversation navigation; there is no "Primary Chat" position in the current product direction.
 2. Optional panels are generic containers, created only when the user adds them; no reserved empty column.
 3. Each panel has its own tabs; tabs can be added, closed, reordered, and moved between panels.
 4. Panels can be added, closed, resized, split, rearranged, and restored.
@@ -69,6 +70,13 @@ Everything else is an optional **generic panel** to the right. Panels are contai
 
 ## Documents
 
+- `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — **authoritative product direction and roadmap** (start here).
+- `DOCKVIEW_INTEGRATION_PLAN.md` — **authoritative implementation specification and verification record** for the Dockview workspace.
+- `DOCKVIEW_POC_RESULT.md`, `DOCKVIEW_STARTUP_OPTIMIZATION_PLAN.md` — completed implementation evidence.
+- `MULTI_PROJECT_SIDEBYSIDE_AUDIT.md`, `PROVIDER_AUDIT.md`, `technical-audit.md`, `multi-chat-architecture-audit.md` — supporting audits.
+- `product-architecture.md`, `interaction-model.md` — product/design references (still use the superseded "Primary Chat" vocabulary; read with the roadmap's terminology).
+- `WORKSPACE_ARCHITECTURE_PLAN.md`, `DOCKVIEW_EVALUATION_PLAN.md`, `2026-11-22-foundation-architecture-audit.md`, `right-hand-workspace-audit.md`, `right-hand-workspace-demo.html` — **historical / superseded**; do not treat as current requirements.
+- `OPENCODE_SESSION_LOSS_INVESTIGATION.md` — **separate workstream** (OpenCode session lifecycle), not part of the workspace layout roadmap.
 - `multi-chat-architecture-audit.md` — **implementation-ready plan** for multiple live Direct runtimes. Runtime ownership follows chat content (not panel position); the canonical thread-list adapter stays shared and the real cache fix is query-keyed. Also covers operation context, provider overrides and history recovery. Start here for implementation planning.
 - `product-architecture.md` — concept model, permanent structure, chat types as content, context/isolation, superseded concepts.
 - `technical-audit.md` — verified findings, chat identity/runtime facts, feasibility, official API links, quality gates.
@@ -83,14 +91,6 @@ Everything else is an optional **generic panel** to the right. Panels are contai
   - Chat + Files: [1440×900](prototype/screenshots/arch-chat-files-1440x900.png) · [1280×800](prototype/screenshots/arch-chat-files-1280x800.png) · [960×800](prototype/screenshots/arch-chat-files-960x800.png)
   - Chat + Browser: [1440×900](prototype/screenshots/arch-chat-browser-1440x900.png) · [1280×800](prototype/screenshots/arch-chat-browser-1280x800.png) · [960×800](prototype/screenshots/arch-chat-browser-960x800.png)
 
-## Recommended next implementation phase (not authorized)
+## Next implementation phase
 
-1. Finalize workspace model and interactions (this document set).
-2. Establish permanent two-region layout + generic panel foundation (reuse `useDesktopLayout`, Sidebar resize handle, dnd-kit).
-3. Add layout persistence (device-local first).
-4. Add secure project file browsing + read-only preview (conversation-scoped endpoint with `resolveSafe`).
-5. Spike: validate two isolated Direct runtimes and two OpenCode sessions before adding chat panels.
-6. Add further content types only after their technical requirements are proven.
-7. Apply the broader visual redesign consistently last.
-
-Owner must review and approve before any implementation. An ADR in `docs/decisions.md` is required for the panel layout model and any new dependency.
+Superseded by `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` §11. The Dockview foundation and layout persistence are already implemented; the current sequence starts with P0 foundation correctness, then a generic content-type contract, a project-scoped read-only File Tree, a read-only Viewer, and UX polish. Owner must review and approve each phase before implementation. An ADR in `docs/decisions.md` is required for any new dependency or architectural boundary change.
