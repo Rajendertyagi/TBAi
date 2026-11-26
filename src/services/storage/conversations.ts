@@ -625,6 +625,39 @@ export const conversationService = {
     })();
   },
 
+  /**
+   * Deletes a conversation and its messages atomically, comparing the OpenCode
+   * pointer inside the same transaction.
+   *
+   * The pointer is never cleared in a separate committed step: a failure at
+   * the row-delete step rolls the whole transaction back, so the conversation
+   * keeps its session association and metadata. A rebind between the caller's
+   * snapshot and this call makes the comparison fail, so nothing is written.
+   *
+   * @returns `deleted`, `rebound` (pointer differs; nothing written), or
+   *   `missing` (row already gone; leftover messages removed).
+   */
+  async deleteConversationIfSessionMatches(
+    id: string,
+    expectedSessionId: string | null,
+  ): Promise<"deleted" | "rebound" | "missing"> {
+    return db.transaction((): "deleted" | "rebound" | "missing" => {
+      const row = db
+        .query<{ opencode_session_id: string | null }, SQLQueryBindings[]>(
+          "SELECT opencode_session_id FROM conversations WHERE id = ?",
+        )
+        .get(id);
+      if (!row) {
+        db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
+        return "missing";
+      }
+      if (row.opencode_session_id !== expectedSessionId) return "rebound";
+      db.run("DELETE FROM conversations WHERE id = ?", [id]);
+      db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
+      return "deleted";
+    })();
+  },
+
   /** Removes the conversation and its messages. Returns whether a row existed. */
   async delete(id: string): Promise<boolean> {
     db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);

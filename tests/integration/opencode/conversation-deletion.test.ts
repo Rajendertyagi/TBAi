@@ -172,6 +172,37 @@ describe("DELETE /api/conversations/:id — local-only teardown", () => {
     expect(await conversationService.get(convId)).toBeNull();
   });
 
+  it("preserves the pointer and metadata when the deletion transaction fails", async () => {
+    const convId = await createOpenCodeConversation("ses_atomic_fail");
+    await conversationService.update(convId, {
+      opencodeServiceOwner: "local",
+      opencodeDirectory: "D:\\ws\\atomic",
+      opencodeImported: true,
+    });
+    // Inject a failure at the row-delete step. The pointer clear must not have
+    // committed before this, or the conversation loses its session association.
+    db.run(`
+      CREATE TRIGGER fail_conversation_delete
+      BEFORE DELETE ON conversations
+      BEGIN
+        SELECT RAISE(ABORT, 'delete failed');
+      END;
+    `);
+    try {
+      await withFake(async () => {
+        const res = await app.request(`/api/conversations/${convId}`, { method: "DELETE" });
+        expect(res.status).toBe(500);
+      });
+      const row = await conversationService.get(convId);
+      expect(row?.opencodeSessionId).toBe("ses_atomic_fail");
+      expect(row?.opencodeServiceOwner).toBe("local");
+      expect(row?.opencodeDirectory).toBe("D:\\ws\\atomic");
+      expect(row?.opencodeImported).toBe(true);
+    } finally {
+      db.run("DROP TRIGGER IF EXISTS fail_conversation_delete");
+    }
+  });
+
   it("deletes a conversation with no session pointer without any remote request", async () => {
     const convId = await createOpenCodeConversation(null);
     await withFake(async (fake) => {

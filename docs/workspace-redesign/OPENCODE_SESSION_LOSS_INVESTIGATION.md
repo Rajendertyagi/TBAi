@@ -1,10 +1,12 @@
 # OpenCode Session Loss — Investigation and Future-Reliability Plan (Revised)
 
-**Status:** INVESTIGATION + PLAN ONLY. No implementation authorized.
-**Date:** 2026-11-25 (revised after independent review and owner architecture direction)
-**Report revision:** `ui-foundation-upgrade` @ `ef89107` (this report is committed and pushed; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`).
-**Source-code review baseline:** `42ce23c` — the last commit whose implementation was audited. All later commits are documentation-only, so the source described here is unchanged.
-**Mode:** documentation and investigation only. No source code, configuration, database, session, WAL, or backup state was modified. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
+**Status:** IMPLEMENTED AND PUSHED. The plan in §7 was authorized and implemented; this report is now a record of the investigation, the approved design, and its verification.
+**Date:** 2026-11-26 (implementation and verification record added)
+**Report revision:** `ui-foundation-upgrade` @ `3f8492e` (pushed implementation tip at the time of this update; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`).
+**Source-code review baseline:** `42ce23c` — the commit whose implementation was audited when the plan was written. The implementation range is `0b603b6..3f8492e` (10 commits, 19 files).
+**Mode:** documentation and investigation only for this report update. No database, session, WAL, or backup state was modified. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
+
+**Verification record (agent-reported, not hosted CI):** `bun run verify` exit 0 — 6158 pass / 88 skip / 0 fail (unit+integration), DOM 891 pass / 0 fail; typecheck, lint, format:check, test:locations and build green. `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts` 9 passed / 0 failed; `phase-ua-d.spec.ts` 4 passed / 0 failed. GitHub returned no hosted status checks or workflow runs for the tip commit, so these results are local agent-reported evidence, not independently verified by CI.
 
 > **Architecture correction (owner direction, mandatory).** The previous revision recommended a private TBAi OpenCode database via `OPENCODE_DB`, a `VACUUM INTO` snapshot, and isolation from other clients. **That direction is reversed.** TBAi must continue using the **shared OpenCode database** so that conversations created by OpenCode CLI, desktop, and other clients remain discoverable and importable. No private DB, no `OPENCODE_DB` override, no database copy/migration, and no disabling of other OpenCode clients. Historical recovery is out of scope. This document preserves the historical investigation as background evidence and replaces the prevention plan with a **future session-storage, discovery, import, and lifecycle reliability plan** on the shared database.
 
@@ -273,7 +275,7 @@ The earlier finding that an unresolved `phase='delete'` row is actionable by `ru
 
 ---
 
-## 7. Proposed implementation tasks (dependency order — not authorized)
+## 7. Implementation tasks (completed and pushed)
 
 1. **Document the shared-DB architecture decision** in `docs/decisions.md`: no private DB, no `OPENCODE_DB` override, no snapshot, no disabling other clients; external import is a required capability.
 2. **Remove remote deletion from all four backend flows** (§4.5): conversation deletion (`conversationDeletion.ts:107` / `sessions.ts:565`), orphan reconciliation (`orphanReconciler.ts:703`), failed-create compensation (`sessions.ts:1123`), and explicit terminate (`sessions.ts:1477`). Delete only TBAi's local conversation and messages in one ordinary SQLite transaction; no remote OpenCode request in that operation. **Exception for explicit terminate:** keep `session.interrupt` (`sessions.ts:1469`) so an explicit request still stops active work; remove only `session.remove`.
@@ -397,4 +399,4 @@ bun run verify
 
 ---
 
-**STOP. Awaiting independent review and explicit implementation authorization. No source code, configuration, database, session, WAL, backup, or Git state was modified by this revision.**
+**STATUS: IMPLEMENTED.** The §7 tasks were completed in commits `650b1ef..3f8492e` and pushed to `origin/ui-foundation-upgrade`. A fresh-context review found no Critical issues; its three Important findings were fixed and verified. The remaining deferred minors are recorded in §11. No database, session, WAL, or backup state was modified at any point.

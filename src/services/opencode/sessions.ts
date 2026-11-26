@@ -1344,6 +1344,8 @@ export async function reconcileOpenCodeSessionDirectory(
   const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
   if (!live) {
     if (conversation.opencodeImported) {
+      // Same log-only integrity signal as the main session-creation path.
+      logger.warn("opencode", "opencode.session_missing", { conversationId });
       throw new OpenCodeImportedSessionMissingError(conversationId, conversation.opencodeSessionId);
     }
     throw new OpenCodeError(

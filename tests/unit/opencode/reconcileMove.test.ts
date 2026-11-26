@@ -4,6 +4,7 @@ import {
   reconcileOpenCodeSessionDirectory,
 } from "../../../src/services/opencode/sessions";
 import { OpenCodeImportedSessionMissingError } from "../../../src/services/opencode/errors";
+import { logger } from "../../../src/lib/logger.ts";
 
 let conversationRow: Record<string, any> | null = null;
 let updatedPatches: Array<{ id: string; patch: Record<string, any> }> = [];
@@ -295,9 +296,15 @@ describe("Stage 4 - Directory Move Reconciliation & Missing Session Protection",
     };
 
     sessionGetResult = null;
+    const before = logger.lastSeq;
 
     await expect(reconcileOpenCodeSessionDirectory("conv-reconcile-missing")).rejects.toThrow(
       OpenCodeImportedSessionMissingError,
     );
+    const events = logger
+      .getRecentEntries(before)
+      .filter((entry) => entry.event === "opencode.session_missing");
+    expect(events.length).toBe(1);
+    expect(JSON.stringify(events[0])).not.toContain("ses_missing_999");
   });
 });
