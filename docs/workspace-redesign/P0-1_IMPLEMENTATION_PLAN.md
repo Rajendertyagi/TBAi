@@ -119,16 +119,7 @@ Expected: 5 pass / 0 fail.
 Run: `bun test tests/unit/web/workspace/ tests/dom/workspace/`
 Expected: no new failures. These suites exercise every `parseTabKey` consumer; a regression here means a consumer relied on an empty ref and must be fixed before continuing.
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add web/src/features/chat/state/chatTabs.ts tests/unit/web/chat/chatTabs-parse.test.ts
-git commit -m "fix(chat): reject empty refs in parseTabKey
-
-Every workspace consumer treats null as ignore, so an empty ref must be
-rejected at the canonical-key boundary instead of flowing downstream where
-it silently opens no panel."
-```
+No commit here. Per `AGENTS.md`, no commit is made until end-to-end verification passes for the whole phase. Commit once, after all three tasks and the final gate — see "Final verification" below.
 
 ---
 
@@ -138,6 +129,7 @@ it silently opens no panel."
 - Modify: `web/src/features/workspace/state/workspaceActivation.ts:96-100`
 - Modify: `web/src/features/workspace/components/DockviewWorkspace.tsx:248`
 - Test: `tests/unit/web/workspace/workspaceActivation.test.ts` (modify existing)
+- Test: `tests/dom/workspace/workspace-activation.test.tsx` (modify existing — DOM regression)
 
 **Interfaces:**
 - Consumes: `parseTabKey` from Task 1 (unchanged signature; `isActivatableKey` already rejects malformed keys).
@@ -202,23 +194,32 @@ This asserts the invariant (the call site never passes an empty id) rather than 
 Run: `bun test tests/unit/web/workspace/workspaceActivation.test.ts`
 Expected: all cases pass, including the new empty-id case and the updated wiring guard.
 
-- [ ] **Step 6: Run the DOM activation suite**
+- [ ] **Step 6: Add the DOM regression (required by the P0-1 roadmap)**
+
+Add this case inside `describe("workspace activation disposal on genuine unmount")` in `tests/dom/workspace/workspace-activation.test.tsx`, after the materialized-draft case:
+
+```tsx
+  it("an empty panel id cannot dispose a real conversation's activation state", () => {
+    // The real DockviewWorkspace passes its immutable panel id to the same
+    // useDisposeWorkspacePanelOnUnmount hook this harness mounts. An empty id
+    // must never resolve through the alias map to a real conversation.
+    registerPanelCanonicalKey("", "chat:real-conversation");
+    activateWorkspacePanel("chat:real-conversation");
+    expect(isWorkspacePanelStarted("chat:real-conversation")).toBe(true);
+
+    render("");   // mounts <Panel panelId="" /> with the real disposal hook
+    unmount();    // cleanup calls disposeWorkspacePanelById("")
+
+    expect(isWorkspacePanelStarted("chat:real-conversation")).toBe(true);
+  });
+```
+
+This is a DOM test: it mounts a component with the real `useDisposeWorkspacePanelOnUnmount` hook and exercises the actual unmount cleanup path, not just the pure function. Before the fix it fails — the empty id is registered as an alias, so unmount clears `chat:real-conversation`. After the fix it passes.
+
+- [ ] **Step 7: Run the DOM activation suite**
 
 Run: `bun test tests/dom/workspace/workspace-activation.test.tsx`
-Expected: no new failures. This suite mounts the real `DockviewWorkspace` and would catch a broken activation path.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add web/src/features/workspace/state/workspaceActivation.ts \
-  web/src/features/workspace/components/DockviewWorkspace.tsx \
-  tests/unit/web/workspace/workspaceActivation.test.ts
-git commit -m "fix(workspace): never alias an empty Dockview panel id
-
-An empty panel id could be registered as a canonical-key alias and later
-dispose a real conversation's activation state. Guard the registration and
-its call site; update the wiring guard to assert the invariant."
-```
+Expected: all cases pass, including the new empty-panel-id DOM regression.
 
 ---
 
@@ -257,10 +258,11 @@ describe("Workspace settings copy", () => {
     expect(source).not.toContain("Every file tool is confined here");
   });
 
-  it("distinguishes conversation scoping from the global manual surface", async () => {
+  it("distinguishes the global folder from per-conversation workspaces", async () => {
     const source = await Bun.file(PAGE).text();
-    expect(source).toContain("conversation's workspace root");
-    expect(source).toContain("manual tool endpoints");
+    expect(source).toContain("manual /api/tools/* endpoints");
+    expect(source).toContain("private chat folder");
+    expect(source).toContain("registered project folder");
   });
 
   it("states that shell commands are not sandboxed", async () => {
@@ -280,14 +282,16 @@ Expected: 3 failures — the current copy contains "Every file tool is confined 
 In `web/src/features/workspace/WorkspacePage.tsx`, replace line 50 with:
 
 ```tsx
-      description="The default folder for assistant file and shell tools. A chat conversation with a registered project uses its own project folder instead; the manual tool endpoints use this default."
+      description="The default folder used by the manual /api/tools/* endpoints. Model-driven tools instead use a per-conversation workspace: a private chat folder, or the registered project folder when the conversation has one."
 ```
 
 and line 55 with:
 
 ```tsx
-        description="Model-driven file tools resolve inside the active conversation's workspace root. Path traversal and symlink escapes are rejected before any IO. Shell commands are not sandboxed — the command body runs with the server's own privileges."
+        description="Model-driven file tools resolve inside the active conversation's workspace — its private chat folder or its registered project folder. Path traversal and symlink escapes are rejected before any IO. Shell commands are not sandboxed — the command body runs with the server's own privileges."
 ```
+
+This states the distinction explicitly: the global Workspace folder belongs to the manual tool surface; model-driven tools are scoped per conversation.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -304,17 +308,7 @@ Expected: all cases pass, including `intentionally drops floating/popout/edge gr
 Run: `bun run verify`
 Expected: exit 0. Record the exact pass/skip/fail counts and exit code.
 
-- [ ] **Step 7: Commit**
-
-```bash
-git add web/src/features/workspace/WorkspacePage.tsx \
-  tests/unit/web/workspace/workspace-page-copy.test.ts
-git commit -m "docs(workspace): correct settings copy on tool scoping
-
-Model-driven tools use the conversation's workspace root; the manual tool
-surface uses the global default and shell commands are not sandboxed. Replace
-the overstated 'every file tool is confined here' claim."
-```
+No commit here. Commit once, after all three tasks and the final gate — see "Final verification" below.
 
 ---
 
@@ -329,13 +323,31 @@ bun run verify
 bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts
 ```
 
-Record exact exit codes and counts. Confirm `git diff` contains only the files listed in Tasks 1–3. Confirm the screenshots directory is still untracked and untouched.
+Record exact exit codes and counts. Review the complete `git diff` like you have never seen it before. Confirm it contains only the files listed in Tasks 1–3. Confirm the screenshots directory is still untracked and untouched.
+
+Only after every gate is green and the diff review is clean, request commit/push authorization from the owner. Do not commit or push before that authorization. When authorized, commit all changes together:
+
+```bash
+git add web/src/features/chat/state/chatTabs.ts \
+  tests/unit/web/chat/chatTabs-parse.test.ts \
+  web/src/features/workspace/state/workspaceActivation.ts \
+  web/src/features/workspace/components/DockviewWorkspace.tsx \
+  tests/unit/web/workspace/workspaceActivation.test.ts \
+  tests/dom/workspace/workspace-activation.test.tsx \
+  web/src/features/workspace/WorkspacePage.tsx \
+  tests/unit/web/workspace/workspace-page-copy.test.ts
+git commit -m "fix(workspace): close identity and copy gaps in P0-1
+
+Reject empty tab-key refs at the canonical boundary; never alias an empty
+Dockview panel id to a real conversation; correct Workspace settings copy to
+distinguish the global manual tool folder from per-conversation workspaces."
+```
 
 ## Definition of done
 
 - `parseTabKey("chat:")` and `parseTabKey("agent:")` return `null`; all 5 new cases pass.
-- No empty panel id is registered; the new activation case and updated wiring guard pass.
+- No empty panel id is registered; the new unit case, the updated wiring guard, and the new DOM unmount regression all pass.
 - Workspace settings copy no longer overstates scoping and states the shell caveat; all 3 copy cases pass.
 - The existing floating-group drop test still passes; no behavior change was made to it.
 - `bun run typecheck` and `bun run build` exit 0 independently re-run; `bun run verify` exit 0; Dockview E2E green.
-- No new dependency, no backend change, no layout change, no commit/push before verification passes.
+- No new dependency, no backend change, no layout change. No commit or push before verification passes and the owner authorizes it; one commit covers all three tasks.

@@ -115,6 +115,20 @@ describe("workspace activation disposal on genuine unmount", () => {
     expect(isWorkspacePanelStarted("agent:never")).toBe(false);
   });
 
+  it("an empty panel id cannot dispose a real conversation's activation state", () => {
+    // The real DockviewWorkspace passes its immutable panel id to the same
+    // useDisposeWorkspacePanelOnUnmount hook this harness mounts. An empty id
+    // must never resolve through the alias map to a real conversation.
+    registerPanelCanonicalKey("", "chat:real-conversation");
+    activateWorkspacePanel("chat:real-conversation");
+    expect(isWorkspacePanelStarted("chat:real-conversation")).toBe(true);
+
+    render(""); // mounts <Panel panelId="" /> with the real disposal hook
+    unmount(); // cleanup calls disposeWorkspacePanelById("")
+
+    expect(isWorkspacePanelStarted("chat:real-conversation")).toBe(true);
+  });
+
   it("a materialized draft panel's unmount clears the canonical chat:<id> state", () => {
     // First send: activation is under the materialized key, but the panel's
     // immutable Dockview id stays `chat:new`.

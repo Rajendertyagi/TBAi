@@ -102,8 +102,14 @@ export function tabKey(kind: "chat" | "agent", ref: string): string {
 }
 
 export function parseTabKey(key: string): { kind: "chat" | "agent"; ref: string } | null {
-  if (key.startsWith("chat:")) return { kind: "chat", ref: key.slice(5) };
-  if (key.startsWith("agent:")) return { kind: "agent", ref: key.slice(6) };
+  if (key.startsWith("chat:")) {
+    const ref = key.slice(5);
+    return ref.length > 0 ? { kind: "chat", ref } : null;
+  }
+  if (key.startsWith("agent:")) {
+    const ref = key.slice(6);
+    return ref.length > 0 ? { kind: "agent", ref } : null;
+  }
   return null;
 }
 

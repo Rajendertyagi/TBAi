@@ -245,7 +245,7 @@ export function DockviewWorkspace({
           }
           // Remember the panel-id -> canonical-key mapping so a materialized
           // draft's unmount disposes `chat:<id>`, not the immutable `chat:new`.
-          registerPanelCanonicalKey(panelId ?? "", canonicalKey);
+          if (panelId) registerPanelCanonicalKey(panelId, canonicalKey);
           // Only intentional focus starts a runtime. A user click is always
           // intentional; programmatic focus is intentional only when it matches
           // the window-level active key (deep link / route / Chat Threads).

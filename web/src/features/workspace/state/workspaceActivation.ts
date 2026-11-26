@@ -94,6 +94,7 @@ export function disposeWorkspacePanel(tabKey: string): void {
  * Idempotent and safe to call from every activation path.
  */
 export function registerPanelCanonicalKey(panelId: string, canonicalKey: string): void {
+  if (panelId.length === 0) return;
   if (panelId === canonicalKey) return;
   if (!isActivatableKey(canonicalKey)) return;
   panelCanonicalKeys.set(panelId, canonicalKey);

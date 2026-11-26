@@ -47,12 +47,12 @@ export function WorkspacePage() {
   return (
     <SettingsPage
       title="Workspace"
-      description="The folder the assistant may read and work in. Every file tool is confined here — paths outside it are refused."
+      description="The default folder used by the manual /api/tools/* endpoints. Model-driven tools instead use a per-conversation workspace: a private chat folder, or the registered project folder when the conversation has one."
     >
       <SettingsSection
         title="Sandbox policy"
         icon={FolderCog}
-        description="All assistant file and shell tools resolve inside the workspace root. Path traversal and symlink escapes are rejected before any IO."
+        description="Model-driven file tools resolve inside the active conversation's workspace — its private chat folder or its registered project folder. Path traversal and symlink escapes are rejected before any IO. Shell commands are not sandboxed — the command body runs with the server's own privileges."
       >
         <SettingRow
           label="Working in chat"

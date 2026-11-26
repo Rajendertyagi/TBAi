@@ -112,6 +112,14 @@ describe("workspace activation — start-once lifecycle", () => {
 });
 
 describe("workspace activation — materialized draft disposal (auditor regression)", () => {
+  it("ignores an empty panel id so it cannot alias a real canonical key", () => {
+    activateWorkspacePanel("chat:materialized-empty");
+    registerPanelCanonicalKey("", "chat:materialized-empty");
+    disposeWorkspacePanelById("");
+    // The real key survives: the empty id was never registered as an alias.
+    expect(isWorkspacePanelStarted("chat:materialized-empty")).toBe(true);
+  });
+
   it("disposing the draft panel clears the materialized canonical key", () => {
     // First send: the panel id stays `chat:new` while activation is recorded
     // under the materialized canonical key `chat:<id>`.
@@ -178,7 +186,7 @@ describe("workspace activation — wiring guards", () => {
     expect(source).toContain("activateWorkspacePanel(activeTabKey)");
     // The panel-id -> canonical-key mapping is registered on both activation
     // paths so a materialized draft's disposal resolves `chat:<id>`.
-    expect(source).toContain('registerPanelCanonicalKey(panelId ?? "", canonicalKey)');
+    expect(source).toContain("if (panelId) registerPanelCanonicalKey(panelId, canonicalKey)");
     expect(source).toContain("registerPanelCanonicalKey(panelIdFor(activeTabKey), activeTabKey)");
     // Direct history recovery stays chat-only and untouched.
     expect(source).toContain('parsed?.kind === "chat" && parsed.ref !== NEW_DRAFT_TAB_ID');
