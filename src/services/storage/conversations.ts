@@ -640,18 +640,24 @@ export const conversationService = {
   async deleteConversationIfSessionMatches(
     id: string,
     expectedSessionId: string | null,
+    expectedEngine: string,
   ): Promise<"deleted" | "rebound" | "missing"> {
     return db.transaction((): "deleted" | "rebound" | "missing" => {
       const row = db
-        .query<{ opencode_session_id: string | null }, SQLQueryBindings[]>(
-          "SELECT opencode_session_id FROM conversations WHERE id = ?",
+        .query<{ opencode_session_id: string | null; engine: string | null }, SQLQueryBindings[]>(
+          "SELECT opencode_session_id, engine FROM conversations WHERE id = ?",
         )
         .get(id);
       if (!row) {
         db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
         return "missing";
       }
-      if (row.opencode_session_id !== expectedSessionId) return "rebound";
+      // Both the engine and the pointer are part of the request-entry snapshot.
+      // `engine` is PATCH-editable, so comparing only the pointer could delete a
+      // conversation that became Direct after the deletion request started.
+      if (row.engine !== expectedEngine || row.opencode_session_id !== expectedSessionId) {
+        return "rebound";
+      }
       db.run("DELETE FROM conversations WHERE id = ?", [id]);
       db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
       return "deleted";

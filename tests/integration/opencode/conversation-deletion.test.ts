@@ -203,6 +203,24 @@ describe("DELETE /api/conversations/:id — local-only teardown", () => {
     }
   });
 
+  it("refuses deletion when the engine changed but the session pointer did not", async () => {
+    const convId = await createOpenCodeConversation("ses_engine_race");
+    // Simulate the race: the row is now Direct while the deletion request's
+    // entry snapshot still names the OpenCode session.
+    await conversationService.update(convId, { engine: "direct" });
+
+    const result = await conversationService.deleteConversationIfSessionMatches(
+      convId,
+      "ses_engine_race",
+      "opencode",
+    );
+
+    expect(result).toBe("rebound");
+    const row = await conversationService.get(convId);
+    expect(row?.engine).toBe("direct");
+    expect(row?.opencodeSessionId).toBe("ses_engine_race");
+  });
+
   it("deletes a conversation with no session pointer without any remote request", async () => {
     const convId = await createOpenCodeConversation(null);
     await withFake(async (fake) => {

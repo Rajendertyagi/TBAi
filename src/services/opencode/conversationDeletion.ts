@@ -48,6 +48,7 @@ export async function deleteOpenCodeConversation(input: {
   const result = await conversationService.deleteConversationIfSessionMatches(
     conversationId,
     entry.opencodeSessionId,
+    entry.engine ?? "direct",
   );
   if (result === "deleted") return { kind: "deleted", sessionCleanup: "none" };
   if (result === "rebound") return { kind: "conflict", reason: "session_rebound" };
