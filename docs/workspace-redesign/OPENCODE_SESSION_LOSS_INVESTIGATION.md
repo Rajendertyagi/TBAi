@@ -2,11 +2,11 @@
 
 **Status:** IMPLEMENTED AND PUSHED. The plan in §7 was authorized and implemented; this report is now a record of the investigation, the approved design, and its verification.
 **Date:** 2026-11-26 (implementation and verification record added)
-**Report revision:** `ui-foundation-upgrade` @ `3f8492e` (pushed implementation tip at the time of this update; local HEAD matches `git ls-remote origin refs/heads/ui-foundation-upgrade`).
-**Source-code review baseline:** `42ce23c` — the commit whose implementation was audited when the plan was written. The implementation range is `0b603b6..3f8492e` (10 commits, 19 files).
+**Report revision:** `ui-foundation-upgrade` @ `ef13dba` (implementation tip; this report update is committed on top of it).
+**Source-code review baseline:** `42ce23c` — the commit whose implementation was audited when the plan was written. The implementation range is `0b603b6..ef13dba` (12 commits).
 **Mode:** documentation and investigation only for this report update. No database, session, WAL, or backup state was modified. Database reads used `bun:sqlite` with `{ readonly: true, strict: true }`; the credential query selected metadata columns only and never read or printed the secret value.
 
-**Verification record (agent-reported, not hosted CI):** `bun run verify` exit 0 — 6158 pass / 88 skip / 0 fail (unit+integration), DOM 891 pass / 0 fail; typecheck, lint, format:check, test:locations and build green. `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts` 9 passed / 0 failed; `phase-ua-d.spec.ts` 4 passed / 0 failed. GitHub returned no hosted status checks or workflow runs for the tip commit, so these results are local agent-reported evidence, not independently verified by CI.
+**Verification record (agent-reported, not hosted CI):** `bun run verify` exit 0 — **6160 pass / 88 skip / 0 fail** (unit+integration, 6248 tests across 484 files), DOM 891 pass / 0 fail; typecheck, lint, format:check, test:locations and build green. `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts` 9 passed / 0 failed; `phase-ua-d.spec.ts` 4 passed / 0 failed. GitHub returned no hosted status checks or workflow runs for the tip commit, so these results are local agent-reported evidence, not independently verified by CI.
 
 > **Architecture correction (owner direction, mandatory).** The previous revision recommended a private TBAi OpenCode database via `OPENCODE_DB`, a `VACUUM INTO` snapshot, and isolation from other clients. **That direction is reversed.** TBAi must continue using the **shared OpenCode database** so that conversations created by OpenCode CLI, desktop, and other clients remain discoverable and importable. No private DB, no `OPENCODE_DB` override, no database copy/migration, and no disabling of other OpenCode clients. Historical recovery is out of scope. This document preserves the historical investigation as background evidence and replaces the prevention plan with a **future session-storage, discovery, import, and lifecycle reliability plan** on the shared database.
 
@@ -38,8 +38,8 @@ This is deliberately smaller than a claim-based design. We accept a small possib
 
 | Category | Content in this report |
 |---|---|
-| **Independently verified through GitHub** | Remote branch HEAD `ef89107` matches local HEAD (`git ls-remote`). This report revision is committed and pushed; the source-code review baseline is the earlier `42ce23c`. |
-| **Verified through repository implementation (this session)** | All `src/...`, `web/src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `42ce23c`; no source changed in later documentation-only commits. |
+| **Independently verified through GitHub** | Remote branch HEAD `ef13dba` matches local HEAD (`git ls-remote`). The implementation is pushed; this report update is committed on top of it. The source-code review baseline is the earlier `42ce23c`. |
+| **Verified through repository implementation (this session)** | All `src/...`, `web/src/...` and `tests/...` file/line references in §4–§8 were read directly from the checkout at `42ce23c`; the later implementation commits are listed in the implementation range above. |
 | **Agent-reported workstation evidence (not independently re-checked by the owner)** | The nine missing session IDs, DB file sizes, log counts, credential metadata, and legacy-table absence in §3. These were measured on this workstation by the agent; the owner has not independently re-run the queries. |
 | **Verified through CI results** | None in this revision. No tests were run for this documentation task. |
 | **Not verified / unresolved** | Exact deleter of the nine sessions; historical recoverability; live-credential E2E failures; Tauri zoom on the owner's machine. |
@@ -364,20 +364,20 @@ Existing coverage to extend rather than duplicate: `tests/unit/opencode/import.t
 | **All four destructive flows** | §4.5 audits conversation deletion, orphan reconciliation, failed-create compensation, and explicit terminate; §7 task 2 removes remote deletion from all four; §8 and §9.12 cover it |
 | **Claim protocol rejected** | §4.14: no new tables, migrations, claims, leases, or cross-process coordination; orphan accumulation accepted as a small, unproven risk |
 | **Executive summary** | §1 states the single rule: TBAi does not automatically delete sessions from the shared OpenCode database |
-| **Stale report metadata** | report revision `ef89107` (committed/pushed) separated from source-code review baseline `42ce23c`; removed "local and uncommitted" and "Git state not modified" claims |
+| **Stale report metadata** | report revision now `ef13dba` (implementation tip) separated from source-code review baseline `42ce23c`; removed "local and uncommitted" and "Git state not modified" claims |
 | **Frontend pre-delete terminate** | §4.5 verifies `deleteConversation.ts:66` calls `/api/opencode/session/terminate` before the local delete; §7 task 3 removes it; §8 and §9.12 cover it |
 | **Failed-create journal retention** | §6 and §7 task 4 require keeping the unresolved intent/orphan row and not calling `discardCreateIntent` on the retained path; §8 and §9.12 cover it |
 | **Explicit termination clarified** | §4.5, §6, §7 task 2, §8 and §9.12: `session.interrupt` is retained on explicit request; only `session.remove` is removed; the regression test asserts interrupt is called and removal is never called |
-| **Branch/HEAD reference** | report revision `ef89107`; source-code review baseline `42ce23c` |
+| **Branch/HEAD reference** | implementation tip `ef13dba`; source-code review baseline `42ce23c` |
 
 ---
 
 ## 11. Remaining risks and unresolved questions
 
 - **Exact deleter of the nine sessions** — unknown; historical recovery out of scope.
-- **Child-session deletion risk** — `session.remove` deletes children and no TBAi code checks `parentID` today. Removing remote deletion from all four flows (§7 task 2) eliminates this; it is **not implemented** and must be tested before any deletion behavior changes.
+- **Child-session deletion risk** — resolved by implementation. TBAi no longer calls `session.remove` in any flow, so a parent conversation deletion cannot remove child sessions. A regression test seeds parent and child sessions and asserts all survive (`tests/integration/opencode/conversation-deletion.test.ts`).
 - **Orphan accumulation** — accepted. Sessions that fail to bind remain in OpenCode and appear in TBAi's importable list. There is no evidence accumulation is currently a practical problem; revisit only with measurements.
-- **Behavior change** — local-only deletion means OpenCode sessions outlive their TBAi conversation rows. This is intentional for a shared history store but must be confirmed by the owner before implementation.
+- **Behavior change** — local-only deletion means OpenCode sessions outlive their TBAi conversation rows. This is intentional for a shared history store and was approved by the owner before implementation.
 - **Restart-recovery limitations** — plain `opencode serve` persists no lifecycle events beyond the synced marker, and `session_inbox.enqueued_seq` is not exposed by the public inbox schema (§4.11). Recovery relies on durable session/inbox state, not an event log.
 - **Live-credential E2E failures** — 8 pass / 7 fail / 3 skip against OpenCode 2.4.0; failures are stale spec expectations and a stub-provider harness issue, not verified product defects. Not part of the standard gate.
 - **Tauri zoom** — cannot be reproduced on this workstation; awaiting owner machine test.
@@ -399,4 +399,4 @@ bun run verify
 
 ---
 
-**STATUS: IMPLEMENTED.** The §7 tasks were completed in commits `650b1ef..3f8492e` and pushed to `origin/ui-foundation-upgrade`. A fresh-context review found no Critical issues; its three Important findings were fixed and verified. The remaining deferred minors are recorded in §11. No database, session, WAL, or backup state was modified at any point.
+**STATUS: IMPLEMENTED.** The §7 tasks were completed in commits `650b1ef..ef13dba` and pushed to `origin/ui-foundation-upgrade`. Two independent reviews found no Critical issues; all Important findings (atomic deletion, engine-in-transaction comparison, stale e2e spec, route 409 coverage, reconciler coverage) were fixed and verified. The remaining deferred minors are recorded in §11. No database, session, WAL, or backup state was modified at any point.
