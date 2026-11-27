@@ -201,7 +201,7 @@ Persistent chat threads and chat workspace; Dockview-owned layout; generic panel
 
 No skipped, todo, fixme, only, or quarantined cases were found in these files.
 
-**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` remain source-text guards; `dockview-theme.test.ts` is now complemented by `dockview-theme-computed.test.tsx`, which asserts computed style for six representative `--dv-*` variables (of the 31 defined in the block) against two different token sets. E2E case 6 now asserts appended transcript text (rendered and persisted), not just run completion. A real pointer-driven Dockview split is still E2E-only: the new DOM test covers the persistence half of the split/group contract (two-group restore, canonical identity, identity independent of group placement), not Dockview's drag-and-drop itself.
+**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` remain source-text guards; `dockview-theme.test.ts` is now complemented by `dockview-theme-computed.test.tsx`, which asserts computed style for six representative `--dv-*` variables (of the 31 defined in the block) against two different token sets. E2E case 6 now asserts appended transcript text (rendered, and persisted while the panel is still hidden), not just run completion. A real pointer-driven Dockview split is still E2E-only: the new DOM test covers the persistence half of the split/group contract (two-group restore, canonical identity, identity independent of group placement), not Dockview's drag-and-drop itself.
 
 ---
 
@@ -237,7 +237,7 @@ Legend: **IV** implemented & verified (source + tests) · **IG** implemented wit
 | Runtime isolation | IV | Per-host providers; `AuiProvider extends={null}`; boundary guards. |
 | Conversation identity | IV | Canonical tab keys; panel registry claims by key. |
 | Draft creation | IV | Single `chat:new`; alias preserves runtime across first send. |
-| Hidden-panel execution | IV | P0-2 E2E case 6 asserts a post-hide completion marker in the rendered transcript and in persisted messages. |
+| Hidden-panel execution | IV | P0-2 E2E case 6 asserts a post-hide completion marker in persisted messages while the panel is hidden, then in the rendered transcript. |
 | Lazy OpenCode activation | IV | Dormant latch; DOM activation tests. |
 | Multi-project side-by-side | IU | Source-verified per-conversation project binding; E2E asserts distinct identities, not file operations in two different project roots. |
 | Session recovery boundaries | IV | Separate workstream; no automatic remote session deletion. |
@@ -637,7 +637,7 @@ P0-2 (§11, §13) is complete. It was test-only: no production source, schema, c
 | `tests/dom/workspace/dockview-theme-computed.test.tsx` | Injects the real `.dockview-theme-tbai` block from `globals.css` into happy-dom and asserts `getComputedStyle` resolves six representative `--dv-*` variables (of 31) from two different token sets. Complements the source-text guard, which is retained. |
 | `tests/dom/workspace/dockview-split-group-contract.test.tsx` | DOM-renders a restored two-group layout; asserts two distinct groups, canonical panel ids, identity-only params, and identity independent of group placement. Covers the persistence half of the split contract; real DnD remains E2E-only. |
 | `tests/e2e/helpers/controlledProvider.ts` | Optional `completionText` emitted only on `complete()`, so a marker can arrive after a panel is hidden. Backward-compatible. |
-| `tests/e2e/workspace/dockview-workspace.spec.ts` | Hidden-panel case now asserts the marker in the rendered transcript and in persisted assistant messages, not just run completion. |
+| `tests/e2e/workspace/dockview-workspace.spec.ts` | Hidden-panel case asserts the marker is absent before `complete()`, present in persisted messages **while A is still hidden**, and present in the rendered transcript after returning — not just run completion. |
 
 **Guards proven to fail (mutation checks, all reverted):** hardcoding a theme color in `globals.css` failed 3 computed-style assertions; dropping the second group leaf in `pruneNode` failed both split/group assertions; suppressing the completion frame failed the hidden-panel E2E assertion. Production files were restored byte-identically.
 

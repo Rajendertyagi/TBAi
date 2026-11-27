@@ -423,10 +423,19 @@ test.describe("Dockview workspace (hermetic)", () => {
     await openFromSidebar(page, b.title);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
-    // Let the held run finish while A is hidden. The completion marker is
-    // emitted by complete() only, so any transcript text containing it arrived
-    // AFTER the panel was hidden — not from the pre-hide "working" frame.
+    // The marker is emitted by complete() only, so it cannot be in the store
+    // while the run is still held — even though the pre-hide "working" frame
+    // may already have been persisted.
+    expect(await persistedAssistantText(request, a.id)).not.toContain(COMPLETION_MARKER);
+
+    // Let the held run finish while A is hidden.
     provider?.complete();
+
+    // Assert persistence WHILE A is still hidden: the hidden panel's run wrote
+    // the completion text to the store without needing to be shown again.
+    await expect
+      .poll(() => persistedAssistantText(request, a.id), { timeout: 15000 })
+      .toContain(COMPLETION_MARKER);
 
     // Return to A: the response completed, not aborted by the hide.
     await openFromSidebar(page, a.title);
@@ -435,16 +444,12 @@ test.describe("Dockview workspace (hermetic)", () => {
       timeout: 15000,
     });
 
-    // The hidden run's text was APPENDED to A's transcript, not merely finished.
+    // The hidden run's text was APPENDED to A's rendered transcript too, not
+    // merely finished in the background.
     const aPanel = page.locator(
       `[data-testid="dockview-direct-panel"][data-conversation-id="${a.id}"]`,
     );
     await expect(aPanel).toContainText(COMPLETION_MARKER, { timeout: 15000 });
-
-    // And it was persisted, proving the hidden panel's run wrote to the store.
-    await expect
-      .poll(() => persistedAssistantText(request, a.id), { timeout: 15000 })
-      .toContain(COMPLETION_MARKER);
   });
 
   test("chat -> settings -> chat keeps the workspace mounted and the host alive", async ({
