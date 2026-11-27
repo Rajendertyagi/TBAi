@@ -1,5 +1,7 @@
 # Interaction model — generic panels, tabs, context, persistence
 
+> **Status: historical prototype reference.** Its permanent Primary Chat, two-region layout, and "split duplicates the active tab" rule are **superseded** by `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`. The prototype's recursive `split()`/`renderNode()` implementation is useful visual evidence; its interaction rules are not the target. Preserved as evidence; do not treat §1–§7 as current requirements.
+
 ## 1. Permanent foundation
 
 - **Chat Threads** (left, ~272px): navigation for both Direct Chat conversations and OpenCode sessions, grouped by runtime with clear labels. Never removed.

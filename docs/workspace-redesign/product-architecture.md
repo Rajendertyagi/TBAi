@@ -1,5 +1,7 @@
 # Product architecture — unified workspace
 
+> **Status: historical product reference.** Its "Primary Chat" permanent position and fixed-region examples are **superseded** by `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, which specifies a recursive workspace where any pane can be split again. Preserved as evidence of the earlier concept model; do not treat §2–§8 as current requirements.
+
 ## 1. The core principle
 
 **The workspace provides layout infrastructure. The user decides which conversations and tools appear in which panels.**

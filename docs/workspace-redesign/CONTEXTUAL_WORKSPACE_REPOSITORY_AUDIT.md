@@ -1,165 +1,165 @@
-# TBAi — Contextual Workspace Repository Audit
+# TBAi — Recursive Workspace Repository Audit
 
-**Status:** Read-only evidence record supporting `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`. It does not authorize implementation.
+**Status:** Read-only evidence record supporting `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`. Documentation only; no implementation authorized.
 
-**Branch / HEAD inspected:** `ui-foundation-upgrade` @ `39ec6fe7603872d56483d66b79c20e4292fc6e62`. Local HEAD equals `git ls-remote origin refs/heads/ui-foundation-upgrade`, re-checked at task start. Working tree contained only two pre-existing untracked paths: `docs/CONTEXTUAL_WORKSPACE_DOCS_AND_AUDIT_PLAN.md` and `docs/workspace-redesign/prototype/screenshots/`. Neither was modified.
+**Branch / HEAD inspected:** `ui-foundation-upgrade` @ `4c0cda723263a075458cb7a44025af40c059debd`. Local HEAD equals `git ls-remote origin refs/heads/ui-foundation-upgrade`, re-checked at task start. Working tree had pre-existing uncommitted documentation edits and untracked paths; none was modified by this audit.
 
-**Date:** 2026-11-27
+**Date:** 2026-11-28
 
-**Evidence classes:** **S** source-verified (read directly) · **L** library-verified (installed declarations or official docs) · **T** test-covered (test source read, **not executed**) · **B** browser-verified as a spec (pass status **agent-reported**) · **A** agent-reported documentation claim · **U** unverified / open.
+**Evidence classes:** **S** source-verified · **L** library-verified (installed declarations / official docs) · **P** prototype-verified (read `prototype/index.html` implementation) · **T** test-covered (test source read, **not executed**) · **A** agent-reported · **U** unverified / open.
 
-**Critical caveat:** no test was executed and no browser run was performed in this audit. Every "passed" number below is agent-reported from documentation; no hosted CI evidence exists for this branch (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:24,190`).
+**Critical caveat:** no test, build, or browser run was executed in this audit. All pass claims are agent-reported; no hosted CI evidence exists.
 
 ---
 
-## 1. Current shell, navigation and tab structure
+## 1. Prototype analysis — `prototype/index.html`
 
-- `AppShell` is the persistent composition root. It mounts `ActivityBar` and `Sidebar` outside Dockview (`web/src/app/layout/AppShell.tsx:143-144`), a global `TabStrip` in the title-bar row (`:147-160`, strip at `:154`), and one persistent `DockviewWorkspace` (`:171-183`). Route pages render as a separate layered surface (`:188-190`). The root `AssistantRuntimeProvider` was removed; every assistant-ui consumer is host-isolated (`:47-50`). **[S]**
-- `Sidebar` is the project/folder and conversation navigator. It is mounted with no props (`:144`), loads folders at mount (`web/src/components/Sidebar.tsx:91-100`), groups chats by folder/simple sections (`:102-127,294-355`), and uses `useConversationsList` with no assistant-ui dependency (DOM guard `tests/dom/sidebar/Sidebar.test.tsx:28-69`). **[S][T]**
-- Clicking a conversation row calls `requestSharedOpen(remoteId, kind)` then navigates (`Sidebar.tsx:67-80`; `SidebarThreadRow.tsx:213-224`). It never calls a Dockview API and has no target-region parameter. The panel appears indirectly through `chatTabs` + `sharedTabs` → `DockviewWorkspace.useCanonicalOpenTabKeys` (`DockviewWorkspace.tsx:348-362`) → `controller.setOpenTabKeys` (`:295-307`) → `reconcilePanels`/`addPanelForTabKey` (`dockviewController.ts:264-278,251-262`). **[S]**
-  - **Conflict:** the E2E helper comment says clicking a sidebar row "navigates but does not open a panel" (`tests/e2e/workspace/dockview-workspace.spec.ts:51-56`), which contradicts current source. Treated as stale test-comment drift; source wins. **[S]**
-- `chatTabs` owns canonical keys `chat:<ref>` / `agent:<ref>`, shared membership, local active selection, and the single draft `chat:new` (`web/src/features/chat/state/chatTabs.ts:8,20-45,92-114,188-485`). `groupId` is a dead `"main"` constant: declared at `:45`, initialized at `:186`, read nowhere in source/tests/scripts. **[S]**
-- Route/focus synchronization has two disjoint URL writers: selection (`useWorkspaceFocusSync.ts:57-100`) and validation (`useConversationTab.ts:66-203`), documented in `routeFocus.ts:63-80`. Per-group active tabs are deliberately Dockview-owned and never mirrored into `localActiveKey` (`useWorkspaceFocusSync.ts:11-14`). **[S]**
+The prototype is a standalone visual exploration. It was **not** edited, renamed or deleted. Its implementation was read, not just its screenshots.
 
-### 1.1 Global `TabStrip` responsibilities that must be preserved
+### 1.1 What it already demonstrates [P]
 
-Mounted once at `AppShell.tsx:154`. All items below are source-verified at `web/src/components/TabStrip.tsx` unless noted.
-
-| Responsibility | Evidence |
+| Concept | Evidence |
 |---|---|
-| Server-authoritative shared reorder with draft-offset index translation | `:218-229`; store semantics `tests/unit/web/chat/chatTabs.reorder.test.ts:59-72` **[T]** |
-| Batch close modes (`others` / `right` / `all`) | `:248-266` |
-| Detached / membership-failure recovery UI and actions | `:174-179,283-286,299-322` |
-| Copy Link | `:268-271,333-335` |
-| Middle-click close, `Enter` activation, roving `tabIndex` | `:133-147` |
-| Keyboard drag with a deliberately non-conflicting key map | `:81-91`; `web/src/config/tabStrip.ts:21-50`; E2E `tests/e2e/components/tab-strip-reorder.spec.ts:245-271` **[B]** |
-| Active-tab scroll-into-view | `:120-127` |
-| Single "+" new-draft entry and Tauri drag region | `:345-356` |
-| One flat, globally ordered view of all shared conversations | `:212-216` |
-| Per-tab title from the server thread row and steady-state gone probe | `:42-74,35-41,62-64` |
+| Recursive layout containers | `split(dir, children)` at `:333` creates `{kind:'split', dir, children, sizes}`; `panel(tab)` at `:332` creates `{kind:'panel', tabs, active, size}` |
+| Recursive rendering | `renderNode(node)` at `:440-452` renders a panel or recursively renders split children with sashes |
+| Split replaces a panel | `splitPanel(id, dir)` at `:479-483` calls `replaceNode(layout, id, split(dir,[p,copy]))` |
+| Tree helpers | `findPanel`, `findSplit`, `countPanels`, `removeNode`, `normalize`, `replaceNode`, `appendPanel` at `:349-355` |
+| Sash resize with minimum | `bindResize()` at `:515-525` — pointer capture, clamped to `minW` derived from 200px |
+| Tab drag between containers | `bindTabDrag()` / `moveTab()` at `:526-545` |
+| Save / restore | `saveLayout()` / `restoreLayout()` at `:546-547` using `tbai:workspace-prototype-layout` |
+| One chrome for every chat position | `panelChromeHTML()` at `:430`; comment at `:427-429` |
+| Content registry | `CONTENT` at `:311-318` — direct, opencode, files, viewer, editor, browser; `CHAT_TYPES` at `:319` |
 
-Dockview's native tabs have **no app wiring** for any of these: `COMPONENTS` registers only two content components (`DockviewWorkspace.tsx:58-61`), `addPanelForTabKey` passes no `title` (`dockviewController.ts:251-262`), and the theme only sets `tabGroupIndicator: "none"` (`dockviewTheme.ts:23-27`). Whether Dockview's built-in tab UI can absorb these behaviors is **[U]**. This is the central conversation-tab ownership conflict (architecture D1).
+### 1.2 What is missing or misleading [P]
 
-### 1.2 Both tab systems render today
+1. **Primary Chat is a permanent special position** — `<section class="primary" id="primary">` at `:275`, `primaryTabs`/`primaryActive` at `:326-328`, explicit comment "Primary Chat is a permanent POSITION" at `:305`. This contradicts the target's "no reserved Main/Right".
+2. **`splitPanel` duplicates existing content** — `:481` creates `copy = panel(makeTab(t.type, t.title+' (copy)', t.identity+'-copy'))`. The target requires an empty/new panel, not a copy of the active tab.
+3. **Adding panels is not targeted at the selected pane** — `addPanel(type)` calls `appendPanel()` (`:478`), which appends to the root split (`:355`), not to the selected pane. `addTabTo(container, type)` targets a container, but `addPanel` does not.
+4. **No automatic opening from file or URL clicks** — content renderers are static HTML strings (`:393-415`); file tree rows and browser URL have no click handlers; no `data-file`/`data-url` handling.
+5. **No project-context inheritance** — `makeTab(type, title, identity)` at `:322` carries only an identity string; content hardcodes "ai-chat-app" (`:396`) and `src/lib/session.ts` (`:402`).
+6. **`normalize()` collapses single-child splits** (`:353`); empty-pane lifecycle is undefined.
+7. **Persistence is an unversioned flat blob** (`:546-547`) with no validation or migration.
+8. **Registry includes `editor`** (`:316`) but not Terminal; the target set is Chat, Agent, File Tree, File Viewer, Browser, Terminal.
+9. **`openConversation` replaces `primaryTabs` entirely** (`:506-509`) rather than opening into a selected pane.
+10. **No keyboard pane navigation, focus model, accessible splitter roles, or responsive drawer behavior.**
 
-`TabStrip` at `AppShell.tsx:154` and Dockview's library-rendered group tabs inside `DockviewWorkspace.tsx:341`. Both derive from the same canonical set (`TabStrip.tsx:207-216`; `DockviewWorkspace.tsx:348-362`). The E2E suite distinguishes them explicitly: `dockviewTab()` matches the dnd-kit strip (`tests/e2e/workspace/dockview-workspace.spec.ts:106-109`) while `realDockviewTab()` matches `.dv-tab[data-tab-panel-id="chat:<id>"]` (`:111-121`). With two groups, the global strip and a non-focused group's native tab can disagree about "active" — a source-level inference, browser behavior **[U]**.
-
----
-
-## 2. Dockview foundation (current implementation)
-
-- Exactly one `DockviewReact` in `web/src`: `DockviewWorkspace.tsx:341`, rendered with `theme={tbaiTheme}`, `components={COMPONENTS}`, `onReady={onReady}`; vendor CSS imported at `:34`. **[S]**
-- Registered components: `tbai-direct → DirectPanel`, `tbai-opencode → OpenCodePanel` (`DockviewWorkspace.tsx:58-61`; ids at `dockviewParams.ts:23-24`). No File Tree, File Viewer, Editor, Terminal, or embedded Browser panel exists. **[S]**
-- `PanelParams` is a closed identity-only contract `{ tabKey, contentType }` (`dockviewParams.ts:17-20`). `parsePanelParams` requires an exact sorted key set, JSON round-trip equality, string types, the `direct|opencode` enum, and `contentTypeForTabKey(tabKey) === contentType` (`:26,52-98`). Both panels validate before rendering and show an invalid-params placeholder (`DirectPanel.tsx:19,22-24,92-101`; `OpenCodePanel.tsx:21,24-34`). **[S][T]** (`tests/unit/web/workspace/dockview-params.test.ts:17-86`)
-- `panelRegistry` claims by canonical tab key and refuses a second host (`web/src/features/workspace/panelRegistry.ts:24-41`); the claim is acquired in an effect for StrictMode safety (`components/usePanelMountClaim.ts:18-27`); duplicate panels render "already open in another panel" (`DirectPanel.tsx:74-87`, `OpenCodePanel.tsx:81-87`). **[S][T]**
-- `dockviewController` owns all events: add/move/close/reconcile/persist (`dockviewController.ts:66-87,163-375`). `addPanelForTabKey` passes `id/component/params/renderer:"always"` (`:251-262`). Move uses two signals (`onDidMovePanel` + settled `onDidMutateLayout(kind:'move')`, `:317-338`); close is applied only after mutation settles and genuine absence is confirmed (`:280-302`). Persistence filters `PERSIST_REASONS` (`:108-115`), honors a restore guard (`:347-352`), and debounces 250 ms (`:159,368-375`). **[S][T]** (`tests/unit/web/workspace/dockview-controller.test.ts:224-482`)
-- `layoutPersistence` stores a versioned device-local envelope under `tbai:dockview-layout` (`state/layoutPersistence.ts:17-26`), rejects lossy values (`:66-132`), validates shape (`:134-144`), migrates v0 (`:146-158`), prunes stale refs and active group (`:160-221`), and deliberately drops floating/popout/edge groups (`:191-193`). Pruning happens on load, not save. **[S][T]** (`tests/unit/web/workspace/layout-persistence.test.ts:63-289`)
-- `workspaceActivation` is a one-way latch keyed by canonical tab key with generation counters and alias mapping (`state/workspaceActivation.ts:36-158`); OpenCode has its own one-way activation latch (`web/src/features/opencode/OpenCodeChatHost.tsx:52-76`). **[S][T]**
-- `renderer:"always"` is set per panel (`dockviewController.ts:40,260`). `usePanelVisibility` exposes a boolean and never pauses execution/streaming/subscriptions (`components/usePanelVisibility.ts:1-21`). There is no `DockviewApi.onDidVisibilityChange`; visibility is per panel via `panel.api.onDidVisibilityChange` (contract guard `tests/unit/web/workspace/dockview-workspace.contract.test.ts:51-53`). **[S][T][L]**
-- Draft materialization: stable panel id `chat:new` (`draftAlias.ts:11-14`), alias state machine (`:34-62`), wiring in `DockviewWorkspace.tsx:153-164,215-230,309-319`, and `DraftChatHost` wires `onThreadIdChange → resolveDraftId` (`DraftChatHost.tsx:39-50`). **[S][T]**
-
-### 2.1 Official Dockview 8.9.1 APIs relevant to the target
-
-All **[L]** unless noted. Installed: `dockview-react@8.9.1`, `dockview-core@8.9.1` (`web/package.json:41`; `bun.lock:570`; `node_modules/.bun/dockview-core@8.9.1/...`).
-
-- Groups render a tab bar; each panel in a group is a tab — `https://dockview.dev/docs/core/overview`.
-- `api.addGroup({ direction, referencePanel, referenceGroup })`, `api.addPanel({ position: { referencePanel | referenceGroup, direction, index }, inactive, initialWidth, initialHeight })` — `https://dockview.dev/docs/core/groups/add`, `https://dockview.dev/docs/core/panels/add`; declarations `dockview/options.d.ts:733-798`.
-- `api.getGroup(id)`, `api.getPanel(id)`, `api.groups`, `api.panels`, `api.serializeGroup`, `api.addGroupFromJSON`, `api.addPanelFromJSON`, `api.addPanelToTabGroup` — `https://dockview.dev/docs/api/dockview/overview`; `api/component.api.d.ts:562,584,597,605,613,765`.
-- **`api.removeGroup()` removes the group and every panel in it** — `https://dockview.dev/docs/core/groups/add`. Region collapse must not use it.
-- `api.onDidMovePanel` fires once settled with the panel back in `api.panels`; `onDidAddPanel`/`onDidRemovePanel` fire during moves — `https://dockview.dev/docs/core/events`.
-- **`group.api.onDidActivePanelChange` is group-scoped; `api.onDidActivePanelChange` is global** — same URL. Required for independent region selection.
-- `renderer:"always"` keeps DOM mounted and hidden via `visibility:hidden`; panel instance destroyed only on removal — `https://dockview.dev/docs/core/panels/rendering`.
-- `fromJSON(data, { reuseExistingPanels })` and `toJSON()` — `https://dockview.dev/docs/core/state/load`, `.../save`.
-- Baseline accessibility: ARIA tablist/tab/tabpanel/region roles, roving tabindex, screen-reader announcements; broader keyboard navigation is opt-in via `keyboardNavigation` — `https://dockview.dev/docs/advanced/accessibility`, `.../focus-navigation`; declarations `dockview/options.d.ts:507-552`.
+**Conclusion:** the prototype proves recursive splitting is visually coherent and understandable. It is **not** an architecture to copy — it is an application-owned recursive layout engine, which the repository previously rejected.
 
 ---
 
-## 3. Runtime isolation and hidden-panel guarantees
+## 2. Current shell, navigation and tab structure [S]
 
-- Root provider removed; per-host providers with `AuiProvider extends={null}` (`AppShell.tsx:47-50`; `DirectChatHost.tsx:35-48`; `OpenCodeChatHost.tsx:240-270`). Source guards assert no root provider and no OpenCode internals in generic workspace code (`tests/unit/web/workspace/provider-boundaries.test.ts:65-121`; `tests/dom/opencode/OpenCodePanel.integration.test.tsx:575-610`). **[S][T]**
-- DOM tests mount Direct + OpenCode hosts together with distinct runtime ids, `data-mode` chat vs agent, no cross-feature chips, and activity keyed only to the OpenCode id (`tests/dom/opencode/OpenCodePanel.integration.test.tsx:613-646`). **[T]**
-- Hidden-panel execution: the E2E spec holds a real stream, hides the panel, asserts the completion marker is absent before `complete()`, present in persisted messages **while hidden**, and present in the rendered transcript after return (`tests/e2e/workspace/dockview-workspace.spec.ts:406-453`). **[B]** Pass status agent-reported (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:188,644`).
-- **Gap:** no OpenCode hidden-stream proof; live concurrent mixed-engine sends remain in the opt-in `*-live.spec.ts` suite and are agent-reported only (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:236,590`). **[A][U]**
-
----
-
-## 4. Files, browser and security boundaries
-
-- `resolveConversationWorkspace` is the single server-side resolver (`src/services/workspace.ts:399-522`): no `conversationId` → legacy global root (`:402-412`); unknown conversation → `conversation_missing` (`:414-417`); simple mode → `workspace/chats/<id>` (`:452-458,488-515`); project mode → canonicalized registered folder path, with `folder_unavailable` on a vanished directory and the row preserved (`:459-480`). **[S][T]** (`tests/unit/workspace/workspace.test.ts:38-95`; `workspace-phase9.test.ts:185-238`)
-- `inspectTarget` / `resolveSafe` confine paths and reject traversal and symlink escape (`src/services/tools.ts:109-176`); `runBash` confines only the starting directory and is **not sandboxed** (`:342-359`, header `:5-14`). **[S][T]** (`tests/unit/tools/tools.test.ts:49-132`; `tests/integration/tools/outside-grants.test.ts:36-187`)
-- `/api/tools/*` is a manual/test surface bound to the global `WORKSPACE_DIR` (`src/routes/tools.ts:41-43,65-120`); `/api/folders/browse` takes an arbitrary `?path=`, returns directories only, no containment (`src/routes/folders.ts:112-135`); `GET /api/workspace` returns only `{name, path}` (`src/routes/workspace.ts:5-15`). **None is a project file-explorer authority.** **[S][A]**
-- `src/services/browser.ts` drives the `agent-browser` CLI/daemon (`AGENT_BROWSER_BIN` at `:6-7`, spawn at `:159-184`); `web/src/tools/browser/ui.tsx:20-26` is render-only and explicitly defers screenshot image rendering. No iframe/webview/embedded browser component exists in `web/src`; Tauri CSP has no `frame-src` (`technical-audit.md:47-51`). **[S][A]**
-- No caller authorization exists: `src/routes/index.ts:58-107` composes only CORS and correlation middleware; `conversationId` is an unauthenticated capability and containment is not authorization (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:347`). **[S][A]**
-- No project-scoped file API or its tests exist; such tests are only planned (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:409,549`). **[U]**
+- `AppShell` mounts `ActivityBar` and `Sidebar` outside Dockview (`web/src/app/layout/AppShell.tsx:143-144`), a global `TabStrip` (`:154`), and one persistent `DockviewWorkspace` (`:171-183`). Root `AssistantRuntimeProvider` removed (`:47-50`).
+- `Sidebar` is the project/folder and conversation navigator; clicking a row calls `requestSharedOpen` then navigates (`web/src/components/Sidebar.tsx:67-80`), with no target-pane parameter.
+- `chatTabs` owns canonical keys `chat:<ref>`/`agent:<ref>`, shared membership, local active selection, draft `chat:new` (`web/src/features/chat/state/chatTabs.ts:8,20-45,92-114,188-485`); `groupId` is a dead `"main"` constant (`:9,45,186`).
+- Global `TabStrip` has nine unique behaviors with no Dockview wiring: shared reorder with draft offset (`TabStrip.tsx:218-229`), batch close (`:248-266`), detached recovery (`:174-179,283-286,299-322`), Copy Link (`:268-271`), middle-click/Enter/roving tabindex (`:133-147`), keyboard drag (`:81-91`), scroll-into-view (`:120-127`), new-draft button (`:345-356`), flat global ordering (`:212-216`).
+- Both tab systems render today: `TabStrip` at `AppShell.tsx:154` and Dockview group tabs in `DockviewWorkspace.tsx:341`. E2E distinguishes them (`tests/e2e/workspace/dockview-workspace.spec.ts:106-121`).
 
 ---
 
-## 5. Test inventory — what each layer does and does not prove
+## 3. Dockview foundation [S]
 
-Static counts at this HEAD: `tests/unit/web/workspace/` 11 files / 99 `it(`; `tests/dom/workspace/` 11 files / 48 `it(`; `tests/e2e/workspace/` 1 file / 9 cases. The roadmap records 10/95 and 47 at `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:196-197` — stale relative to the tree. **[S]**
+- Exactly one `DockviewReact`: `DockviewWorkspace.tsx:341`, props `theme`, `components`, `onReady`; CSS at `:34`.
+- `COMPONENTS` registers only `tbai-direct → DirectPanel` and `tbai-opencode → OpenCodePanel` (`:58-61`).
+- `PanelParams` is closed: `{ tabKey: string; contentType: "direct"|"opencode" }` (`dockviewParams.ts:17-20`); `parsePanelParams` requires exact key set, JSON safety, enum, and `contentTypeForTabKey(tabKey) === contentType` (`:86-99`).
+- `panelRegistry` claims by canonical tab key (`panelRegistry.ts:24-41`); `desiredPanelKeys` filters through `parseTabKey` (`:50-60`); `diffPanelKeys` computes add/remove (`:63-73`).
+- `dockviewController` owns events (`:66-87,163-375`); `addPanelForTabKey` passes `id/component/params/renderer:"always"` with **no position** (`:251-262`); `focusOrOpen` guards on `parseTabKey` (`:232-237`); reconciliation diffs canonical keys (`:264-278`); close confirmation requires settled mutation and genuine absence (`:280-302`).
+- `layoutPersistence` stores a versioned envelope under `tbai:dockview-layout` (`:17-26`), validates shape via `parsePanelParams` (`:134-144`), prunes against `desiredPanelKeys` (`:186-221`), drops floating/popout/edge groups (`:186-194`).
+- `workspaceActivation` is a one-way latch keyed by canonical tab key (`:36-158`); OpenCode has its own latch (`OpenCodeChatHost.tsx:52-76`).
+- `renderer:"always"` set per panel (`dockviewController.ts:40,260`); `usePanelVisibility` never pauses work (`components/usePanelVisibility.ts:1-21`).
+
+---
+
+## 4. Recursive layout capability [L]
+
+- Grid is a recursive tree: `SerializedGridObject<T> = { type:'leaf'|'branch'; data: T | SerializedGridObject<T>[]; size?; visible? }` (`dockview-core/dist/cjs/gridview/gridview.d.ts:56-61`); `GridNode<T> = GridLeafNode<T> | GridBranchNode<T>` (`:38-54`); locations are `number[]` paths (`:14-15`).
+- `SerializedDockview.grid.root` is that tree with group state at leaves (`dockview-core/dist/cjs/dockview/dockviewComponent.d.ts:102-108`).
+- Directional placement: `AddPanelPositionOptions` / `AddGroupOptions` with `referenceGroup`, `direction: 'left'|'right'|'above'|'below'|'within'` (`dockview-core/dist/cjs/dockview/options.d.ts:733-807`); `Direction` at `gridview/baseComponentGridview.d.ts:13`.
+- `DockviewApi.addPanel` (`component.api.d.ts:570`), `addGroup` (`:584`), `toJSON` (`:631`), `fromJSON` (`:625`).
+- **No documented depth limit** — search for `maxDepth|depth limit|recursi` across installed declarations returned no matches.
+- Nested instances are free (`https://dockview.dev/docs/core/nested`; licence table "Nested layouts ✓") but fragment DnD scope (`DockviewApi.id`, `component.api.d.ts:336-338`), persistence (parent `toJSON` has no nested-layout field — `dockview/types.d.ts:39-55`), focus and lifecycle. Option A (one instance) is strictly better here.
+- Official docs: `https://dockview.dev/docs/core/overview`, `.../panels/add`, `.../groups/add`, `.../state/save`, `.../state/load`, `.../nested`.
+
+---
+
+## 5. Runtime isolation and state [S][T]
+
+- Two Chat panels with different conversations coexist with separate runtimes: each `DirectChatHost` calls `useAppChatRuntime(threadListAdapter, threadId, noopThreadIdChange)` (`DirectChatHost.tsx:43`) with its own provider (`:46,48`); OpenCode hosts are independent (`OpenCodeChatHost.tsx:149-193,330-403`).
+- Same conversation in two panels is refused by `panelRegistry` claim-by-tab-key (`panelRegistry.ts:24-41`; `DirectPanel.tsx:74-87`).
+- Chat state is per-host/per-thread: composer draft (`composerDraft.ts:11-15`), stream pointer (`resumable-stream.ts:3-8`), activation generation (`workspaceActivation.ts:36-88`), OpenCode latch (`OpenCodeChatHost.tsx:59-63`).
+- `renderer:"always"` retains hidden DOM; full reload loses DOM-held state — only identity/spatial layout, composer draft and stream pointer are durable (`layoutPersistence.ts:1-12`; `composerDraft.ts:11-15`).
+- Technical audit records real isolation spikes: two Direct runtimes independent, Direct+OpenCode side by side, and shared module-level state risks (`technical-audit.md:75-106`).
+
+---
+
+## 6. Automatic-open seams and security [S]
+
+- **URLs:** Direct-chat markdown anchor override (`ChatWindow.tsx:923-925`, currently `target="_blank"`) and default anchor (`markdown-text.tsx:168-179`); neither has `onClick`. Web-search results are non-clickable (`web-search.tsx:77-90`).
+- **File paths:** plain text in tool cards (`filesystem/ui.tsx:827-934`), directory rows (`filesystem/ui.tsx:750-783` → `result-fields.tsx:202-228`), search hits (`filesystem/ui.tsx:799-823`), diff filenames (`code-diff.tsx:107`), inline code (`markdown-text.tsx:261-272`). `result-fields.tsx:52-63` rejects linkifying arbitrary strings.
+- **File root:** `resolveConversationWorkspace` (`src/services/workspace.ts:399-522`) resolves from persisted fields; `inspectTarget`/`resolveSafe` (`src/services/tools.ts:109-177`) confine paths. Unsuitable endpoints: `/api/tools/*` global root (`routes/tools.ts:41-43,65-120`), `/api/folders/browse` arbitrary path/directories only (`routes/folders.ts:112-135`), `/api/workspace` metadata only (`routes/workspace.ts:5-15`).
+- **Browser:** headless `agent-browser` CLI (`src/services/browser.ts:6-7,159-184`), render-only UI (`web/src/tools/browser/ui.tsx:20-26`); no embedded browser; Tauri CSP has no `frame-src` (`src-tauri/tauri.conf.json:33-35`).
+- **Terminal:** `runBash` unsandboxed with server privileges (`src/services/tools.ts:5-13,342-359`); no persistent process registry (`process-ownership.ts:1-28` is Windows job ownership).
+- **Threat model:** no caller authorization; `conversationId` is an unauthenticated capability; containment is not authorization (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:347`).
+
+---
+
+## 7. Test inventory [T]
 
 | Layer | Representative files | Proves | Does **not** prove |
 |---|---|---|---|
-| Unit controller | `dockview-controller.test.ts:225-482` | Event sequencing, move≠close, definitive close, restore guard, reconciliation, focus/replace | Real Dockview rendering, DnD, DOM retention, persistence to storage |
-| Unit persistence | `layout-persistence.test.ts:63-289` | Envelope validation, migration, pruning, corrupt/lossy rejection, deliberate floating-group drop | Real reload, real `toJSON`/`fromJSON`, browser restore |
-| Unit params/registry | `dockview-params.test.ts:17-86`; `panel-registry.test.ts:13-50` | Closed param contract, claim/release/diff | Browser-side validation on restore; real duplicate-host prevention (DOM does) |
-| Source-text guards | `provider-boundaries.test.ts:65-121`; `dockview-workspace.contract.test.ts:28-64`; `dockview-theme.test.ts:24-55`; `workspace-page-copy.test.ts:16-28` | Invariants about source text | Any rendered behavior |
-| DOM split/group | `dockview-split-group-contract.test.tsx:129-186` | Two-group restore, canonical identity, identity independent of group placement | Pointer-driven Dockview split (E2E-only, per `:4-5`) |
-| DOM runtime | `direct-host-parity.test.tsx:230-331`; `direct-tool-ui-registration.test.tsx:226-303`; `draft-alias-runtime.test.tsx:164-203`; `OpenCodePanel.integration.test.tsx:613-646` | Per-host providers, distinct runtimes, duplicate refusal, tool/data-UI registries, mixed mounting | Real HTTP/tool execution, real OpenCode server |
-| DOM focus/activation | `focus-sync.test.tsx:75-138`; `startup-activation.test.tsx:198-248`; `workspace-activation.test.tsx:67-132` | URL/focus convergence, dormant activation, disposal semantics | Real Dockview events, real OpenCode startup |
-| E2E workspace | `dockview-workspace.spec.ts:183-563` | Real panels, drag/move, split into two groups, composer preservation, hidden-stream continuation, reload/corrupt fallback, deep link, route persistence | OpenCode panels/streams, pixel resize, floating groups, Tauri shell; pass status agent-reported |
-| chatTabs unit | `tests/unit/web/chat/chatTabs*.test.ts` | Canonical keys, close results, navigation, reorder, detached/membership races, draft resolution | Real HTTP CAS, real Dockview panels |
-| Path containment | `tools.test.ts:49-132`; `editPreview.test.ts:155-159`; `edit-preview.spec.ts:89-104` | Traversal/symlink rejection on tool endpoints | Any project-scoped file API (none exists) |
+| Unit controller | `dockview-controller.test.ts:224-482` | Event sequencing, move≠close, restore guard, reconciliation | Real rendering, placement, arbitrary depth |
+| Unit persistence | `layout-persistence.test.ts:63-289` | Envelope validation, pruning, corrupt/lossy rejection | Deep nested restore, non-chat panels |
+| Unit params/registry | `dockview-params.test.ts:17-86`; `panel-registry.test.ts:13-50` | Closed param contract, claim/release/diff | Non-chat identities |
+| DOM split/group | `dockview-split-group-contract.test.tsx:129-186` | Two-group restore, identity independent of placement | Pointer-driven split, depth > 2 |
+| DOM runtime | `direct-host-parity.test.tsx:230-331`; `OpenCodePanel.integration.test.tsx:575-646` | Per-host providers, distinct runtimes, duplicate refusal | Real HTTP/tool execution |
+| E2E workspace | `dockview-workspace.spec.ts:183-563` | Real panels, drag/move, one split into two groups, composer preservation, hidden stream, reload/corrupt fallback | **Arbitrary-depth splits**, non-chat panels, OpenCode streams |
+| chatTabs unit | `tests/unit/web/chat/chatTabs*.test.ts` | Canonical keys, close results, navigation, reorder | Real HTTP CAS, real Dockview panels |
+| Path containment | `tools.test.ts:49-132`; `editPreview.test.ts:155-159`; `edit-preview.spec.ts:89-104` | Traversal/symlink rejection on tool endpoints | Any project-scoped file API |
 
-No test was executed in this audit. All pass counts are agent-reported (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:187-188,644`).
+**Critical gap:** the current two-group E2E case (`dockview-workspace.spec.ts:258-335`) proves one split, not arbitrary depth. No test splits a child, then a descendant.
 
 ---
 
-## 6. Current-vs-target gap matrix
+## 8. Current-vs-target gap matrix
 
-Severity: **Blocker** = target cannot be met without resolving; **Major** = significant rework or risk; **Minor** = polish.
+Severity: **Blocker** / **Major** / **Minor**.
 
-| ID | Gap | Severity | Impact | Evidence |
-|---|---|---|---|---|
-| G1 | Two conversation-tab systems (global `TabStrip` + Dockview native tabs); no single owner | **Blocker** | Conflicting active state; target requires per-region tabs | `AppShell.tsx:154`; `DockviewWorkspace.tsx:341`; audit §1.1–§1.2 |
-| G2 | Nine unique `TabStrip` behaviors have no Dockview wiring | **Blocker** | Retiring the strip loses shared reorder, batch close, detached recovery, copy link, keyboard drag | audit §1.1 |
-| G3 | No named main/right region identity; `groupId` is dead | **Blocker** | Cannot open a conversation into a specific region or persist region placement | `chatTabs.ts:9,45,186`; `dockviewController.ts:35-41,251-262` |
-| G4 | No contextual tab row or per-conversation contextual state owner | **Blocker** | `Chat|File Viewer|Browser|Files` and per-conversation memory do not exist | `DirectPanel.tsx:56-87`; `OpenCodePanel.tsx:71-88`; `dockviewParams.ts:17-20` |
-| G5 | `PanelParams` is closed identity-only | **Major** | Contextual state must not be smuggled into layout params | `dockviewParams.ts:26,86-98`; `layoutPersistence.ts:134-144` |
-| G6 | No conversation-scoped file list/read API | **Blocker** | Files and File Viewer cannot be implemented safely | `src/routes/tools.ts:41-43,65-120`; `src/routes/folders.ts:112-135`; `src/routes/workspace.ts:5-15` |
-| G7 | No embedded browser; headless tool is not a panel; CSP blocks frames | **Blocker** | Browser tab feasibility unresolved | `src/services/browser.ts:6-7,159-184`; `web/src/tools/browser/ui.tsx:20-26`; `technical-audit.md:47-51` |
-| G8 | No file tree/viewer/editor/terminal production component | **Major** | All contextual content except Chat must be built | `web/src/features/workspace/components/`; `technical-audit.md:25-51` |
-| G9 | Global `api.onDidActivePanelChange` only; no group-scoped selection wiring | **Major** | Region selections cannot be independent | `dockviewController.ts:86,363-366`; `useWorkspaceFocusSync.ts:81-95` |
-| G10 | Region collapse could wrongly use `api.removeGroup()` | **Major** | Would delete conversations' panels; hide ≠ close | library `https://dockview.dev/docs/core/groups/add` |
-| G11 | No narrow-window / keyboard / a11y / performance acceptance for two regions | **Major** | CW-16 unmet | `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:261-269` |
-| G12 | No multi-window region behavior decision | **Minor** | Device-local layout vs shared membership interaction undefined | `AppShell.tsx:121-132`; `state-management.md:66-82` |
-| G13 | Test inventory counts stale in roadmap | **Minor** | Evidence accuracy | `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:196-197` vs actual 11/99, 11/48 |
+| ID | Gap | Severity | Evidence |
+|---|---|---|---|
+| G1 | No pane terminology; "panel" means container and content | **Major** | §3 terminology; prototype `:332-333` |
+| G2 | No placement API in controller | **Blocker** | `dockviewController.ts:35-41,251-262` |
+| G3 | Closed `PanelParams` rejects non-chat identities | **Blocker** | `dockviewParams.ts:17-20,86-99` |
+| G4 | Reconciliation prunes non-chat ids | **Blocker** | `layoutPersistence.ts:186-221`; `panelRegistry.ts:50-60` |
+| G5 | No single opening service for manual + automatic | **Blocker** | §6; `focusOrOpen` only |
+| G6 | No click handlers for files/URLs | **Blocker** | §6 seams |
+| G7 | No per-panel state owner for tool panels | **Major** | §5 |
+| G8 | No conversation-scoped file API | **Blocker** | §6 |
+| G9 | No embedded browser; CSP blocks frames | **Blocker** | §6 |
+| G10 | No persistent terminal process owner | **Major** | §6 |
+| G11 | Two conversation-tab systems | **Major** | §2 |
+| G12 | No arbitrary-depth acceptance test | **Blocker** | §7 |
+| G13 | Prototype's Primary Chat / duplicate split / untargeted add | **Major** | §1.2 |
+| G14 | Narrow-window / keyboard / a11y / performance criteria | **Major** | architecture §10 |
 
-**Feasibility note:** none of G1–G12 disproves the proposed architecture. G1–G5 and G9–G10 are app-level ownership/placement work on top of an already-capable Dockview foundation; G6–G8 are new capability work with explicit owner decisions. See `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` §10.
-
----
-
-## 7. Conflicts and stale statements in older documentation
-
-All are statements in the cited docs **[S]**; their truth is assessed against the current authority (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md`, `DOCKVIEW_INTEGRATION_PLAN.md`, this document).
-
-1. `README.md:53` says "One Direct runtime provider in AppShell bound to one active thread" — contradicted by `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:140` and `provider-boundaries.test.ts:66-70`. The README is explicitly a historical handoff (`README.md:3,5`).
-2. `README.md:58-59,66-68` recommends building a generic panel foundation first and calls two-live-Direct isolation an open spike; the Dockview ADR records both as decided (`docs/decisions.md:9050-9060`) and the roadmap lists them implemented (`:181`).
-3. Prototype interaction counts conflict: `README.md:10` says 16/16 PASS; `interaction-model.md:85` says 15/15 PASS. Neither re-verified. **[U]**
-4. "Primary Chat" is live in `product-architecture.md:15,23,31,34,43-52,85,98` and `interaction-model.md:5-8,60-65,73-77`; current vocabulary removes it (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:298,308`). Do not rewrite historical evidence; replace the vocabulary only when those docs are touched (`:104`).
-5. `interaction-model.md:46` proposes a panel tree in localStorage via `useDesktopLayout`; current layout is a versioned Dockview record (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:159,327-330`).
-6. `technical-audit.md:44,85,94-99` describes second-runtime isolation and global operation slots as unresolved; `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:181` and `docs/decisions.md:9059` record them resolved/preserved.
-7. Point-in-time HEADs differ across docs: `DOCKVIEW_INTEGRATION_PLAN.md:5` (`a7fb5b3`), `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:6` (`65e97c4`), `WORKSPACE_ARCHITECTURE_PLAN.md:7` (`b02ca47`), `DOCKVIEW_EVALUATION_PLAN.md:5` (`a2f453d`), `MULTI_PROJECT_SIDEBYSIDE_AUDIT.md:3` (`da556a9`), `technical-audit.md:3` (`244b412`), current HEAD `39ec6fe`. Re-verify rather than inherit.
-8. Agent-reported counts differ by date: `README.md:9` (4999/1037/828), `DOCKVIEW_INTEGRATION_PLAN.md:5` (DOM 891), `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:187` (6169/88/0, DOM 897), `OPENCODE_SESSION_LOSS_INVESTIGATION.md:9` (6160/88/0, DOM 891). All agent-reported; no CI.
-9. Stale cross-reference: `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:290,592` points to a non-existent §13 of the session report.
-10. `right-hand-workspace-audit.md` and `right-hand-workspace-demo.html` are at `docs/` root, not `docs/workspace-redesign/`; both are historical (`README.md:44,78`).
-11. `docs/ui-redesign/requirements.md:19,31,38-39,45,129` records owner-confirmed side-by-side and focused-pane decisions that are **not implemented**; they are inputs to architecture D4, not current behavior. **[A]**
+**Feasibility note:** none of G1–G12 disproves the model. Dockview Option A supports arbitrary depth (§4); the gaps are TBAi-side extensions.
 
 ---
 
-## 8. Audit limitations
+## 9. Conflicts and stale statements
+
+1. `README.md:53` says "One Direct runtime provider in AppShell" — contradicted by `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:140` and `provider-boundaries.test.ts:66-70`. README is a historical handoff (`:3,5`).
+2. `product-architecture.md:15,23,34` and `interaction-model.md:6,8` treat **Primary Chat** as permanent — superseded by this audit's §1.2 and the architecture.
+3. `interaction-model.md:22` says split **duplicates the active tab** — superseded; target creates an empty/new panel.
+4. `interaction-model.md:61` says two permanent regions remain on narrow screens — superseded; no permanent regions.
+5. `technical-audit.md:41-45` describes multiple Direct panels as risky with one root provider — now implemented via per-host providers (`DirectChatHost.tsx:35-48`); preserve as historical record, link to current architecture.
+6. `docs/CONTEXTUAL_WORKSPACE_DOCS_AND_AUDIT_PLAN.md:18-53` describes the fixed Main/Right + two-level contextual-tab model — superseded; update status banner.
+7. Point-in-time HEADs differ across docs; re-verify rather than inherit.
+8. Agent-reported counts differ by date; no CI evidence.
+
+---
+
+## 10. Audit limitations
 
 - No test, build, or browser run was executed; all pass claims are agent-reported.
-- No source, test, dependency, lockfile, configuration, or screenshot was changed.
-- The owner-directed plan file `docs/CONTEXTUAL_WORKSPACE_DOCS_AND_AUDIT_PLAN.md` is included in this documentation commit as the source brief; the screenshots directory remains untracked and untouched.
-- Library capability statements come from installed declarations and official docs; runtime behavior of unused placement APIs in this app is **[U]**.
+- No source, test, dependency, lockfile, configuration, or prototype file was changed.
+- Library capability statements come from installed declarations and official docs; runtime behavior of unused placement APIs in this app is **U**.

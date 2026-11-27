@@ -1,215 +1,370 @@
-# TBAi — Contextual Workspace Architecture
+# TBAi — Recursive Workspace Architecture
 
-**Status:** Owner-directed **target architecture specification**. It is documentation only and does **not** authorize implementation. The owner must approve the architecture and the unresolved decisions in §12 before any code change.
+**Status:** **Authoritative product and architecture specification** for the workspace. Documentation only — it does **not** authorize implementation. The earlier fixed Main/Right region model and the two-level `Chat | File Viewer | Browser | Files` contextual-tab model are **superseded** by this document.
 
-**Audited branch / HEAD:** `ui-foundation-upgrade` @ `39ec6fe7603872d56483d66b79c20e4292fc6e62` (local HEAD equals `git ls-remote origin refs/heads/ui-foundation-upgrade`, re-checked at the start of this task).
+**Audited branch / HEAD:** `ui-foundation-upgrade` @ `4c0cda723263a075458cb7a44025af40c059debd` (local HEAD equals `git ls-remote origin refs/heads/ui-foundation-upgrade`, re-checked at task start).
 
-**Date:** 2026-11-27
+**Date:** 2026-11-28
 
-**Authority:** This document is the current owner-directed target for the workspace UI. `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` remains the authoritative product direction and phase roadmap; `DOCKVIEW_INTEGRATION_PLAN.md` remains the authoritative record of the *implemented* Dockview foundation. Where this document proposes a change to those documents' current behavior, it says so explicitly and marks the decision as pending (§12). Historical/superseded documents are not promoted by this document.
+**Authority:** This is the single clear target specification. `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` remains the authoritative phase roadmap; `DOCKVIEW_INTEGRATION_PLAN.md` remains the authoritative record of the *implemented* Dockview foundation. Historical implementation records are preserved, not rewritten.
 
 ---
 
-## 1. Evidence classes used here
+## 1. Evidence classes
 
 | Class | Meaning |
 |---|---|
 | **Source-verified** | Read directly from production source at the audited HEAD; file:line cited. |
-| **Library-verified** | Read from the installed package's type declarations or the official Dockview documentation (URL cited). |
-| **Test-covered** | A test source asserts the behavior; the test was **read, not executed** in this task. |
-| **Browser-verified** | A real-browser Playwright spec exists; its pass status is **agent-reported**, not re-run here. |
-| **Agent-reported** | A document records a result claimed by an agent; not independently re-executed. No hosted CI evidence exists for this branch. |
+| **Library-verified** | Read from installed package declarations or official docs; path/URL cited. |
+| **Prototype-verified** | Read from `prototype/index.html` implementation, not just screenshots. |
+| **Test-covered** | A test source asserts the behavior; read, **not executed** in this task. |
+| **Agent-reported** | A document records a claimed result; not independently re-executed. No hosted CI evidence exists. |
 | **Unverified / owner decision** | No source or test evidence; explicitly open. |
 
-No test result in this document is claimed to have passed recently. The last agent-reported gate results are recorded in `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` §6.2 with that limitation stated.
+No test result here is claimed to have passed recently.
 
 ---
 
-## 2. Target layout and terminology
+## 2. The product model in plain language
+
+The workspace is a **desk you can keep building**. On the left is a permanent list of every conversation — Direct chats and Code sessions — grouped by project. That list never moves and never rearranges itself.
+
+To its right is one flexible area made of **panes**. A pane is a box that shows something: a chat, a file tree, a file preview, a browser, a terminal, or a future tool. You can split any pane into two panes — side by side or one above the other. Then you can split either of those children again, and again, as deep as you like. Every pane stays visible until you close it.
+
+You can put things there two ways:
+
+- **Manually** — choose what to add and whether it becomes a tab in the current pane or a new pane to the side or below.
+- **By acting** — click a file in a chat and a file viewer opens beside it; click a link and a browser opens. If the right thing is already open, it is brought forward instead of duplicated.
+
+Chats keep running while you look at other things. Their text, drafts, scroll position and streams are not lost. Closing a file preview does not close the conversation. Rearranging panes does not restart anything.
+
+There is **no permanent Main or Right workspace**, no mandatory three-column layout, and no fixed position for any runtime.
+
+---
+
+## 3. Terminology — product vs Dockview
+
+The word "panel" must never mean both a container and its content. This document uses:
+
+| Product term | Meaning | Dockview term |
+|---|---|---|
+| **Workspace** | The complete working area to the right of Chat Threads | one `DockviewReact` instance |
+| **Pane** | A spatial container that can hold content and be split into child panes | a **group** (a leaf in Dockview's grid tree) |
+| **Split** | Divides a pane into two child panes | a **branch** in the grid tree; `addPanel`/`addGroup` with `direction` |
+| **Content panel / tab** | One piece of content inside a pane: Chat, File Viewer, Files, Browser, Terminal | a **panel** (a tab inside a group) |
+| **Conversation** | A Direct or OpenCode session | canonical tab key `chat:<id>` / `agent:<id>` used as a panel id |
+| **Layout** | The arrangement of panes and content | `SerializedDockview` (`grid.root` + `panels`) |
+
+**Rule:** in product writing say **pane** for the box and **content tab** for what is inside it. In code, Dockview's own names (`panel`, `group`) are kept where they refer to the library, but TBAi-facing APIs use `pane` and `contentTab`.
+
+---
+
+## 4. Visual diagrams
+
+### 4.1 Initial workspace — Chat Threads and one Chat pane
 
 ```text
-┌────────────────────┬──────────────────────────────────────┬──────────────────────────────────────┐
-│ FIXED CHAT THREADS │ MAIN WORKSPACE                       │ RIGHT WORKSPACE                      │
-│                    │                                      │                                      │
-│ Projects/Folders   │ [Project A / Chat 1] [Chat 2]         │ [Project B / Chat 3]                 │
-│ Project chats      │                                      │                                      │
-│ Other chats        │ Chat | File Viewer | Browser | Files │ Chat | File Viewer | Browser | Files │
-│ OpenCode sessions  │                                      │                                      │
-│                    │ Content for selected conversation    │ Content for selected conversation    │
-│                    │                                      │                                      │
-└────────────────────┴──────────────────────────────────────┴──────────────────────────────────────┘
+┌──────────────────┬──────────────────────────────────────────────────────────────┐
+│ CHAT THREADS     │  [ Chat ▾ ]                                    [ + ]          │
+│                  │──────────────────────────────────────────────────────────────│
+│ Projects         │  Chat · Project A / Chat 1                                   │
+│  Project A       │  ┌────────────────────────────────────────────────────────┐  │
+│   Chat 1    ●    │  │ You: Where does the workspace root come from?        │  │
+│   Chat 2         │  │ Assistant: It is resolved server-side…                │  │
+│  Project B       │  │                                                      │  │
+│   Chat 3         │  │ [ composer                                         ] │  │
+│ Other chats      │  └────────────────────────────────────────────────────────┘  │
+│ Sessions         │                                                              │
+└──────────────────┴──────────────────────────────────────────────────────────────┘
 ```
 
-The diagram is conceptual. The right workspace may be collapsed or resized; when absent, the main workspace uses the available width. Neither region is tied to a runtime or a project: both must support Direct Chat and OpenCode conversations, and each binds to the conversation selected in its own region.
+### 4.2 Chat split right — File Viewer visible at the same time
 
-**Vocabulary** (continues `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` §9.1; "Primary Chat" is not a live concept):
+```text
+┌──────────────────┬─────────────────────────────────┬──────────────────────────────┐
+│ CHAT THREADS     │ [ Chat ▾ ] [ + ]               │ [ File Viewer ▾ ] [ + ]      │
+│                  │─────────────────────────────────│──────────────────────────────│
+│                  │ Chat · Project A / Chat 1       │ File Viewer · workspace.ts   │
+│                  │ ┌─────────────────────────────┐ │ ┌────────┬─────────────────┐ │
+│                  │ │ transcript + composer       │ │ │ tree   │ code preview    │ │
+│                  │ │ (still live, still scrolled)│ │ │        │ read-only       │ │
+│                  │ └─────────────────────────────┘ │ └────────┴─────────────────┘ │
+└──────────────────┴─────────────────────────────────┴──────────────────────────────┘
+                            ← draggable sash →
+```
 
-- **Chat Threads** — the fixed left-side navigator for all conversations (Direct and OpenCode).
-- **Main Workspace / Right Workspace** — two spatial regions inside the one Dockview instance.
-- **Conversation tab** — a Dockview group tab representing one open conversation in that region (level 1).
-- **Contextual tab** — one of `Chat | File Viewer | Browser | Files` inside a conversation panel (level 2).
-- **Content type** — what a panel renders (`direct`, `opencode`, and future types).
-- **Runtime** — the independent execution system (Direct assistant-ui runtime or OpenCode V2 controller).
-- **Layout** — Dockview-owned spatial geometry and group structure.
+### 4.3 Nested example — three levels of splitting
 
----
+```text
+┌──────────────────┬──────────────────────────────┬──────────────────────────────────┐
+│ CHAT THREADS     │ Pane A: Chat                 │ Pane B (split down):             │
+│                  │ ┌──────────────────────────┐ │  ┌──────────────────────────────┐ │
+│                  │ │ Direct Chat 1            │ │  │ Pane B1: File Viewer         │ │
+│                  │ │ transcript + composer    │ │  │ tree │ code                 │ │
+│                  │ └──────────────────────────┘ │  └──────────────────────────────┘ │
+│                  │                              │  ─────────── sash ──────────────  │
+│                  │                              │  ┌──────────────────────────────┐ │
+│                  │                              │  │ Pane B2 (split right again): │ │
+│                  │                              │  │ ┌────────────┬─────────────┐ │ │
+│                  │                              │  │ │ Browser    │ Terminal    │ │ │
+│                  │                              │  │ │ URL/state  │ shell/session│ │ │
+│                  │                              │  │ └────────────┴─────────────┘ │ │
+│                  │                              │  └──────────────────────────────┘ │
+└──────────────────┴──────────────────────────────┴──────────────────────────────────┘
+   Level 0: workspace   Level 1: A | B   Level 2: B1 / B2   Level 3: Browser | Terminal
+```
 
-## 3. Two levels of navigation
+**Any pane can be split again.** There is no depth limit in the model; practical limits come from minimum pane sizes and screen space.
 
-### 3.1 Level 1 — conversation tabs, per region
+### 4.4 A populated workspace — six content types
 
-Each region has its own conversation tab strip. These tabs represent the conversations **open in that region**, not a second copy of the whole Chat Threads list. Chat Threads remains the fixed navigator and the source for finding conversations. A conversation keeps the same canonical identity and the same runtime host when moved between regions.
+```text
+┌──────────────────┬──────────────────────────────┬──────────────────────────────────┐
+│ CHAT THREADS     │ [Direct ▾] [Agent ▾] [ + ]  │ [Files ▾] [Viewer ▾] [ + ]       │
+│                  │──────────────────────────────│──────────────────────────────────│
+│                  │ Direct Chat · Project A      │ File Tree · Project A            │
+│                  │ ┌──────────────────────────┐ │ ┌──────────────────────────────┐ │
+│                  │ │ transcript + composer    │ │ │ src / services / …           │ │
+│                  │ └──────────────────────────┘ │ └──────────────────────────────┘ │
+│                  ├──────────────────────────────│──────────────────────────────────│
+│                  │ OpenCode · Project B         │ File Viewer · workspace.ts       │
+│                  │ ┌──────────────────────────┐ │ ┌──────────────────────────────┐ │
+│                  │ │ agent transcript         │ │ │ read-only code               │ │
+│                  │ └──────────────────────────┘ │ └──────────────────────────────┘ │
+│                  ├──────────────────────────────┴──────────────────────────────────│
+│                  │ [Browser ▾] [Terminal ▾]                                        │
+│                  │ ┌──────────────────────────────┬───────────────────────────────┐ │
+│                  │ │ Browser · docs link          │ Terminal · Project A          │ │
+│                  │ └──────────────────────────────┴───────────────────────────────┘ │
+└──────────────────┴──────────────────────────────────────────────────────────────────┘
+```
 
-**Source basis:** Dockview groups render a tab bar at the top and each panel in a group appears as a tab (library-verified: `https://dockview.dev/docs/core/overview`). The current production layout already persists a branch root with two leaf groups and distinct canonical panels (`web/src/features/workspace/state/layoutPersistence.ts:160-220`; DOM test `tests/dom/workspace/dockview-split-group-contract.test.tsx:129-186`), and a real pointer split into two groups is covered by `tests/e2e/workspace/dockview-workspace.spec.ts:258-335` (spec exists; pass status agent-reported).
+### 4.5 Manual creation — add tab, split right, split down
 
-### 3.2 Level 2 — contextual tabs, per conversation
+```text
+  Click [ + ] in a pane
+          │
+          ▼
+  ┌──────────────────────────────────────┐
+  │ Add content tab to this pane         │
+  │ Split pane right                     │
+  │ Split pane down                      │
+  └──────────────────────────────────────┘
+          │
+   choose action → choose content type
+   (Chat, Agent, Files, File Viewer, Browser, Terminal, future)
+          │
+          ▼
+  add tab to current pane  OR  create child pane right/below
+```
 
-Every conversation panel exposes the same four tabs, in **exactly this order**, in both regions:
+### 4.6 Automatic opening from a file or URL click
 
-1. **Chat** — the conversation transcript and composer, using the existing Direct or OpenCode runtime.
-2. **File Viewer** — displays the file selected in Files. First version is read-only unless a separate editor decision is approved (§12).
-3. **Browser** — an in-workspace browser/preview surface. The existing headless `agent-browser` tool is **not** this UI (§7.4).
-4. **Files** — the file/folder tree for the selected conversation's server-resolved workspace. "Files" is the visible label; it means the file tree.
+```text
+  Click file "src/services/workspace.ts" in a chat
+          │
+          ▼
+  openPanel({ type: "file-viewer",
+              context: { conversationId, relativePath },
+              placement: "beside-source", reuse: "by-identity" })
+          │
+     ┌────┴────┐
+     ▼         ▼
+ exists?     absent?
+ focus it    create child pane beside the source chat
+     │         │
+     └────┬────┘
+          ▼
+  visible feedback: pane highlighted, file loaded, chat still live
+```
 
-A tab may show a useful empty or disabled state when its context is unavailable, but the row and its order must not change between regions or between conversations.
+Same flow for a URL → `type: "browser"`, identity = normalized URL. Clicking the same item again focuses the existing pane; a modifier forces a new instance.
 
-**Source basis:** no contextual row exists today. `DirectPanel` and `OpenCodePanel` render their hosts directly (`web/src/features/workspace/components/DirectPanel.tsx:56-87`, `OpenCodePanel.tsx:71-88`); only two content components are registered (`DockviewWorkspace.tsx:58-61`). This is a **target**, not current behavior.
+### 4.7 Save and restore after restart
 
----
-
-## 4. Region behavior and symmetry
-
-- Chat Threads stays anchored on the far left, outside Dockview (`web/src/app/layout/AppShell.tsx:143-144` mounts `ActivityBar` and `Sidebar`; the Dockview layer is at `:171-183`).
-- Selecting a conversation from Chat Threads opens or focuses it in the current/last-focused region. A distinct action (owner decision D4, §12) opens it in the other region.
-- Dragging a conversation tab to the other group moves it there without creating a new conversation or runtime. Dockview's `onDidMovePanel` fires once the move has settled and the panel is back in `api.panels` (library-verified: `https://dockview.dev/docs/core/events`); the current controller already treats a move as a relocation, never a close (`web/src/features/workspace/dockviewController.ts:317-338,280-302`).
-- Each region can contain multiple conversation tabs. The selected conversation in one region is independent of the selected conversation in the other. **This requires group-scoped selection events**: `group.api.onDidActivePanelChange` is scoped to one group, while `api.onDidActivePanelChange` is global (library-verified: `https://dockview.dev/docs/core/events`). Current code subscribes only to the global event (`web/src/features/workspace/dockviewController.ts:86,363-366`; `web/src/features/workspace/state/useWorkspaceFocusSync.ts:81-95`).
-- Selecting a contextual tab changes the view for that conversation only. Switching conversations in one region must not change the other region's project, file, browser, or selected contextual tab.
-- Each conversation remembers its own selected contextual tab and relevant view state (§8).
-- Selecting a file in Files opens it in File Viewer without replacing the conversation tab or losing chat state.
-- Closing/collapsing a region is distinct from closing a conversation. **Dockview's `api.removeGroup()` removes the group and every panel in it** (library-verified: `https://dockview.dev/docs/core/groups/add`), so it must **not** be used to hide a region. Region collapse must be a hide/geometry operation that keeps panels mounted (owner decision D5, §12).
-- A conversation has at most one live runtime host. The existing `panelRegistry` claims by canonical tab key and refuses a second host (`web/src/features/workspace/panelRegistry.ts:24-41`; `DirectPanel.tsx:74-87`), so accidental mirroring into two regions is already prevented by design.
-
----
-
-## 5. Context binding and project isolation
-
-- Contextual views bind to the conversation selected in **their own region**.
-- The file root is resolved **server-side** from that conversation: `resolveConversationWorkspace` (`src/services/workspace.ts:399-522`) derives it from persisted `workspace_mode` + `workspace_folder_id`, never from a request-supplied path. Simple mode → `workspace/chats/<conversationId>`; project mode → the registered folder's canonicalized path; a vanished folder raises `folder_unavailable` and the row is preserved (`:459-480`).
-- Every path must additionally be confined with `inspectTarget` / `resolveSafe` (`src/services/tools.ts:109-176`), which reject traversal and symlink escape. **Containment is not caller authorization**: TBAi has no login or auth middleware, and a `conversationId` is an unauthenticated capability (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:347`; `src/routes/index.ts:58-107` has only CORS and correlation middleware).
-- A file identity should use stable project/folder identity plus a safe relative path. No arbitrary absolute path may be persisted in Dockview params or client state as authority. `PanelParams` is a closed identity-only contract (`web/src/features/workspace/dockviewParams.ts:17-20,86-98`) and must not be widened for contextual state.
-- Direct Chat and OpenCode remain separate runtime systems. Workspace navigation must not merge them (`AGENTS.md` "Direct/OpenCode split is a runtime boundary"; `docs/decisions.md` 2026-11-23 ADR at `:9050-9060`).
-
-**Explicitly unsuitable as a file-explorer authority** (source-verified): `/api/tools/*` uses the global `WORKSPACE_DIR` and is a manual/test surface (`src/routes/tools.ts:41-43,65-120`); `/api/folders/browse` takes an arbitrary `?path=`, returns directories only, and has no containment or conversation binding (`src/routes/folders.ts:112-135`); `GET /api/workspace` returns only `{name, path}` (`src/routes/workspace.ts:5-15`). A future file API must pair `resolveConversationWorkspace` with `resolveSafe` and record the threat-model trade-off.
-
----
-
-## 6. Runtime preservation when contextual tabs change
-
-The Chat view must remain alive while another contextual tab is selected. Switching to Files, File Viewer, or Browser must not dispose the runtime, interrupt a stream, clear the composer, or lose scroll state.
-
-**Feasibility (source-verified + library-verified):** Dockview's `renderer: "always"` keeps the panel's DOM tree mounted and hidden via `visibility: hidden` rather than removing it; the panel instance is only destroyed when the panel is removed from Dockview (library-verified: `https://dockview.dev/docs/core/panels/rendering`). The production controller already sets `renderer: "always"` on every chat panel (`web/src/features/workspace/dockviewController.ts:40,260`), and `usePanelVisibility` deliberately never pauses execution, streaming, or subscriptions (`web/src/features/workspace/components/usePanelVisibility.ts:1-21`). A contextual row that hides Chat with CSS inside the panel is therefore consistent with the existing guarantee.
-
-**Required invariant:** the host component must be rendered in all four sub-tab states. The existing `owned ? <Host/> : placeholder` branches (`DirectPanel.tsx:74-87`, `OpenCodePanel.tsx:81-87`) and OpenCode's one-way activation latch (`web/src/features/opencode/OpenCodeChatHost.tsx:52-76`) must remain intact. **Unverified:** CSS-hiding a sub-tab preserves virtualizer scroll position and composer focus — no current source or test addresses this; it is a required acceptance test (CW-09).
-
----
-
-## 7. Component and ownership map
-
-| Concern | Owner | Current state (source-verified) | Target |
-|---|---|---|---|
-| Fixed conversation navigator | `Sidebar` (`web/src/components/Sidebar.tsx`) | Outside Dockview; adds shared membership and navigates (`:67-80`); no target-region parameter | Chat Threads stays fixed; gains an "open in other region" action (D4) |
-| Conversation identity / membership | `chatTabs` + SQLite `sharedTabs` (`web/src/features/chat/state/chatTabs.ts:20-45,188-485`) | Canonical `chat:`/`agent:` keys; `groupId` is a dead `"main"` constant (`:9,45,186`) | Unchanged as identity authority; **not** a region or layout tree |
-| Spatial layout | One `DockviewReact` (`web/src/features/workspace/components/DockviewWorkspace.tsx:341`) | Two registered components; `renderer:"always"`; controller owns events | Same single instance; two named regions as groups |
-| Region identity | **None today** | Dockview group ids are generated; no named main/right mapping | Stable region alias in device-local layout state (D2) |
-| Conversation tabs | Dockview group tab strips + global `TabStrip` | Both render simultaneously (`AppShell.tsx:154` and `DockviewWorkspace.tsx:341`); global strip has 9 unique behaviors (audit §5.1) | One unambiguous owner; global strip retired or repurposed only after its behaviors are preserved (D1) |
-| Contextual tab row | **None today** | Panels render hosts directly | Per-conversation shell inside `DirectPanel`/`OpenCodePanel`; host never unmounted |
-| Contextual-tab selection state | **None today** | `PanelParams` is closed identity-only | Single feature-owned store/module keyed by canonical tab key (D3) |
-| Direct runtime | Per-host assistant-ui provider (`DirectChatHost.tsx:35-48`) | Root provider removed; host-isolated | Unchanged |
-| OpenCode runtime | OpenCode V2 controller (`web/src/features/opencode/`) | Isolated boundary; one-way activation latch | Unchanged |
-| File root resolution | `resolveConversationWorkspace` + `resolveSafe` | Server-side, per conversation | Reused; new conversation-scoped read API required (D6) |
-| Browser surface | `src/services/browser.ts` headless CLI + render-only tool cards | No embedded browser UI; Tauri CSP has no `frame-src` | Feasibility + ADR before any panel (D7) |
-| Layout persistence | `layoutPersistence.ts` | Versioned device-local envelope; identity + geometry only | Add region alias only; never contextual state or paths |
-
----
-
-## 8. State ownership and persistence boundaries
-
-- `chatTabs` and SQLite `sharedTabs` remain the canonical conversation identity and open-membership system. They must not become a second message store or a layout tree (`docs/state-management.md:110-120,145-157`).
-- Dockview's serialized layout remains identity + geometry only. Do not add transcripts, composer drafts, runtime instances, credentials, arbitrary paths, or browser session objects to `PanelParams` (`web/src/features/workspace/dockviewParams.ts:17-20,86-98`; `layoutPersistence.ts:134-144`).
-- Direct conversation/message state stays with assistant-ui; OpenCode state stays with the OpenCode V2 controller (`docs/state-management.md:110-136`).
-- Contextual-tab selection needs **one** documented owner. It must be keyed by canonical tab key, must not leak between conversations or regions, and must not create a parallel conversation/tab store. Candidate placements (owner decision D3): a feature-owned Zustand UI store under `web/src/features/workspace/state/` with a device-local persisted key, or a plain module with the same keying. Either way, corrupt reads fall back field-by-field and never throw (`docs/state-management.md:79-82,199-210`).
-- Continue device-local persistence conventions unless the owner approves a different scope (`docs/state-management.md:66-82`).
-- Region identity must be persisted as part of the layout's identity/geometry, not in `PanelParams` (D2).
-
----
-
-## 9. Existing vs target vs recommendation vs decision
-
-| Item | Classification |
-|---|---|
-| One Dockview instance, two groups with different conversations, move ≠ close, hidden panels keep running | **Existing** (source-verified + test-covered; pass status agent-reported) |
-| Global `TabStrip` plus Dockview native tabs both present | **Existing** (source-verified) |
-| Per-region conversation tabs with independent selection | **Target**; feasible via group-scoped Dockview events |
-| Contextual `Chat | File Viewer | Browser | Files` row in both regions | **Target**; no production code exists |
-| Per-conversation contextual-tab memory | **Target**; owner decision D3 |
-| Region alias and "open in other region" | **Target**; owner decisions D2/D4 |
-| Conversation-scoped read-only file API | **Recommendation**; requires D6 and a threat-model note |
-| Embedded Browser panel | **Unresolved feasibility**; requires D7 and an ADR |
-| Writable editor | **Deferred**; requires a separate ADR and dependency decision |
-| Retiring the global `TabStrip` | **Recommendation with owner decision D1**; its nine unique behaviors must be preserved first |
-
----
-
-## 10. Feasibility verdict
-
-**The recommended one-Dockview / two-region / two-level-tab model is technically feasible with the current architecture and the official Dockview 8.9.1 APIs**, subject to the owner decisions in §12 and the gaps in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md`.
-
-Evidence:
-
-1. Two groups with different conversations already exist in one instance and are persisted/restored (`layoutPersistence.ts:160-220`; `tests/dom/workspace/dockview-split-group-contract.test.tsx:129-186`; E2E spec `tests/e2e/workspace/dockview-workspace.spec.ts:258-335,341-404`).
-2. Dockview groups render native tab bars; `addGroup`, `addPanel({ position: { referenceGroup } })`, `inactive`, and `initialWidth` support explicit region placement (library-verified: `https://dockview.dev/docs/core/groups/add`, `https://dockview.dev/docs/core/panels/add`; installed declarations `node_modules/.bun/dockview-core@8.9.1/.../dockview/options.d.ts:733-798`).
-3. Group-scoped active-panel events exist for independent region selection (library-verified: `https://dockview.dev/docs/core/events`).
-4. `renderer: "always"` keeps the chat host mounted while hidden (library-verified: `https://dockview.dev/docs/core/panels/rendering`; production `dockviewController.ts:40,260`).
-5. One host per canonical key is already enforced (`panelRegistry.ts:24-41`), preventing accidental duplication.
-6. No second layout engine, splitter, DnD system, chat runtime, or message store is required. Installed dependencies already cover tabs (`radix-ui` 1.8.1), virtualized trees (`@tanstack/react-virtual` 3.14.21), DnD (`@dnd-kit/*` 0.5.1), and UI state (`zustand` 5.1.0); no new package is needed for the shell itself.
-
-**Not proven by this audit:** real pointer-driven behavior of the new placement APIs in this app, CSS-hiding scroll/composer preservation, embedded-browser feasibility, and any test pass result. These are acceptance-test obligations in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md`.
+```text
+  onDidLayoutChange / onDidMutateLayout
+          │
+          ▼
+  api.toJSON() → { grid.root (recursive branches), panels (id + params) }
+          │
+          ▼
+  versioned envelope → device-local storage
+          │
+     ── restart ──
+          │
+          ▼
+  load → migrate → validate → reconcile against canonical identities
+          │
+          ▼
+  api.fromJSON(saved, { reuseExistingPanels: true })
+          │
+          ▼
+  every pane, size, active tab and content identity restored
+```
 
 ---
 
-## 11. Recovery and edge cases the target must handle
+## 5. Concrete user workflows
 
-- **Cold restart:** preferences hydrate before layout restore (`DockviewWorkspace.tsx:188-208`); saved layout is validated and pruned against canonical keys (`layoutPersistence.ts:186-221`); deep link refocuses (`useWorkspaceFocusSync.ts:97-100`).
-- **Corrupt layout:** `loadLayout` returns `null` and the controller builds a safe default (`layoutPersistence.ts:247-267`; `dockviewController.ts:175-195`); E2E fallback case at `tests/e2e/workspace/dockview-workspace.spec.ts:491-563`.
-- **Stale/deleted conversations:** pruning removes panel refs and grid views (`layoutPersistence.ts:160-175`); boot tab reconciliation is removal-only (`web/src/features/chat/state/tabReconciliation.ts:20-81`).
-- **Unavailable project folder:** `folder_unavailable` is raised and the folder row is preserved (`src/services/workspace.ts:459-480`); contextual views must show a clear state, not a stale root.
-- **Hidden panels:** keep executing; never pause streams or subscriptions (`usePanelVisibility.ts:1-21`).
-- **Concurrent Direct/OpenCode:** runtimes stay isolated; mixed live sends remain in the opt-in live suite and are agent-reported only.
-- **Narrow windows:** region minimum sizes, collapse behavior, and overflow need explicit acceptance criteria (CW-16); no production narrow-window test exists today.
-- **Multiple windows:** shared membership is SQLite-authoritative and remote changes mark the active ref detached without navigating (`AppShell.tsx:121-132`); layout is device-local. Multi-window region behavior is an owner decision (D10).
+1. **Start.** Click `Project A / Chat 1` in Chat Threads → a Chat pane opens.
+2. **Split right.** Use the pane's `+` → *Split pane right* → choose File Viewer → a child pane opens beside the chat; both visible.
+3. **Split a child down.** In the File Viewer pane, `+` → *Split pane down* → choose Browser → the File Viewer pane becomes two stacked panes.
+4. **Split again.** In the Browser pane, `+` → *Split pane right* → choose Terminal → three levels deep.
+5. **Click a file.** In any chat, click a file name → File Viewer opens or focuses beside the source; chat keeps streaming.
+6. **Click a URL.** Click a link → Browser opens or focuses; headless `agent-browser` is not this panel.
+7. **Two chats.** Open a second conversation into a new pane → two independent runtimes; the same conversation cannot be duplicated.
+8. **Move.** Drag a content tab to another pane → identity and runtime preserved; move is never a close.
+9. **Focus.** Click a pane to make it active; keyboard commands and URL selection follow the focused chat pane only.
+10. **Close.** Close a content tab → only that tab closes; closing the last tab in a pane leaves an empty pane that can be reused or closed explicitly.
+11. **Restart.** The full nested arrangement returns with identities, sizes and active selections.
 
 ---
 
-## 12. Unresolved owner decisions
+## 6. Manual and automatic creation — one mechanism
 
-These are isolated, not silently invented. Each must be recorded in `docs/decisions.md` before the corresponding implementation phase.
+Both paths call one `openContent(request)` service:
 
-| ID | Decision | Options | Recommendation | Why it is open |
+```text
+  request = { contentType, context, placement, reuse, source }
+  source = "manual" | "automatic"
+          │
+  identity = contentType + context key
+          │
+     ┌────┴────┐
+     ▼         ▼
+ existing    new
+ focus       create pane at placement
+     │         │
+     └────┬────┘
+          ▼
+  register → mount (renderer:"always") → persist
+```
+
+- **Manual:** `+` offers *add tab*, *split right*, *split down*, then a content type. Repeatable from any pane at any depth.
+- **Automatic:** file click → File Viewer with file-tree context; URL click → Browser. Placement defaults to beside the source pane; falls back to below if no room.
+- **Reuse:** by identity, not title. Clicking the same file twice focuses the same viewer. A modifier or explicit "open another instance" creates a second one with a distinct instance id.
+- **Feedback:** the target pane is highlighted; never open into an invisible location.
+
+---
+
+## 7. Context and lifecycle
+
+- **Conversation context** = canonical tab key + conversation id. **Project context** = registered folder id resolved server-side.
+- A pane created from a conversation inherits its conversation and project context. Child panes inherit the parent's context; an explicit control can change it.
+- **Pinned vs follow-active:** a pane is pinned to its context by default; "follow active conversation" is an explicit opt-in. Switching one chat never silently changes another pane's files, URL or terminal cwd.
+- **File identity** = conversation id + safe relative path; never an absolute path as authority. Backend resolves the root with `resolveConversationWorkspace` and confines with `resolveSafe`/`inspectTarget` (`src/services/workspace.ts:399-522`; `src/services/tools.ts:109-176`).
+- **Browser identity** = normalized URL; session state is per pane. **Terminal identity** = conversation id + session id; process lifetime is bound to the pane; cwd is the conversation root; shell is **not sandboxed**.
+- **Closing content vs closing a pane:** closing a tab removes only that content; closing a pane removes its tabs and children. Neither deletes conversation history or shared membership.
+- **Empty pane:** after the last tab closes, the pane stays as an empty drop target until explicitly closed or reused by the next open action.
+- **Containment is not caller authorization** (`WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:347`).
+
+---
+
+## 8. Technical architecture — Option A recommended
+
+### 8.1 Decision
+
+**Use one Dockview instance whose groups are the user-facing panes and whose recursive grid tree provides arbitrary-depth splits.** Do **not** use nested Dockview instances, and do **not** introduce an application-owned recursive splitter engine.
+
+### 8.2 Evidence for Option A
+
+- Dockview's grid is a recursive tree: `SerializedGridObject<T> = { type: 'leaf' | 'branch'; data: T | SerializedGridObject<T>[]; size?; visible? }` (`dockview-core/dist/cjs/gridview/gridview.d.ts:56-61`); `GridNode<T> = GridLeafNode<T> | GridBranchNode<T>` (`:38-54`). Locations are arbitrary-length `number[]` paths (`:14-15`).
+- `SerializedDockview.grid.root` is that recursive tree with group state at leaves (`dockview-core/dist/cjs/dockview/dockviewComponent.d.ts:102-108`).
+- Directional placement relative to any group: `AddPanelPositionOptions` / `AddGroupOptions` with `referenceGroup`, `direction: 'left'|'right'|'above'|'below'|'within'` (`dockview-core/dist/cjs/dockview/options.d.ts:733-807`; `gridview/baseComponentGridview.d.ts:13`).
+- One `toJSON()` captures the whole tree; `fromJSON()` restores it (`component.api.d.ts:625-631`).
+- **No documented depth limit** — a search for `maxDepth|depth limit|recursi` across installed declarations returned no matches.
+- Official docs: `https://dockview.dev/docs/core/overview`, `.../panels/add`, `.../groups/add`, `.../state/save`, `.../state/load`.
+
+### 8.3 Why not nested instances (Option B)
+
+Nested instances are supported in the free package (`https://dockview.dev/docs/core/nested`; licence table "Nested layouts ✓"), but they are strictly worse here:
+
+- Each instance has its own DnD scope (`DockviewApi.id`, `component.api.d.ts:336-338`); cross-instance moves need explicit `onUnhandledDragOver`/`onDidDrop` bridging.
+- A parent `toJSON()` does **not** include a nested instance's layout — `GroupviewPanelState` has no nested-layout field (`dockview/types.d.ts:39-55`); persistence fragments into N blobs.
+- Focus navigation is per instance; no cross-instance traversal is documented.
+- Lifecycle coordination is added for no benefit: Option A already provides the recursion.
+
+### 8.4 What TBAi must add
+
+1. **Terminology-safe placement API** — one module mapping "split right/down on pane X" to `api.addPanel({ position: { referenceGroup, direction } })` / `api.addGroup(...)`. No inline layout logic in UI components.
+2. **Discriminated panel identity** — replace the closed `{ tabKey, contentType: "direct"|"opencode" }` contract (`dockviewParams.ts:17-20,86-99`) with a union:
+   - `{ kind: "chat", tabKey: "chat:<id>"|"agent:<id>", contentType: "direct"|"opencode" }`
+   - `{ kind: "tool", panelId: "<type>:<uuid>", contentType: "file-tree"|"file-viewer"|"browser"|"terminal"|future }`
+   Keep `parseTabKey` and `desiredPanelKeys` as the chat-identity guard; do not force `params.tabKey === id` for tool panels.
+3. **Registry split** — keep `panelRegistry` claim-by-tab-key for chat hosts (`panelRegistry.ts:24-41`); add a separate tool-panel instance registry for identity/reuse. Never turn `chatTabs` into a generic panel store.
+4. **Reconciliation and persistence** — widen `layoutPersistence.ts:134-144,186-221` to accept both identity kinds; build the allowed set from chat keys **plus** tool panel ids; keep versioned envelope, corrupt fallback, and the floating/popout/edge drop.
+5. **One opening service** used by manual and automatic paths (§6).
+6. **Per-panel state module** keyed by panel id for viewer path/scroll, browser URL/history, terminal session — Dockview params are identity-only and have no component-state slot.
+7. **Click seams** — markdown anchors (`ChatWindow.tsx:923-925`), file-path text in tool cards (`filesystem/ui.tsx:827-934`) and result fields (`result-fields.tsx:202-228`).
+8. **Navigation resolution** — global `TabStrip` (`AppShell.tsx:154`) and Dockview group tabs both render today; retire the strip only after migrating its nine unique behaviors, keeping Chat Threads as the sole navigator.
+
+### 8.5 Rendering policy
+
+`renderer: "always"` is set for chat panels (`dockviewController.ts:40,260`) and preserves hidden DOM/streams. Apply it to File Viewer and Browser to preserve scroll and navigation state. Terminal should use it only if a persistent session exists; otherwise use `onlyWhenVisible` with explicit state restore. Measure memory with many panels before making this universal.
+
+---
+
+## 9. Prototype as visual evidence
+
+`prototype/index.html` is **not** the architecture. It is a standalone visual exploration and must be preserved untouched.
+
+**What it already demonstrates (prototype-verified):**
+- `panel(tab)` creates a content area with its own tabs (`:332`).
+- `split(dir, children)` creates recursive layout containers (`:333`).
+- `renderNode(node)` recursively renders the tree (`:440-452`).
+- `splitPanel(id, dir)` replaces a panel with a split and child panels (`:479-483`).
+- Tree helpers `findPanel`, `findSplit`, `countPanels`, `removeNode`, `normalize`, `replaceNode`, `appendPanel` (`:349-355`).
+- Sash dragging with minimum width (`:515-525`) and tab drag between containers (`:526-545`).
+- localStorage save/restore (`:546-547`).
+- One chrome for every chat position (`:430`).
+
+**What it does not demonstrate / is misleading:**
+- **Primary Chat is a permanent special position** (`:275`, `:305`, `:326-328`) — contradicts "no reserved Main/Right".
+- **`splitPanel` duplicates the active tab** (`:481`) instead of creating an empty/new panel.
+- **Adding panels is not targeted at the selected pane** — `appendPanel` appends to the root split (`:355`, `:478`).
+- **No automatic file/URL opening** — content renderers are static strings (`:393-415`); no click handlers.
+- **No project-context inheritance** — tabs carry only `identity` (`:322`); content hardcodes "ai-chat-app" (`:396`).
+- `normalize()` collapses single-child splits (`:353`); empty-pane lifecycle is undefined.
+- Persistence is an unversioned flat blob (`:546-547`).
+- Registry includes `editor` (`:316`) but not Terminal.
+
+Use it as evidence that recursive splitting is understandable and visually coherent; do not copy its custom layout engine.
+
+---
+
+## 10. Limitations, trade-offs and risks
+
+- **Browser panel** is not feasible today: no embedded browser, CSP has no `frame-src`, most sites refuse framing. Needs an ADR. The headless tool is not this panel.
+- **Terminal panel** needs a new backend process/session owner; `runBash` is one spawn per call and unsandboxed (`src/services/tools.ts:342-359`).
+- **File API** must be conversation-scoped with containment; no caller authorization exists.
+- **Dockview free package** lacks pinned tabs, multi-row tabs, layout history, keyboard docking and edge groups; none is required for the core model.
+- **Too many panes** shrink each other; provide temporary maximize and minimum sizes.
+- **Persistence is a contract** — upgrades must not reset layouts.
+- **Narrow windows** need drawer/sheet fallback.
+- **Multiple windows** — shared membership is SQLite-authoritative; layout is device-local.
+- **Not proven:** runtime behavior of unused placement APIs in this app, CSS-hide state preservation, embedded-browser feasibility, any test pass result.
+
+---
+
+## 11. Unresolved owner decisions
+
+| ID | Decision | Options | Recommended | Why open |
 |---|---|---|---|---|
-| D1 | Conversation-tab ownership | (a) Retire global `TabStrip`, migrate its 9 unique behaviors into Dockview tab context menus/group controls and Chat Threads row actions; (b) keep a slim global strip as an all-conversation navigator alongside per-region tabs | (a), but only after every unique behavior is preserved and tested | Both strips render today; Dockview native tabs have no app wiring for shared reorder, batch close, detached recovery, copy link, or keyboard drag (audit §5.1) |
-| D2 | Region identity | Stable alias persisted in layout state vs a separate device-local group→region map | Alias in layout identity/geometry, pruned with groups | No named main/right group exists; Dockview group ids are generated |
-| D3 | Contextual-tab state owner | Feature-owned Zustand store vs plain module; device-local persistence vs session-only | Feature-owned store/module keyed by canonical tab key, device-local, corrupt-safe | `PanelParams` is a closed identity-only contract; no owner exists today |
-| D4 | "Open in other region" interaction | Chat Threads context-menu action vs focused-pane rule (requirements #15) vs both | Context-menu action plus focused-pane rule: clicking affects the active region; already-open conversation is focused where it lives | Sidebar callback has no target parameter (`Sidebar.tsx:67-80`); owner requirements #4/#15 are recorded but not implemented |
-| D5 | Region collapse semantics | Hide/geometry-only (panels stay mounted) vs close panels | Hide/geometry-only; never `api.removeGroup()` | `removeGroup` deletes all panels; hide ≠ close is a load-bearing invariant |
-| D6 | File API contract and threat model | New conversation-scoped read/list endpoint with `resolveSafe` containment | Approve the endpoint and explicitly accept that `conversationId` is an unauthenticated capability | No project-scoped file API exists; `/api/tools/*` and `/browse` are unsuitable |
-| D7 | Browser tab scope | Embedded interactive panel vs read-only preview vs defer | Defer until feasibility + security ADR | No embedded browser UI; headless tool is not a panel; Tauri CSP has no `frame-src` |
-| D8 | File Viewer scope | Read-only first vs writable editor | Read-only first; editor needs its own ADR and dependency decision | No editor library installed; `technical-audit.md:38` |
-| D9 | Responsive behavior | Minimum sizes + collapse vs horizontal scroll vs single-region fallback | Minimum sizes + collapse, documented | No production narrow-window acceptance test |
-| D10 | Multi-window region behavior | Device-local layout per window vs shared region state | Device-local layout; shared membership unchanged | Shared membership is SQLite-authoritative; layout is localStorage |
-| D11 | Contextual state lifetime | Persist across restarts vs session-only | Persist device-locally per conversation | Affects D3 storage design and corrupt-read policy |
+| D1 | Global `TabStrip` ownership | Retire after migrating nine behaviors; keep slim navigator | Retire after migration | Both strips render today |
+| D2 | Per-panel state owner | Feature-owned store keyed by panel id; plain module; session-only | Feature-owned, device-local, corrupt-safe | No owner exists |
+| D3 | Reuse vs create | Reuse by identity; always-new; modifier override | Reuse by identity, modifier forces new | Deterministic duplicate detection needed |
+| D4 | Automatic placement | Beside source; below; type-specific | Beside source, fallback below | Affects workflows |
+| D5 | Non-chat URL behavior | No URL change; panel route | No URL change | `localActiveKey` is chat-only |
+| D6 | File API + threat model | New scoped endpoint with `resolveSafe` | Approve with explicit unauthenticated-capability note | No safe file API |
+| D7 | Browser scope | Embedded; read-only preview; defer | Defer until ADR | CSP/framing risk |
+| D8 | Terminal scope | Persistent shell; read-only output; defer | Defer or read-only first | Unsandboxed shell |
+| D9 | Narrow-window behavior | Minimum sizes + collapse; scroll; single-pane | Minimum sizes + collapse | No production test |
+| D10 | Multi-window behavior | Device-local layout; shared region state | Device-local; shared membership unchanged | SQLite-authoritative membership |
+| D11 | File Viewer editability | Read-only; writable editor | Read-only; editor needs ADR | No editor library |
 
 ---
 
-## 13. Acceptance criteria
+## 12. Acceptance criteria
 
-The full testable criteria `CW-01` … `CW-16` and their traceability to future tests are in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` §6. This document's §4–§8 are the behavioral source for those criteria.
+`DP-01 … DP-18` are defined with future-test traceability in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` and `CONTEXTUAL_WORKSPACE_TEST_STRATEGY.md`. Sections 2–9 are the behavioral source for those criteria.

@@ -1,212 +1,214 @@
-# TBAi — Contextual Workspace Implementation Plan
+# TBAi — Recursive Workspace Implementation Plan
 
-**Status:** Implementation-ready plan, **not implementation authorization**. No phase may start until the owner approves this plan, the architecture in `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, and the decisions in §1–§2. Each phase ends with a review gate; no commit or push before end-to-end verification passes.
+**Status:** Implementation-ready plan, **not implementation authorization**. No phase may start until the owner approves this plan, `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, and the decisions in §2. Each phase ends with a review gate; no commit or push before end-to-end verification passes.
 
-**Audited branch / HEAD:** `ui-foundation-upgrade` @ `39ec6fe7603872d56483d66b79c20e4292fc6e62` (re-checked at task start; local equals remote).
+**Audited branch / HEAD:** `ui-foundation-upgrade` @ `4c0cda723263a075458cb7a44025af40c059debd` (re-checked at task start; local equals remote).
 
-**Date:** 2026-11-27
+**Date:** 2026-11-28
 
-**Evidence rule:** test names below are future obligations, not existing passing tests. No result in this plan is claimed as passed. Existing test inventory and its limits are in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` §5.
+**Evidence rule:** test names below are future obligations, not existing passing tests. No result is claimed as passed. Current test inventory and its limits are in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` §7. Test strategy: `CONTEXTUAL_WORKSPACE_TEST_STRATEGY.md`.
 
 ---
 
 ## 1. Prerequisites
 
-1. Owner approval of `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` and this plan.
-2. Owner decisions D1–D11 recorded in `docs/decisions.md` before the phase that depends on them (§2).
-3. The existing Dockview foundation remains intact: one `DockviewReact`, `renderer:"always"`, canonical panel ids, closed identity-only `PanelParams`, `panelRegistry` single-host claim, move≠close, device-local versioned layout persistence. No phase may weaken these.
-4. All quality gates green at the base commit before any change (`bun run verify`, `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts`). Record exact exit codes and counts; agent-reported results are not sufficient.
-5. The untracked `docs/workspace-redesign/prototype/screenshots/` and the untracked audit plan file are preserved; never committed or overwritten.
+1. Owner approval of the architecture, this plan, the test strategy, and decisions D1–D11 recorded in `docs/decisions.md` before the phase that depends on them.
+2. The existing Dockview foundation stays intact: one `DockviewReact`, `renderer:"always"`, canonical chat ids, chat-host claim, move≠close, versioned device-local layout persistence. No phase weakens these.
+3. All quality gates green at the base commit before any change (`bun run verify`, `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts`), with exact exit codes and counts recorded.
+4. The prototype `docs/workspace-redesign/prototype/index.html` and its screenshots are preserved untouched; never committed or overwritten.
+5. No dependency install/upgrade/removal without a recorded ADR. Installed packages already cover tabs, virtualized trees, DnD, UI state and layout.
 
 ---
 
-## 2. Architecture decisions to freeze before code
+## 2. Decisions to freeze before code
 
-| ID | Decision required | Blocks phase | Source of the open question |
-|---|---|---|---|
-| D1 | Conversation-tab ownership: retire global `TabStrip` vs keep a slim navigator; where its nine unique behaviors live | P1 | `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` §1.1–§1.2 |
-| D2 | Region identity representation and persistence | P2 | `chatTabs.ts:9,45,186` (dead `groupId`); generated Dockview group ids |
-| D3 | Contextual-tab state owner and persistence scope | P3 | `dockviewParams.ts:17-20,86-98` (closed contract); `state-management.md:66-82,199-210` |
-| D4 | "Open in other region" interaction and focused-pane rule | P2 | `Sidebar.tsx:67-80`; `docs/ui-redesign/requirements.md:19,39` |
-| D5 | Region collapse semantics (hide/geometry only, never `api.removeGroup()`) | P2 | library `https://dockview.dev/docs/core/groups/add` |
-| D6 | Conversation-scoped file list/read API and threat-model acceptance | P4 | `src/routes/tools.ts:41-43,65-120`; `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:347` |
-| D7 | Browser tab scope and feasibility (embedded vs preview vs defer) | P6 | `src/services/browser.ts:6-7,159-184`; `technical-audit.md:47-51` |
-| D8 | File Viewer read-only first; editor deferred to its own ADR | P5 | `technical-audit.md:38` |
-| D9 | Narrow-window behavior (minimum sizes + collapse) | P7 | `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md:261-269` |
-| D10 | Multi-window region behavior (device-local layout; shared membership unchanged) | P7 | `AppShell.tsx:121-132`; `state-management.md:66-82` |
-| D11 | Contextual state lifetime (device-local persisted vs session-only) | P3 | affects D3 storage design |
+| ID | Decision | Options | Recommended | Blocks |
+|---|---|---|---|---|
+| D1 | Global `TabStrip` ownership | Retire after migrating nine behaviors; keep slim navigator | Retire after migration | P4 |
+| D2 | Per-panel state owner | Feature-owned store keyed by panel id; plain module; session-only | Feature-owned, device-local, corrupt-safe | P3 |
+| D3 | Reuse vs create | Reuse by identity; always-new; modifier override | Reuse by identity, modifier forces new | P3 |
+| D4 | Automatic placement | Beside source; below; type-specific | Beside source, fallback below | P3 |
+| D5 | Non-chat URL behavior | No URL change; panel route | No URL change | P3 |
+| D6 | File API + threat model | New scoped endpoint with `resolveSafe` | Approve with explicit unauthenticated-capability note | P5 |
+| D7 | Browser scope | Embedded; read-only preview; defer | Defer until ADR | P6 |
+| D8 | Terminal scope | Persistent shell; read-only output; defer | Defer or read-only first | P7 |
+| D9 | Narrow-window behavior | Minimum sizes + collapse; scroll; single-pane | Minimum sizes + collapse | P8 |
+| D10 | Multi-window behavior | Device-local layout; shared region state | Device-local; shared membership unchanged | P8 |
+| D11 | File Viewer editability | Read-only; writable editor | Read-only; editor needs ADR | P5 |
 
-**Frozen invariants (not re-litigated per phase):** one Dockview instance; Dockview owns spatial layout only; `chatTabs` + SQLite own identity/membership; Direct and OpenCode runtimes stay separate; no second layout engine, splitter, DnD system, chat runtime, message store, or conversation-tab store; no new dependency without a recorded ADR; no arbitrary absolute path or runtime object in layout state; containment is not caller authorization.
+**Frozen invariants:** one Dockview instance; Dockview owns spatial layout only; `chatTabs` + SQLite own conversation identity/membership; Direct/OpenCode isolation; no second layout engine, splitter, DnD system, chat runtime, message store, or generic panel framework; no new dependency without an ADR; layout state carries identity + geometry only; containment is not caller authorization.
 
 ---
 
-## 3. Phase sequence overview
+## 3. Phase sequence
 
 | Phase | Concern | Depends on |
 |---|---|---|
-| P1 | Conversation-tab ownership (resolve the duplicate strip) | D1 |
-| P2 | Region identity, placement and collapse | D2, D4, D5 |
-| P3 | Contextual-tab shell and runtime preservation | D3, D11 |
-| P4 | Files tree and conversation-scoped read API | D6 |
-| P5 | Read-only File Viewer | D8, P4 |
-| P6 | Browser feasibility and surface | D7 |
-| P7 | Persistence, responsive, accessibility, performance | D9, D10, all above |
-
-Each phase: goal → in/out of scope → likely modules → tests → acceptance → risks → rollback.
+| **P0** | **Prove recursive workspace foundation on installed Dockview 8.9.1** | none |
+| P1 | Discriminated panel identity, registry split, placement API | P0 |
+| P2 | Persistence and restoration of deep layouts | P1 |
+| P3 | One opening service, manual + automatic, reuse policy | P1, P2 |
+| P4 | Navigation resolution (TabStrip / Dockview tabs / Chat Threads) | D1, P3 |
+| P5 | File Tree + conversation-scoped read API + read-only Viewer | D6, D11, P3 |
+| P6 | Browser feasibility + ADR + approved surface | D7 |
+| P7 | Terminal feasibility + ADR + approved surface | D8 |
+| P8 | State persistence, responsive, a11y, performance | D2, D9, D10, all above |
 
 ---
 
 ## 4. Phases
 
-### P1 — Conversation-tab ownership
+### P0 — Prove recursive workspace foundation
 
-**Goal:** one unambiguous owner for conversation tabs; per-region tabs come from Dockview groups; Chat Threads remains the fixed navigator; no duplicate global/per-group navigation that creates conflicting state (CW-01, CW-03, CW-12).
+**Goal:** prove, with the actual installed Dockview 8.9.1 package, that one instance can be split repeatedly to arbitrary depth, that deep layouts persist and restore, and that moves never trigger close semantics. **No new content types.**
 
-**In scope:** decide and implement D1; migrate the nine unique `TabStrip` behaviors into Dockview tab context menus/group controls and Chat Threads row actions if the strip is retired; wire group-scoped active-panel events; keep `localActiveKey` as the single window-level URL authority.
+**In scope:** a test-only harness using `DockviewReact` with a simple registered component; `addPanel`/`addGroup` with `position: { referenceGroup, direction }`; split right, split a child down, split a descendant right (three levels); drag a sash; save `toJSON()`, reload, `fromJSON()`; move a panel between groups; focus navigation; minimum sizes.
 
-**Out of scope:** region placement (P2), contextual row (P3), any new content type.
+**Out of scope:** chat runtimes, file/browser/terminal panels, production UI, new dependencies.
 
-**Likely modules:** `web/src/app/layout/AppShell.tsx`, `web/src/components/TabStrip.tsx`, `web/src/features/workspace/dockviewController.ts`, `web/src/features/workspace/state/useWorkspaceFocusSync.ts`, `web/src/features/workspace/components/DockviewWorkspace.tsx`, `web/src/config/tabStrip.ts`, `web/src/features/sidebar/`.
+**Likely modules:** tests only under `tests/` (unit/DOM/E2E as appropriate); no production source change in this phase.
 
-**Tests:**
-- DOM: group-scoped active-panel change updates only that group's selection; global strip no longer renders conversation tabs (if retired).
-- E2E: two groups with different conversations; selecting a tab in one does not change the other; all nine preserved behaviors have a case (shared reorder, batch close, detached recovery, copy link, middle-click close, keyboard drag, scroll-into-view, new draft, flat navigator).
-- Source guard: no second conversation-tab store; `chatTabs` remains identity/membership authority.
+**Tests (future obligations):**
+- Split one pane right → 2 groups; split the child down → 3 groups; split a descendant right → 4 groups; assert group ids and panel ids at each level.
+- Save the deep layout, reload, restore; assert every panel id, size, active tab and group structure.
+- Move a panel between groups; assert no `onPanelClose` and no runtime disposal.
+- Focus navigation across nested groups; minimum pane sizes; keyboard/ARIA baseline.
 
-**Acceptance:** CW-01, CW-03, CW-12. No behavior from audit §1.1 is lost. `bun run verify` and the Dockview E2E spec green with recorded counts.
+**Acceptance:** a specific **three-or-more-level** case passes with real output. The current two-group E2E case is explicitly **not** sufficient.
 
-**Risks:** losing a unique strip behavior; URL/focus feedback loops; two strips disagreeing during a move. **Mitigation:** migrate one behavior at a time with a failing test first; use `origin: 'user' | 'api'` from Dockview events to suppress echoes.
+**Risks:** unused placement APIs may behave differently in this app; deep layouts may hit practical min-size limits. **Mitigation:** run the real package, record exact behavior, stop if a documented assumption fails.
 
-**Rollback:** restore `TabStrip` mount and the previous focus wiring; no schema or persistence change in this phase.
-
----
-
-### P2 — Region identity, placement and collapse
-
-**Goal:** main and right regions are stable, independently addressable Dockview groups; a conversation can be opened into a chosen region; moving between regions preserves identity and runtime; collapsing a region never deletes conversations (CW-02, CW-10, CW-11).
-
-**In scope:** D2 region alias in layout identity/geometry; D4 "open in other region" action and focused-pane rule; D5 hide/geometry-only collapse; placement via `addGroup` / `addPanel({ position: { referenceGroup }, inactive, initialWidth })`; group-scoped selection.
-
-**Out of scope:** contextual row (P3), file/browser content (P4–P6).
-
-**Likely modules:** `web/src/features/workspace/dockviewController.ts` (extend `DockviewControllerApi`/`AddPanelOptionsLike` with placement), `DockviewWorkspace.tsx` (placement-aware handle beyond `focusOrOpen`), `state/layoutPersistence.ts` (region alias, pruned with groups), `web/src/components/Sidebar.tsx` + `SidebarThreadRow.tsx` (target parameter), `web/src/features/chat/state/chatTabs.ts` (no new group semantics).
-
-**Tests:**
-- Unit: region alias survives save/load and is pruned with its group; placement options passed to `addPanel`; `inactive` used when opening into the other region.
-- DOM: two regions with different conversations; same conversation cannot be claimed twice; collapse keeps panels mounted.
-- E2E: open into main vs right; drag a conversation tab between groups and assert unchanged `data-thread-id`, composer text, and shared membership; collapse right region and assert no conversation/history deletion; restore after reload.
-
-**Acceptance:** CW-02, CW-10, CW-11. `api.removeGroup()` is never used for collapse (source guard).
-
-**Risks:** Dockview group ids are generated and can collide across windows; `removeGroup` misuse; a second host for one conversation. **Mitigation:** stable alias with `groupIdGenerator` consideration (library option, no new dependency); source guard against `removeGroup`; rely on `panelRegistry` claim.
-
-**Rollback:** remove placement options and alias; fall back to current id-only reconciliation; layout version unchanged or migrated back.
+**Rollback:** no production change to roll back; tests only.
 
 ---
 
-### P3 — Contextual-tab shell and runtime preservation
+### P1 — Discriminated panel identity, registry split, placement API
 
-**Goal:** every conversation panel shows `Chat | File Viewer | Browser | Files` in that exact order in both regions; each conversation remembers its own selection; switching away from Chat never unmounts the runtime, interrupts a stream, clears the composer, or loses scroll (CW-04, CW-05, CW-06, CW-09, CW-13).
+**Goal:** the production foundation accepts non-chat panel identities and placement without weakening chat identity.
 
-**In scope:** D3 state owner keyed by canonical tab key; D11 lifetime; a small per-conversation shell inside `DirectPanel`/`OpenCodePanel`; CSS-hide (not unmount) for non-Chat views; empty/disabled states for unavailable contexts.
+**In scope:** replace closed `PanelParams` (`dockviewParams.ts:17-20,86-99`) with a discriminated union:
+- `{ kind: "chat", tabKey: "chat:<id>"|"agent:<id>", contentType: "direct"|"opencode" }`
+- `{ kind: "tool", panelId: "<type>:<uuid>", contentType: "file-tree"|"file-viewer"|"browser"|"terminal"|future }`
 
-**Out of scope:** real Files/File Viewer/Browser content (P4–P6); the shell renders placeholders until those phases land.
+Keep `parseTabKey` and `desiredPanelKeys` as the chat-identity guard; do not force `params.tabKey === id` for tool panels. Add a separate tool-panel instance registry; keep `panelRegistry` claim-by-tab-key for chat hosts. Add a placement module mapping "split right/down on pane X" to `api.addPanel({ position: { referenceGroup, direction } })` / `api.addGroup(...)`.
 
-**Likely modules:** `web/src/features/workspace/components/DirectPanel.tsx`, `OpenCodePanel.tsx`, new `web/src/features/workspace/components/ContextualTabs.tsx` (or equivalent), `web/src/features/workspace/state/` (single owner), `web/src/features/workspace/dockviewParams.ts` (**unchanged** — do not widen params).
+**Out of scope:** new content components, opening service, file API.
 
-**Tests:**
-- DOM: four tabs in exact order in both panel types; selection keyed by canonical tab key and independent across conversations/regions; host component instance identity unchanged across all four sub-tab states; corrupt persisted selection falls back safely.
-- E2E: held stream continues while a non-Chat sub-tab is selected; composer text and virtualizer scroll position preserved after switching away and back; Direct and OpenCode panels side by side with distinct runtimes.
-- Source guard: no contextual state in `PanelParams`; no conditional unmount of the host.
+**Likely modules:** `dockviewParams.ts`, `panelRegistry.ts`, `dockviewController.ts`, `DockviewWorkspace.tsx`, new `state/panelIdentity.ts` and `state/panelPlacement.ts`.
 
-**Acceptance:** CW-04, CW-05, CW-06, CW-09, CW-13. Prove the guard can fail: temporarily unmount the host on sub-tab change and watch the E2E case fail, then revert.
+**Tests:** unit for both identity branches and rejection of malformed/mixed params; unit for placement options; DOM for a tool panel beside a chat panel; source guard that `chatTabs.ts` and the chat claim Set are unchanged.
 
-**Risks:** CSS-hiding breaks virtualizer measurement or composer focus; contextual state leaks between conversations; a second tab store appears. **Mitigation:** keep the host mounted in all states; key strictly by canonical tab key; one documented owner; no new store framework.
+**Acceptance:** DP-03, DP-07, DP-13. All existing chat assertions remain behaviorally identical.
 
-**Rollback:** remove the shell and its state owner; panels render hosts directly as today; no layout schema change.
+**Risks:** widening identity by accident; reconciliation removing tool panels. **Mitigation:** parallel classifier, not modification of `parseTabKey`; prove guards can fail.
 
----
-
-### P4 — Files tree and conversation-scoped read API
-
-**Goal:** Files shows a read-only tree of the selected conversation's server-resolved workspace, with containment and a clear unavailable state (CW-07, CW-08 partially).
-
-**In scope:** D6; a new conversation-scoped list/read endpoint pairing `resolveConversationWorkspace` with `inspectTarget`/`resolveSafe`; a tree UI using installed `@tanstack/react-virtual` and Radix collapsible; stable file identity (folder id + safe relative path, never an absolute path as authority); explicit threat-model note that `conversationId` is an unauthenticated capability.
-
-**Out of scope:** editing, writing, deleting, terminal, browser; no new dependency.
-
-**Likely modules:** new `src/routes/` module under the owning concern, `src/services/` using `resolveConversationWorkspace` + `resolveSafe`, `src/lib/validation.ts` (Zod input), `web/src/features/workspace/` (tree UI), `web/src/config/tools.ts` (copy if needed).
-
-**Tests:**
-- Integration: containment (traversal, symlink escape), missing folder, missing conversation, permission errors, size/encoding limits; assert no absolute path is returned as authority.
-- DOM: tree loading/empty/error/unavailable states; selecting a file emits a stable identity.
-- E2E: open a conversation with a registered project → Files lists its root → select a file → File Viewer opens it without replacing the conversation tab (with P5 placeholder until P5 lands).
-
-**Acceptance:** CW-07; security tests fail on escape attempts; no `/api/tools/*` or `/browse` reuse.
-
-**Risks:** path traversal/symlink escape; stale project folder; unauthenticated capability exposure. **Mitigation:** reuse existing helpers; fail closed; record the trade-off in `docs/decisions.md`; do not call containment "authorization".
-
-**Rollback:** remove the route and tree UI; no existing endpoint or schema is modified.
+**Rollback:** revert the classifier, registry and placement module; no schema change.
 
 ---
 
-### P5 — Read-only File Viewer
+### P2 — Persistence and restoration of deep layouts
 
-**Goal:** selecting a file opens it read-only in the File Viewer sub-tab without replacing the conversation or losing chat state (CW-08).
+**Goal:** versioned, backward-compatible persistence of arbitrary-depth layouts with both identity kinds.
 
-**In scope:** D8 read-only first; render supported text/markdown/code using installed `@assistant-ui/react-markdown`, `remark-gfm`, `react-shiki`, `parse-diff`; clear unsupported-format and large-file states; preview-tab reuse policy if approved.
+**In scope:** widen `layoutPersistence.ts:134-144,186-221` to accept both identity kinds; build allowed set from chat keys plus tool panel ids; keep versioned envelope, corrupt fallback, floating/popout/edge drop; add a migration from v1 chat-only records; persist per-panel state (viewer path/scroll, browser URL/history, terminal session) in a separate feature-owned module keyed by panel id.
 
-**Out of scope:** writable editor (separate ADR + dependency decision), image/PDF rendering (no installed capability), binary files.
+**Out of scope:** new content types.
 
-**Likely modules:** `web/src/features/workspace/` viewer component, the P4 read endpoint, `web/src/config/tools.ts` copy.
+**Tests:** unit for v1→v2 migration; deep nested save/load; stale/deleted conversation pruning; unavailable folder state; corrupt fallback; per-panel state round-trip.
 
-**Tests:** DOM for supported/unsupported/large states; E2E for select → view → switch sub-tab → return with chat state intact; source guard that no write endpoint is called.
+**Acceptance:** DP-12, DP-14. No secrets, message text, absolute paths or runtime objects in layout params.
 
-**Acceptance:** CW-08; no write path exists; project context matches the Files tree.
+**Risks:** persistence contract changes break workflows; corrupt reads. **Mitigation:** versioned migration, field-by-field fallback, exact test counts.
 
-**Risks:** large files, encoding, binary safety. **Mitigation:** bounded reads and explicit unsupported states.
-
-**Rollback:** remove the viewer component; Files still lists files.
+**Rollback:** revert to v1 envelope; no data loss because migration is additive.
 
 ---
 
-### P6 — Browser feasibility and surface
+### P3 — One opening service, manual + automatic, reuse policy
 
-**Goal:** determine and document what the Browser tab can technically be, then implement only an approved scope (CW-15).
+**Goal:** manual creation and click-driven opening use one `openContent(request)` service with deterministic reuse.
 
-**In scope:** D7 feasibility study; distinguish embedded interactive browser from the headless `agent-browser` tool; evaluate CSP/webview constraints; produce an ADR before any implementation. If approved, implement the smallest safe surface with navigation, isolation, and teardown tests.
+**In scope:** service with `{ contentType, context, placement, reuse, source }`; identity-key duplicate detection; modifier override; visible feedback; click seams on markdown anchors (`ChatWindow.tsx:923-925`) and file-path text (`filesystem/ui.tsx:827-934`, `result-fields.tsx:202-228`); `+` menu with add-tab / split-right / split-down and content types.
 
-**Out of scope:** assuming the headless tool satisfies the panel; installing a browser/webview library without an ADR.
+**Out of scope:** real File Viewer/Browser/Terminal content (P5–P7); can use placeholders.
 
-**Likely modules:** feasibility report + ADR in `docs/decisions.md`; only after approval, a new feature module under `web/src/features/workspace/`.
+**Tests:** unit for reuse/create decisions; DOM for click handlers calling the service; E2E for manual split right/down from any pane and duplicate reuse; source guard that no second opening path exists.
 
-**Tests:** feasibility report is the gate; if implemented, E2E for navigation, isolation, and teardown; source guard that the headless tool is not misrepresented as the panel.
+**Acceptance:** DP-04, DP-05, DP-06, DP-08, DP-09, DP-10.
 
-**Acceptance:** CW-15. No implementation without an approved ADR.
+**Risks:** duplicate panels; opening into invisible location. **Mitigation:** identity-key reuse, highlight target pane, never open hidden.
 
-**Risks:** high — webview/CSP/security; unauthenticated local surface. **Mitigation:** stop if the security model is unclear.
-
-**Rollback:** no implementation to roll back until the ADR is approved.
+**Rollback:** remove service and click handlers; no persistence change.
 
 ---
 
-### P7 — Persistence, responsive, accessibility and performance
+### P4 — Navigation resolution
 
-**Goal:** layout and contextual-view state restore safely; narrow windows, keyboard, screen readers, minimum sizes, and many-panel performance have documented behavior (CW-14, CW-16).
+**Goal:** one unambiguous conversation-tab owner; Chat Threads remains the sole navigator.
 
-**In scope:** D9, D10; region alias + contextual selection persistence with corrupt-safe reads; stale/deleted conversation and unavailable-folder recovery; minimum region sizes and collapse; Dockview's baseline ARIA plus opt-in `keyboardNavigation`; focus restoration; performance measurement or explicit "unmeasured" record.
+**In scope:** D1; migrate the nine `TabStrip` behaviors into Dockview tab context menus/header actions and Chat Threads row actions; retire the global strip; group-scoped active-panel events; focused chat pane drives URL and keyboard commands.
 
-**Out of scope:** floating/popout groups (on-hold owner decision); Tauri zoom (owner machine); new dependencies.
+**Tests:** DOM for all nine migrated behaviors; E2E for two chats with independent focus; source guard that no second conversation-tab store exists.
 
-**Likely modules:** `state/layoutPersistence.ts`, the D3 state owner, `web/src/features/workspace/components/`, `web/src/config/` for size tokens, E2E/DOM tests.
+**Acceptance:** DP-01, DP-02, DP-11, DP-13.
 
-**Tests:** cold restart with saved two-region layout; corrupt layout fallback; deleted conversation and vanished folder states; narrow-viewport E2E; keyboard flow reaching every panel and contextual tab; screen-reader role assertions; performance measurement with recorded numbers or explicit unmeasured note.
+**Risks:** losing a strip behavior; URL/focus feedback loops. **Mitigation:** migrate one behavior at a time with a failing test; use Dockview `origin` to suppress echoes.
 
-**Acceptance:** CW-14, CW-16. Full gate green; exact counts recorded.
+**Rollback:** restore `TabStrip` mount and previous focus wiring.
 
-**Risks:** visual regressions, corrupt persisted state, unmeasured performance. **Mitigation:** token-based styling; field-by-field corrupt fallback; measure before claiming.
+---
 
-**Rollback:** revert persistence additions; fall back to current layout envelope; no schema change.
+### P5 — File Tree, scoped read API, read-only Viewer
+
+**Goal:** Files and File Viewer panels with server-resolved roots and containment.
+
+**In scope:** D6, D11; new conversation-scoped list/read endpoint pairing `resolveConversationWorkspace` with `resolveSafe`/`inspectTarget`; Zod validation; tree UI with installed `@tanstack/react-virtual` and Radix collapsible; read-only viewer with installed markdown/shiki/diff renderers; file identity = conversation + safe relative path.
+
+**Tests:** integration for traversal, symlink escape, missing folder/conversation, bounded reads; DOM for tree/viewer states; E2E for click file → viewer opens beside chat with chat still live.
+
+**Acceptance:** DP-07, DP-08, DP-15. Security tests fail on escape attempts.
+
+**Risks:** path traversal; unauthenticated capability. **Mitigation:** reuse existing helpers; fail closed; record threat model.
+
+**Rollback:** remove route and components; no existing endpoint modified.
+
+---
+
+### P6 — Browser feasibility and approved surface
+
+**Goal:** determine what Browser can be, record an ADR, implement only an approved scope.
+
+**In scope:** D7 feasibility report; CSP/framing/origin isolation/credentials/teardown; if approved, smallest safe surface with navigation, isolation and teardown tests.
+
+**Acceptance:** DP-09, DP-15. No implementation without an approved ADR.
+
+**Risks:** high — webview/CSP/security. **Mitigation:** stop if security model unclear.
+
+---
+
+### P7 — Terminal feasibility and approved surface
+
+**Goal:** determine whether a Terminal panel is acceptable, record an ADR, implement only an approved scope.
+
+**In scope:** D8 feasibility; document unsandboxed shell, mandatory approval, no persistent process owner; if approved, define a backend process/session owner bound to the pane.
+
+**Acceptance:** DP-05, DP-15, DP-16. Stop if authorization unclear.
+
+**Risks:** privilege and lifecycle. **Mitigation:** explicit warning, bounded process lifetime, no auto-approve.
+
+---
+
+### P8 — State, responsive, accessibility, performance
+
+**Goal:** all panel types restore safely; narrow windows, keyboard, screen readers, minimum sizes and many-panel performance have documented behavior.
+
+**In scope:** D2, D9, D10; per-panel state persistence; cold restart with deep layout; stale/deleted/unavailable states; minimum sizes and collapse; Dockview free ARIA baseline and programmatic focus; performance measurement or explicit unmeasured record.
+
+**Tests:** cold restart with 3+ level layout; corrupt layout; deleted conversation; vanished folder; narrow viewport; keyboard flow; screen-reader roles; performance with many panels.
+
+**Acceptance:** DP-12, DP-14, DP-16. Full gate green; exact counts recorded.
+
+**Risks:** visual regressions, corrupt state, unmeasured performance. **Mitigation:** token styling, field-by-field fallback, measure before claiming.
 
 ---
 
@@ -214,42 +216,44 @@ Each phase: goal → in/out of scope → likely modules → tests → acceptance
 
 | ID | Required behavior | Future test (phase) |
 |---|---|---|
-| CW-01 | Chat Threads fixed left navigator, independent of Dockview groups | DOM shell guard + E2E route/navigation case (P1) |
-| CW-02 | Main and right regions show different conversations simultaneously | DOM two-region case + E2E two-group case (P2) |
-| CW-03 | Per-region conversation tabs; selection independent | DOM group-scoped active-panel case + E2E two-region selection case (P1/P2) |
-| CW-04 | `Chat | File Viewer | Browser | Files` in exact order | DOM exact-order case in both panel types (P3) |
-| CW-05 | Same contextual navigation in both regions | DOM symmetry case (P3) |
-| CW-06 | Per-conversation contextual tab and view state remembered | DOM keyed-state case + corrupt-read case (P3/P7) |
-| CW-07 | Files/Viewer use current conversation's server-resolved root | Integration containment cases + E2E project binding (P4) |
-| CW-08 | File selection opens Viewer without replacing conversation | E2E select → view → chat-state intact (P5) |
-| CW-09 | Switching away from Chat preserves runtime, stream, composer, scroll | E2E held-stream + composer/scroll case (P3) |
-| CW-10 | Moving between groups preserves identity, runtime, state | E2E drag between groups with unchanged `data-thread-id` (P2) |
-| CW-11 | Region collapse distinct from conversation close; no history deletion | E2E collapse + membership/history assertions (P2) |
-| CW-12 | One conversation-tab owner; no duplicate navigation | Source guard + DOM no-second-strip case (P1) |
-| CW-13 | Direct and OpenCode isolated and side by side | DOM mixed-host case + E2E distinct identities (P3) |
-| CW-14 | Safe restore; stale/deleted conversations and unavailable folders fail safely | Unit persistence + E2E corrupt/deleted/folder cases (P7) |
-| CW-15 | Browser documented as distinct embedded-panel requirement | Feasibility report + ADR gate; E2E only if implemented (P6) |
-| CW-16 | Keyboard, focus, screen reader, minimum size, narrow window, performance | DOM a11y + E2E narrow-viewport + recorded measurements (P7) |
+| DP-01 | Chat Threads fixed left navigator | DOM shell guard + E2E navigation (P4) |
+| DP-02 | Multiple panes with different content visible | DOM multi-pane + E2E (P0/P4) |
+| DP-03 | Pane vs content terminology; discriminated identity | Unit identity cases (P1) |
+| DP-04 | Any pane can split right/down; child can split again | **E2E 3+ level case (P0)** |
+| DP-05 | Per-panel state preserved on focus change | DOM state isolation + E2E focus-return (P2/P8) |
+| DP-06 | Opening/focusing never removes another pane | E2E multi-pane focus + unit reconcile (P1/P3) |
+| DP-07 | File context server-resolved per conversation | Integration containment + source guard (P5) |
+| DP-08 | Click file opens/focuses File Viewer beside source | E2E click-file (P3/P5) |
+| DP-09 | Click URL opens/focuses Browser | E2E click-URL + ADR gate (P3/P6) |
+| DP-10 | Reuse by identity; modifier forces new | Unit + E2E duplicate cases (P3) |
+| DP-11 | One conversation-tab owner | Source guard + DOM (P4) |
+| DP-12 | Deep layout saves/restores with identities, sizes, active tabs | Unit + E2E deep restart (P0/P2) |
+| DP-13 | Direct/OpenCode isolated; no second engine/runtime | Source guards + DOM mixed-host (P1/P4) |
+| DP-14 | Stale/deleted/unavailable fail safely | Unit + E2E (P2/P8) |
+| DP-15 | File/Browser/Terminal security enforced | Integration security + ADR gates (P5/P6/P7) |
+| DP-16 | Keyboard, focus, a11y, min sizes, narrow window, performance | DOM a11y + E2E narrow + measurements (P8) |
+| DP-17 | Move panel between panes without close semantics | E2E move + unit (P0/P1) |
+| DP-18 | Empty-pane lifecycle after last tab closes | DOM/E2E empty-pane case (P1/P8) |
 
 ---
 
-## 6. Cross-cutting constraints for every phase
+## 6. Cross-cutting constraints
 
-- No second layout engine, splitter tree, DnD system, chat runtime, message store, or conversation-tab store.
+- No second layout engine, splitter tree, DnD system, chat runtime, message store, or generic panel framework.
 - No merged Direct/OpenCode runtime; no OpenCode internals in generic workspace code.
-- No dependency install, upgrade, downgrade, or removal without a recorded ADR. Installed packages already cover tabs (`radix-ui` 1.8.1), virtualized trees (`@tanstack/react-virtual` 3.14.21), DnD (`@dnd-kit/*` 0.5.1), UI state (`zustand` 5.1.0), and layout (`dockview-react` 8.9.1).
-- All tests under `tests/` (`bun run test:locations` is a hard gate); every new public function gets a happy-path and an edge-case test; prove each guard can fail by mutating the defect and reverting.
-- No `any`, no `as unknown as`, no weakened assertions; `bun run lint` uses `--error-on-warnings`.
-- Source-text guards assert invariants, not formatting, and must be able to fail.
-- Report exact commands, exit codes, and counts; compilation or a passing count is not completion.
+- No dependency install/upgrade/removal without an ADR.
+- All tests under `tests/`; happy-path + edge-case per public function; prove each guard can fail by mutation and reverting.
+- No `any`, no weakened assertions; source-text guards assert invariants and can fail.
+- Report exact commands, exit codes and counts; compilation or a passing count is not completion.
 - No commit or push until end-to-end verification passes and the owner authorizes it.
 
 ---
 
-## 7. Definition of done for the overall program
+## 7. Definition of done
 
-1. Owner approval of the architecture, this plan, and decisions D1–D11 recorded in `docs/decisions.md`.
-2. Each phase reviewed at its gate with real test numbers and a clean full diff.
-3. `bun run typecheck` and `bun run build` exit 0 independently re-run; `bun run verify` exit 0; Dockview E2E green; exact counts recorded.
-4. All CW-01 … CW-16 criteria have a passing behavioral test or an explicitly approved deferral (CW-15 may be deferred by ADR).
-5. No production source, dependency, schema, or configuration change outside the approved phases; no unrelated user work touched; no commit or push before final authorization.
+1. Owner approval of architecture, plan, test strategy, and decisions D1–D11 recorded in `docs/decisions.md`.
+2. P0 proves arbitrary-depth splits with a real three-or-more-level test before any content type is added.
+3. Each phase reviewed at its gate with real test numbers and a clean full diff.
+4. `bun run typecheck` and `bun run build` exit 0 independently re-run; `bun run verify` exit 0; Dockview E2E green; exact counts recorded.
+5. All DP-01 … DP-18 criteria have a passing behavioral test or an explicitly approved deferral.
+6. No production source, dependency, schema or configuration change outside approved phases; prototype untouched; no commit or push before final authorization.

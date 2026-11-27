@@ -1,5 +1,7 @@
 # Technical audit — verified findings
 
+> **Status: point-in-time technical audit.** Findings were verified at the HEADs stated below and are preserved as historical evidence. For the current recursive-workspace target and its source audit, read `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` and `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md`. Do not treat §2.4/§2.5 "risky/missing" verdicts as current without re-verification — per-host providers are now implemented.
+
 All findings verified by reading source on 2026-11-21. Revision 2 re-verified at HEAD `244b412` (the pushed workspace-redesign commit). Paths are absolute under `D:\Temp\ai-chat-app`. Verdicts: **already / partial / missing / risky**.
 
 **Verified facts vs recommendations:** Sections 1–2 are independently verified facts from source (12 claims checked: 11 TRUE, 1 nuance noted in 2.1). Section 3+ and all "Needed/Minimum first step" lines are **recommendations**, not verified behavior.

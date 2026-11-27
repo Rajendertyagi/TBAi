@@ -1,6 +1,6 @@
 # TBAi — Unified Workspace Redesign (durable handoff)
 
-**Start with `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — it is the authoritative product direction and implementation roadmap.** For the implemented Dockview specification and verification record, read `DOCKVIEW_INTEGRATION_PLAN.md` and the Dockview ADR in `docs/decisions.md`. For the owner-directed **target** workspace (fixed Chat Threads, main/right regions, per-region conversation tabs and the `Chat | File Viewer | Browser | Files` contextual row), read `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, with its evidence audit in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` and phased plan in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md`. Those three documents specify a target only — they do not authorize implementation. This README is a historical handoff; where it conflicts with the authoritative documents, they win.
+**Start with `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` — it is the authoritative product and architecture specification for the recursive workspace.** The target: one Dockview instance whose groups are user-facing panes; any pane can be split right or down, and any child pane can be split again at arbitrary depth; panes hold Chat, Agent, File Tree, File Viewer, Browser, Terminal or future content, opened manually or by clicking files/URLs. Evidence is in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md`, the phased plan in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md`, and test obligations in `CONTEXTUAL_WORKSPACE_TEST_STRATEGY.md`. The earlier fixed Main/Right region and two-level contextual-tab models are superseded. `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` remains the authoritative phase roadmap; `DOCKVIEW_INTEGRATION_PLAN.md` remains the implemented foundation record. These documents specify a target only — they do not authorize implementation. This README is a historical handoff; where it conflicts with the authoritative documents, they win.
 
 ## Current status (superseded snapshot — 2026-11-22, revision 6)
 
@@ -72,9 +72,11 @@ In production today only two content types are registered: Direct Chat and OpenC
 
 - `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — **authoritative product direction and roadmap** (start here).
 - `docs/CONTEXTUAL_WORKSPACE_DOCS_AND_AUDIT_PLAN.md` — owner-directed task brief that requested this architecture, audit and plan; retained as the source of the requirement.
-- `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` — **current owner-directed target architecture** for the two-region, two-level-tab workspace; not implementation authorization.
+- `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` — **authoritative product and architecture specification** for the recursive workspace; not implementation authorization.
 - `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` — evidence-based current-state audit supporting that target.
 - `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` — phased, implementation-ready plan; requires owner approval before any phase.
+- `CONTEXTUAL_WORKSPACE_TEST_STRATEGY.md` — future test obligations, guard-failure proofs and quality gates.
+- `contextual-workspace-mockup.html` — standalone visual reference from the earlier fixed-region revision; **superseded** by the dynamic-panel architecture and retained only as historical design evidence.
 - `DOCKVIEW_INTEGRATION_PLAN.md` — **authoritative implementation specification and verification record** for the Dockview workspace.
 - `DOCKVIEW_POC_RESULT.md`, `DOCKVIEW_STARTUP_OPTIMIZATION_PLAN.md` — completed implementation evidence.
 - `MULTI_PROJECT_SIDEBYSIDE_AUDIT.md`, `PROVIDER_AUDIT.md`, `technical-audit.md`, `multi-chat-architecture-audit.md` — supporting audits.

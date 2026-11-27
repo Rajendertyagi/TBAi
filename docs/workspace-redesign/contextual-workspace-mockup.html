@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TBAi — Workspace</title>
+<style>
+  :root {
+    --bg: oklch(0.145 0 0); --s1: oklch(0.175 0 0); --s2: oklch(0.205 0 0); --s3: oklch(0.245 0 0);
+    --fg: oklch(0.985 0 0); --mut: oklch(0.705 0 0); --line: oklch(1 0 0 / 0.08); --line2: oklch(1 0 0 / 0.15);
+    --accent: oklch(0.72 0.12 75); --ring: oklch(0.556 0 0); --side: 216px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12.5px; font-weight: 350; line-height: 1.5; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 4px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  .app { display: flex; height: 100vh; }
+
+  /* Chat Threads — fixed, full height, no tabs above it */
+  .side { width: var(--side); flex: 0 0 var(--side); background: var(--s1); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .side-head { padding: 12px 12px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 9px; }
+  .mark { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(140deg, var(--accent), oklch(0.87 0 0)); }
+  .brand { font-weight: 600; font-size: 14px; }
+  .search { margin: 10px 12px; height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-radius: 6px; background: var(--s2); color: var(--mut); }
+  .side-scroll { flex: 1; overflow: auto; padding: 8px 8px 12px; }
+  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--mut); padding: 12px 8px 4px; font-weight: 600; }
+  .folder { padding: 4px 8px; color: var(--mut); font-weight: 500; }
+  .row { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px; border-radius: 6px; color: var(--mut); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row:hover { background: var(--s2); color: var(--fg); }
+  .row.on { background: var(--s3); color: var(--fg); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .dot.b { background: oklch(0.7 0.12 250); }
+  .tag { margin-left: auto; font-size: 10px; color: var(--mut); }
+  .foot { height: 25px; display: flex; align-items: center; gap: 7px; padding: 0 12px; border-top: 1px solid var(--line); color: var(--mut); font-size: 11px; }
+  .live { width: 6px; height: 6px; border-radius: 50%; background: oklch(0.75 0.14 150); }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  /* STRIP 1: projects — thick separator */
+  .proj { height: 42px; flex: 0 0 42px; display: flex; align-items: stretch; background: var(--s1); border-bottom: 3px solid var(--line2); }
+  .ptabs { display: flex; align-items: stretch; flex: 1; min-width: 0; overflow: hidden; }
+  .ptab { display: flex; align-items: center; gap: 8px; padding: 0 15px; color: var(--mut); border-right: 1px solid var(--line); white-space: nowrap; position: relative; }
+  .ptab:hover { background: var(--s2); }
+  .ptab.on { color: var(--fg); background: var(--bg); }
+  .ptab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 3px; background: var(--accent); }
+  .ptab .x { color: var(--mut); font-size: 13px; margin-left: 3px; }
+  .addbtn { width: 36px; display: grid; place-items: center; color: var(--mut); border-left: 1px solid var(--line); }
+  .addbtn:hover { background: var(--s2); color: var(--fg); }
+
+  /* regions — half-page project workspaces */
+  .regions { flex: 1; min-height: 0; display: flex; gap: 1px; background: var(--line); padding: 1px; }
+  .regions.col { flex-direction: column; }
+  .region { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .rhead { height: 30px; flex: 0 0 30px; display: flex; align-items: center; gap: 8px; padding: 0 11px; background: var(--s1); border-bottom: 1px solid var(--line); color: var(--fg); font-size: 11px; font-weight: 600; }
+  .rhead .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .rhead .x { margin-left: auto; color: var(--mut); font-size: 13px; }
+
+  /* STRIP 2 (per region): open panels — thin separator */
+  .caps { height: 32px; flex: 0 0 32px; display: flex; align-items: stretch; gap: 2px; padding: 0 8px; background: var(--s1); border-bottom: 1px solid var(--line); }
+  .cap { display: flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--mut); border-radius: 6px 6px 0 0; position: relative; white-space: nowrap; font-size: 11px; }
+  .cap:hover { color: var(--fg); background: var(--s2); }
+  .cap.on { color: var(--fg); background: var(--bg); }
+  .cap.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; }
+  .cap .ic { font-size: 11px; opacity: .85; }
+  .caps .spacer { flex: 1; }
+  .caps .addbtn { width: 28px; }
+
+  /* panels inside a region */
+  .work { flex: 1; min-height: 0; display: flex; gap: 1px; background: var(--line); padding: 1px; }
+  .work.col { flex-direction: column; }
+  .panel { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .phead { height: 26px; flex: 0 0 26px; display: flex; align-items: center; gap: 7px; padding: 0 10px; background: var(--s1); border-bottom: 1px solid var(--line); color: var(--mut); font-size: 10.5px; }
+  .phead .ic { font-size: 11px; opacity: .85; }
+  .phead .x { margin-left: auto; color: var(--mut); font-size: 12px; padding: 0 4px; }
+  .pcontent { flex: 1; min-height: 0; overflow: auto; }
+
+  .chatwrap { display: flex; flex-direction: column; height: 100%; }
+  .thread { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; }
+  .msg { max-width: 88%; }
+  .msg.u { align-self: flex-end; background: var(--s2); padding: 6px 9px; border-radius: 10px 10px 3px 10px; }
+  .msg.a { align-self: flex-start; }
+  .who { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: var(--mut); margin-bottom: 3px; }
+  .msg p { margin: 0; }
+  .link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .filelink { color: oklch(0.8 0.12 200); cursor: pointer; border-bottom: 1px dotted currentColor; }
+  .composer { margin: 0 9px 9px; min-height: 34px; border: 1px solid var(--line2); border-radius: 8px; background: var(--s1); padding: 6px 9px; color: var(--mut); }
+  .chips { display: flex; gap: 5px; margin-bottom: 5px; }
+  .chip { font-size: 10px; padding: 2px 8px; border-radius: 999px; background: var(--s2); color: var(--mut); }
+
+  .bind { font-size: 10px; color: var(--mut); padding: 4px 9px; background: var(--s1); border-bottom: 1px solid var(--line); }
+  .bind b { color: var(--fg); }
+  .fv { display: flex; height: calc(100% - 25px); min-height: 0; }
+  .tree { width: 36%; flex: 0 0 36%; overflow: auto; padding: 7px 6px; border-right: 1px solid var(--line); }
+  .tr { display: flex; align-items: center; gap: 7px; padding: 4px 7px; border-radius: 5px; color: var(--mut); white-space: nowrap; }
+  .tr:hover { background: var(--s2); color: var(--fg); }
+  .tr.sel { background: var(--s3); color: var(--fg); }
+  .viewer { flex: 1; overflow: auto; padding: 9px 11px; }
+  .vhead { color: var(--mut); margin-bottom: 7px; font-size: 10px; }
+  .code { background: var(--s1); border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.55; overflow: auto; white-space: pre; }
+  .k { color: oklch(0.75 0.12 300); } .s { color: oklch(0.8 0.12 150); } .c { color: var(--mut); }
+
+  .browser { display: flex; flex-direction: column; height: 100%; }
+  .urlbar { display: flex; gap: 7px; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  .url { flex: 1; background: var(--s1); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; color: var(--mut); }
+  .page { flex: 1; display: grid; place-items: center; color: var(--mut); text-align: center; padding: 14px; }
+  .term { padding: 9px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--mut); }
+  .term .ok { color: oklch(0.8 0.12 150); } .term .warn { color: oklch(0.8 0.12 75); }
+
+  .menu { position: fixed; z-index: 20; min-width: 190px; background: var(--s2); border: 1px solid var(--line2); border-radius: 9px; padding: 5px; box-shadow: 0 12px 32px oklch(0 0 0 / 0.5); display: none; }
+  .menu.show { display: block; }
+  .mi { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 6px; color: var(--fg); text-align: left; }
+  .mi:hover { background: var(--s3); }
+  .mi .ic { width: 16px; text-align: center; color: var(--mut); }
+  .mi .key { margin-left: auto; font-size: 10px; color: var(--mut); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="side-head"><span class="mark"></span><span class="brand">TBAi</span></div>
+    <div class="search">⌕ &nbsp;Search</div>
+    <div class="side-scroll">
+      <div class="lbl">Projects / Folders</div>
+      <div class="folder">▾ &nbsp;Project A</div>
+      <button class="row on"><span class="dot"></span> Project A / Chat 1</button>
+      <button class="row"><span class="dot"></span> Project A / Chat 2</button>
+      <div class="folder">▾ &nbsp;Project B</div>
+      <button class="row"><span class="dot"></span> Project B / Chat 3</button>
+      <div class="lbl">Other chats</div>
+      <button class="row"><span class="dot"></span> Quick question</button>
+      <button class="row"><span class="dot"></span> Refactor Auth API</button>
+      <div class="lbl">OpenCode sessions</div>
+      <button class="row"><span class="dot b"></span> fix login flow <span class="tag">agent</span></button>
+    </div>
+    <div class="foot"><span class="live"></span> Local · 3015</div>
+  </aside>
+
+  <div class="main">
+    <!-- STRIP 1: projects -->
+    <div class="proj">
+      <div class="ptabs">
+        <button class="ptab on" data-proj="a">Project A <span class="x">×</span></button>
+        <button class="ptab" data-proj="b">Project B <span class="x">×</span></button>
+        <button class="ptab" data-proj="s">Scratch <span class="x">×</span></button>
+      </div>
+      <button class="addbtn" data-strip="project" title="Add project region">+</button>
+    </div>
+
+    <!-- project regions: each is a half-page workspace with its own subset -->
+    <div class="regions" id="regions"></div>
+  </div>
+</div>
+
+<div class="menu" id="menu">
+  <button class="mi" data-split="right"><span class="ic">▥</span> Split pane right</button>
+  <button class="mi" data-split="down"><span class="ic">▤</span> Split pane down</button>
+</div>
+
+<!-- capability chooser shown when adding a panel -->
+<div class="menu" id="capmenu">
+  <button class="mi" data-cap="agent"><span class="ic">◆</span> Agent <span class="key">Ctrl+Shift+A</span></button>
+  <button class="mi" data-cap="term"><span class="ic">⌘</span> Terminal <span class="key">Ctrl+Shift+T</span></button>
+  <button class="mi" data-cap="diff"><span class="ic">≠</span> Diff <span class="key">Ctrl+Shift+G</span></button>
+  <button class="mi" data-cap="browser"><span class="ic">◇</span> Browser <span class="key">Ctrl+Shift+B</span></button>
+  <button class="mi" data-cap="viewer"><span class="ic">▤</span> File Viewer <span class="key">Ctrl+Shift+V</span></button>
+  <button class="mi" data-cap="chat"><span class="ic">◉</span> Chat <span class="key">Ctrl+Shift+C</span></button>
+</div>
+
+<script>
+  const chatHTML = `<div class="chatwrap"><div class="thread">
+    <div class="msg u"><div class="who">You</div><p>Where does the workspace root come from for this conversation?</p></div>
+    <div class="msg a"><div class="who">Assistant · Direct</div><p>It is resolved server-side from the conversation's persisted <code>workspace_mode</code> and <code>workspace_folder_id</code>. The client never supplies the root.</p></div>
+    <div class="msg u"><div class="who">You</div><p>Open <span class="filelink" data-file="workspace.ts">src/services/workspace.ts</span> and this <span class="link" data-url="https://docs.example.local/project-a">docs link</span>.</p></div>
+    <div class="msg a"><div class="who">Assistant · Direct</div><p>Both are open in this project's workspace. Your chat, composer text and scroll position are unchanged.</p></div>
+  </div><div class="composer"><div style="width:100%"><div class="chips"><span class="chip">Model: default</span><span class="chip">Thinking: off</span><span class="chip">Direct</span></div>Ask a follow-up…</div></div></div>`;
+
+  const fileHTML = `<div class="bind">Bound to <b>Project A / Chat 1</b> · server-resolved root · read-only</div><div class="fv">
+    <div class="tree"><div class="tr"><span>▾</span> src</div><div class="tr"><span style="padding-left:12px">▾</span> services</div>
+    <div class="tr sel" data-file="workspace.ts"><span style="padding-left:24px">◫</span> workspace.ts</div>
+    <div class="tr" data-file="tools.ts"><span style="padding-left:24px">◫</span> tools.ts</div>
+    <div class="tr"><span style="padding-left:12px">▸</span> routes</div><div class="tr"><span>▸</span> tests</div></div>
+    <div class="viewer"><div class="vhead">▤ &nbsp;<span class="vname">workspace.ts</span> &nbsp;·&nbsp; read-only</div>
+    <div class="code"><span class="c">// root comes from persisted conversation fields</span>
+<span class="k">export function</span> resolveRoot(id: string) {
+  <span class="k">const</span> row = db.conversation(id);
+  <span class="k">return</span> row.mode === <span class="s">"project"</span>
+    ? row.folder.path
+    : chatWorkspaceDir(id);
+}</div></div></div>`;
+
+  const browserHTML = (url) => `<div class="browser"><div class="urlbar"><span class="url">${url}</span></div><div class="page">Browser panel in this project's workspace.<br><small>Embedded browser is future work — not available today.</small></div></div>`;
+  const termHTML = `<div class="term"><span class="ok">$</span> bun run build:web<br>✓ built in 6.9s<br><span class="ok">$</span> <span class="warn"># shell is not sandboxed — runs with server privileges</span><br><span class="ok">$</span> _</div>`;
+
+  const agentHTML = `<div class="page" style="height:100%">OpenCode agent panel — separate runtime.</div>`;
+  const diffHTML = `<div class="term"><span class="ok">diff --git a/src/services/workspace.ts b/src/services/workspace.ts</span><br>- const root = WORKSPACE_DIR;<br>+ const root = resolveConversationWorkspace(id);<br>  return root;</div>`;
+
+  const defs = {
+    chat: () => ({ type: 'chat', icon: '◉', title: 'Chat · Project A / Chat 1', html: chatHTML }),
+    viewer: () => ({ type: 'viewer', icon: '▤', title: 'File Viewer · workspace.ts', html: fileHTML }),
+    browser: () => ({ type: 'browser', icon: '◇', title: 'Browser · docs', html: browserHTML('https://docs.example.local/project-a') }),
+    term: () => ({ type: 'term', icon: '⌘', title: 'Terminal · Project A', html: termHTML }),
+    agent: () => ({ type: 'agent', icon: '◆', title: 'Agent · Project A', html: agentHTML }),
+    diff: () => ({ type: 'diff', icon: '≠', title: 'Diff · Project A', html: diffHTML })
+  };
+
+  // each project region has its own subset of panels, starting with Chat
+  const regions = [
+    { id: 'a', name: 'Project A', panels: [defs.chat()] }
+  ];
+  const regionsEl = document.getElementById('regions');
+
+  function render() {
+    regionsEl.innerHTML = '';
+    regions.forEach(r => {
+      const reg = document.createElement('section');
+      reg.className = 'region';
+      reg.dataset.id = r.id;
+      const caps = r.panels.map((p, i) => `<button class="cap${i === 0 ? ' on' : ''}" data-type="${p.type}"><span class="ic">${p.icon}</span> ${p.title.split(' · ')[0]}</button>`).join('');
+      reg.innerHTML = `<div class="rhead"><span class="dot"></span> ${r.name} <span class="x">×</span></div>
+        <div class="caps">${caps}<div class="spacer"></div><button class="addbtn" data-region="${r.id}" title="Add panel to ${r.name}">+</button></div>
+        <div class="work">${r.panels.map(p => `<div class="panel"><div class="phead"><span class="ic">${p.icon}</span> ${p.title} <span class="x">×</span></div><div class="pcontent">${p.html}</div></div>`).join('')}</div>`;
+      regionsEl.appendChild(reg);
+    });
+    bind();
+  }
+
+  function bind() {
+    regionsEl.querySelectorAll('.rhead .x').forEach(x => x.addEventListener('click', () => {
+      const id = x.closest('.region').dataset.id;
+      const i = regions.findIndex(r => r.id === id);
+      if (regions.length > 1) { regions.splice(i, 1); render(); }
+    }));
+    regionsEl.querySelectorAll('.caps .cap').forEach(c => c.addEventListener('click', () => {
+      c.parentElement.querySelectorAll('.cap').forEach(x => x.classList.remove('on'));
+      c.classList.add('on');
+    }));
+    regionsEl.querySelectorAll('.phead .x').forEach(x => x.addEventListener('click', () => {
+      const reg = x.closest('.region');
+      const r = regions.find(v => v.id === reg.dataset.id);
+      const idx = [...reg.querySelectorAll('.panel')].indexOf(x.closest('.panel'));
+      r.panels.splice(idx, 1); render();
+    }));
+    regionsEl.querySelectorAll('[data-file]').forEach(el => el.addEventListener('click', () => {
+      const reg = el.closest('.region');
+      const r = regions.find(v => v.id === reg.dataset.id);
+      const name = el.dataset.file;
+      if (!r.panels.some(p => p.type === 'viewer')) r.panels.push(defs.viewer());
+      render();
+      const v = reg.querySelector('.vname'); if (v) v.textContent = name;
+      const c = reg.querySelector('.code'); if (c) c.innerHTML = name === 'tools.ts'
+        ? '<span class="c">// every path is confined before IO</span>\n<span class="k">export function</span> resolveSafe(target: string, base: string) {\n  <span class="k">const</span> real = inspectTarget(target, base);\n  <span class="k">if</span> (!real.inside) <span class="k">throw new</span> OutsideWorkspaceError();\n  <span class="k">return</span> real.abs;\n}'
+        : '<span class="c">// root comes from persisted conversation fields</span>\n<span class="k">export function</span> resolveRoot(id: string) {\n  <span class="k">const</span> row = db.conversation(id);\n  <span class="k">return</span> row.mode === <span class="s">"project"</span>\n    ? row.folder.path\n    : chatWorkspaceDir(id);\n}';
+    }));
+    regionsEl.querySelectorAll('[data-url]').forEach(el => el.addEventListener('click', () => {
+      const reg = el.closest('.region');
+      const r = regions.find(v => v.id === reg.dataset.id);
+      const url = el.dataset.url;
+      if (!r.panels.some(p => p.type === 'browser')) r.panels.push(defs.browser());
+      render();
+      const u = reg.querySelector('.url'); if (u) u.textContent = url;
+    }));
+    regionsEl.querySelectorAll('.addbtn[data-region]').forEach(btn => btn.addEventListener('click', e => {
+      e.stopPropagation();
+      pending = { strip: 'panel', region: btn.dataset.region };
+      const r = btn.getBoundingClientRect();
+      capmenu.style.left = Math.min(r.right - 200, window.innerWidth - 210) + 'px';
+      capmenu.style.top = (r.bottom + 4) + 'px';
+      capmenu.classList.toggle('show');
+    }));
+  }
+
+  document.querySelectorAll('.ptab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.ptab').forEach(t => t.classList.remove('on'));
+    tab.classList.add('on');
+  }));
+
+  const menu = document.getElementById('menu');
+  const capmenu = document.getElementById('capmenu');
+  let pending = null;
+  document.querySelector('.addbtn[data-strip="project"]').addEventListener('click', e => {
+    e.stopPropagation();
+    pending = { strip: 'project' };
+    const r = e.currentTarget.getBoundingClientRect();
+    menu.style.left = Math.min(r.right - 190, window.innerWidth - 200) + 'px';
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.classList.toggle('show');
+  });
+  document.addEventListener('click', () => { menu.classList.remove('show'); capmenu.classList.remove('show'); });
+  menu.querySelectorAll('.mi').forEach(item => item.addEventListener('click', () => {
+    const split = item.dataset.split;
+    if (pending.strip === 'project') {
+      const id = 'r' + Date.now();
+      regions.push({ id, name: 'New project', panels: [defs.chat()] });
+      document.querySelectorAll('.ptab').forEach(t => t.classList.remove('on'));
+      const tab = document.createElement('button');
+      tab.className = 'ptab on'; tab.dataset.proj = id;
+      tab.innerHTML = 'New project <span class="x">×</span>';
+      document.querySelector('.ptabs').appendChild(tab);
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.ptab').forEach(t => t.classList.remove('on'));
+        tab.classList.add('on');
+      });
+    } else {
+      const r = regions.find(v => v.id === pending.region);
+      if (r) r.panels.push(defs.chat());
+    }
+    if (split === 'down') regionsEl.classList.add('col');
+    render();
+    menu.classList.remove('show');
+  }));
+
+  // capability chooser: add the chosen panel type instead of defaulting to Chat
+  capmenu.querySelectorAll('.mi').forEach(item => item.addEventListener('click', () => {
+    const r = regions.find(v => v.id === pending.region);
+    if (r) r.panels.push(defs[item.dataset.cap]());
+    render();
+    capmenu.classList.remove('show');
+  }));
+
+  render();
+</script>
+</body>
+</html>

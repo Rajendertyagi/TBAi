@@ -1,6 +1,6 @@
 # TBAi Contextual Workspace — Documentation and Repository Audit Plan
 
-**Status:** Owner-directed documentation and verification task only. This file does not authorize implementation.
+**Status:** Historical task brief. Its fixed Main/Right region and two-level contextual-tab target (§2) is **superseded** by `docs/workspace-redesign/CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, which specifies a recursive workspace. Preserved as evidence of the original brief; do not treat §2 as the current target. This file does not authorize implementation.
 
 **Repository:** `Rajendertyagi/TBAi`  
 **Audited branch:** `ui-foundation-upgrade`  
@@ -13,7 +13,9 @@ Turn the owner's clarified workspace design into one coherent, evidence-backed a
 
 This task is **documentation, source inspection, and verification planning only**. Do not implement the UI, add dependencies, modify tests, change application configuration, or commit/push.
 
-## 2. Target user experience
+## 2. Target user experience (superseded — see architecture document)
+
+The original brief below described two symmetric working regions. That model is superseded by the recursive workspace in `docs/workspace-redesign/CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`. Preserved verbatim as historical evidence.
 
 The workspace has a fixed conversation navigator on the left and two symmetric working regions to its right. Each working region can display a different conversation and has the same content navigation in the same order.
 
