@@ -26,6 +26,8 @@ import { startControlledProvider, type ControlledProvider } from "../helpers/con
  */
 
 const MARKER = "dockview-e2e";
+/** Emitted by the controlled provider only when complete() is called. */
+const COMPLETION_MARKER = "hidden-run-completed";
 const COMPOSER = { name: /Send a message/i } as const;
 
 async function rmConv(request: APIRequestContext, id: string): Promise<void> {
@@ -143,13 +145,32 @@ async function getSharedTabIds(request: APIRequestContext): Promise<string[]> {
   return (body.sharedTabs ?? []).map((tab) => tab.ref);
 }
 
+/** Concatenated persisted assistant text for a conversation, in stored order. */
+async function persistedAssistantText(request: APIRequestContext, id: string): Promise<string> {
+  const res = await request.get(`/api/conversations/${id}/messages`);
+  expect(res.ok()).toBe(true);
+  const body = (await res.json()) as {
+    messages?: Array<{
+      content?: { role?: string; parts?: Array<{ type?: string; text?: string }> };
+    }>;
+  };
+  return (body.messages ?? [])
+    .filter((m) => m.content?.role === "assistant")
+    .flatMap((m) =>
+      (m.content?.parts ?? []).filter((p) => p.type === "text").map((p) => p.text ?? ""),
+    )
+    .join("");
+}
+
 test.describe("Dockview workspace (hermetic)", () => {
   let provider: ControlledProvider | undefined;
   const created: string[] = [];
 
   test.beforeEach(async ({ request }) => {
     await clearSharedTabs(request);
-    provider = await startControlledProvider(request);
+    provider = await startControlledProvider(request, {
+      completionText: COMPLETION_MARKER,
+    });
   });
 
   test.afterEach(async ({ request }) => {
@@ -402,7 +423,9 @@ test.describe("Dockview workspace (hermetic)", () => {
     await openFromSidebar(page, b.title);
     await expect(page.getByTestId("dockview-direct-panel")).toHaveCount(2);
 
-    // Let the held run finish while A is hidden.
+    // Let the held run finish while A is hidden. The completion marker is
+    // emitted by complete() only, so any transcript text containing it arrived
+    // AFTER the panel was hidden — not from the pre-hide "working" frame.
     provider?.complete();
 
     // Return to A: the response completed, not aborted by the hide.
@@ -411,6 +434,17 @@ test.describe("Dockview workspace (hermetic)", () => {
     await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, {
       timeout: 15000,
     });
+
+    // The hidden run's text was APPENDED to A's transcript, not merely finished.
+    const aPanel = page.locator(
+      `[data-testid="dockview-direct-panel"][data-conversation-id="${a.id}"]`,
+    );
+    await expect(aPanel).toContainText(COMPLETION_MARKER, { timeout: 15000 });
+
+    // And it was persisted, proving the hidden panel's run wrote to the store.
+    await expect
+      .poll(() => persistedAssistantText(request, a.id), { timeout: 15000 })
+      .toContain(COMPLETION_MARKER);
   });
 
   test("chat -> settings -> chat keeps the workspace mounted and the host alive", async ({

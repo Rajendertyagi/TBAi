@@ -86,6 +86,7 @@ function chatChunk(delta: unknown, finishReason: string | null = null): string {
 
 export async function startControlledProvider(
   request: APIRequestContext,
+  options: { completionText?: string } = {},
 ): Promise<ControlledProvider> {
   let requestCount = 0;
   const frames: string[] = [];
@@ -157,6 +158,15 @@ export async function startControlledProvider(
         entry.res.write(chatChunk({}, "stop"));
         entry.res.destroy(new Error(detail ?? "controlled provider failure"));
         continue;
+      }
+      // An optional completion frame arrives only when complete() is called.
+      // Tests that hide a panel mid-run use it to prove the response was
+      // appended to the transcript AFTER the panel was hidden, not merely that
+      // a pre-hide frame finished. No role is repeated: this is a content delta
+      // on the same assistant message opened by the first frame.
+      if (options.completionText) {
+        entry.res.write(chatChunk({ content: options.completionText }));
+        frames.push(options.completionText);
       }
       entry.res.write(chatChunk({}, "stop"));
       entry.res.write("data: [DONE]\n\n");

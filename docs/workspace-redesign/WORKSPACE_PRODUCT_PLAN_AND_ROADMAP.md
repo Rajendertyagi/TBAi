@@ -184,8 +184,9 @@ Persistent chat threads and chat workspace; Dockview-owned layout; generic panel
 
 | Layer | Evidence |
 |---|---|
-| `bun run verify` | Agent-reported exit 0 — **6160 pass / 88 skip / 0 fail** (unit+integration, 6248 tests across 484 files); DOM 891 pass / 0 fail; typecheck, lint, format:check, test:locations, build green. |
-| E2E | Agent-reported `dockview-workspace.spec.ts` 9 passed / 0 failed; `phase-ua-d.spec.ts` 4 passed / 0 failed. |
+| `bun run verify` | Agent-reported exit 0 — **6169 pass / 88 skip / 0 fail** (unit+integration, 6257 tests across 486 files); DOM **897 pass / 0 fail**; typecheck, lint, format:check, test:locations, build green. Re-run after P0-2. |
+| E2E | Agent-reported `dockview-workspace.spec.ts` **9 passed / 0 failed** (re-run after P0-2, including the strengthened hidden-panel case); `phase-ua-d.spec.ts` 4 passed / 0 failed (earlier run, not re-run in P0-2). |
+| Live runtime smoke | Agent-reported: real server started on an isolated `DATA_DIR`; `/healthz`, `/readyz`, `/`, `/api/workspace`, `/api/preferences`, `/api/conversations`, `/api/providers`, `/api/server/instance` all returned 200; a create → seed message → read-back → list → delete → list-empty conversation lifecycle succeeded over HTTP. |
 | Hosted CI | **None.** GitHub returned no status checks or workflow runs for the tip commit. |
 
 ### 6.3 Workspace test inventory (static inspection, not pass claims)
@@ -193,14 +194,14 @@ Persistent chat threads and chat workspace; Dockview-owned layout; generic panel
 | Layer | Files | Static cases |
 |---|---|---|
 | UNIT `tests/unit/web/workspace/` | 10 | 95 `it(` lines (layout-persistence expands to 28 runtime cases → ~109 runtime) |
-| DOM `tests/dom/workspace/` | 9 | 42 |
+| DOM `tests/dom/workspace/` | 11 | 47 (includes 5 P0-2 cases: 3 computed-theme, 2 split/group contract) |
 | DOM `tests/dom/opencode/` relevant | 5 files | 29 |
 | INTEGRATION `tests/integration/workspace/` | 2 | 11 (folder REST + conversation workspace fields — **not** Dockview) |
-| E2E `tests/e2e/workspace/` | 1 | **9** |
+| E2E `tests/e2e/workspace/` | 1 | **9** (case 6 strengthened in P0-2) |
 
 No skipped, todo, fixme, only, or quarantined cases were found in these files.
 
-**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` are source-text guards, not behavioral or computed-style tests. E2E case 6 asserts run completion, not transcript content. No unit/DOM test drives a real Dockview split — split behavior is E2E-only.
+**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` remain source-text guards; `dockview-theme.test.ts` is now complemented by `dockview-theme-computed.test.tsx`, which asserts computed style against two different token sets. E2E case 6 now asserts appended transcript text (rendered and persisted), not just run completion. A real pointer-driven Dockview split is still E2E-only: the new DOM test covers the persistence half of the split/group contract (two-group restore, canonical identity, identity independent of group placement), not Dockview's drag-and-drop itself.
 
 ---
 
@@ -216,14 +217,14 @@ Legend: **IV** implemented & verified (source + tests) · **IG** implemented wit
 | Dockview owns layout | IV | ADR 2026-11-23; single `DockviewReact`. |
 | Generic panel structure | IV | Two registered content types; identity-only params. |
 | Tabs and panel groups | IV | Dockview groups; E2E split asserts 2 groups. |
-| Split and resize | IU | Real split only in E2E cases 4/5/9; no unit/DOM split test. |
+| Split and resize | IU | Real pointer-driven split still E2E-only (cases 4/5/9); P0-2 adds a DOM test of the two-group persistence contract, not DnD or pixel resize. |
 | Drag-and-drop | IU | Real DnD in E2E cases 2/3/4. |
 | Layout persistence/restoration | IV | Versioned envelope, strict validation, stale-ref pruning. |
 | Panel close vs move | IV | Unit controller + E2E cases 2/4. |
 | Corrupt layout recovery | IV | Unit + E2E case 9. |
 | Deep links / route-focus sync | IV | Unit + DOM + E2E case 8. |
 | Window/application navigation | IV | chat → settings → chat keeps workspace mounted (DOM + E2E 7). |
-| Theme integration | IU | Source-text guard asserts CSS token mapping; no computed-style test. |
+| Theme integration | IV | P0-2 computed-style test resolves the real CSS block against two token sets; source-text guard retained. |
 | Floating/popout groups | M / O | Explicitly dropped on restore (`layoutPersistence.ts:186-193`); owner decision on hold. |
 
 ### B. Chat capabilities
@@ -236,7 +237,7 @@ Legend: **IV** implemented & verified (source + tests) · **IG** implemented wit
 | Runtime isolation | IV | Per-host providers; `AuiProvider extends={null}`; boundary guards. |
 | Conversation identity | IV | Canonical tab keys; panel registry claims by key. |
 | Draft creation | IV | Single `chat:new`; alias preserves runtime across first send. |
-| Hidden-panel execution | IU | E2E case 6 asserts completion, not transcript content. |
+| Hidden-panel execution | IV | P0-2 E2E case 6 asserts a post-hide completion marker in the rendered transcript and in persisted messages. |
 | Lazy OpenCode activation | IV | Dormant latch; DOM activation tests. |
 | Multi-project side-by-side | IU | Source-verified per-conversation project binding; E2E asserts distinct identities, not file operations in two different project roots. |
 | Session recovery boundaries | IV | Separate workstream; no automatic remote session deletion. |
@@ -266,7 +267,7 @@ Legend: **IV** implemented & verified (source + tests) · **IG** implemented wit
 | Panel memory usage | M | No measurement; `renderer:"always"` keeps hidden panels live by design. |
 | Large workspace performance | M | No measurement. |
 | Window resizing / Tauri zoom | O | Tauri zoom cannot be reproduced on this workstation; owner machine test pending. |
-| Theme consistency | IU | Token mapping guard only. |
+| Theme consistency | IV | P0-2 computed-style test proves the mapping follows changed tokens. |
 
 **Implemented foundation ≠ complete end-user feature.** The layout substrate is real and verified; the non-chat content types and several UX qualities are not.
 
@@ -620,3 +621,24 @@ This document was reviewed by a fresh-context subagent against current source, e
 **Minor findings and resolutions:** DOM workspace test count corrected 39 → 42; working-tree note qualified as "at verification time"; multi-project side-by-side downgraded IV → IU (source-verified, not behavior-verified); session recovery boundaries removed from the source-verified foundation list and kept as a separate workstream.
 
 **Unmet brief item at review time:** the document did not record that an independent review had occurred. This section is that record. No unresolved disagreement remains from the review.
+
+---
+
+## 18. P0-2 completion record
+
+P0-2 (§11, §13) is complete. It was test-only: no production source, schema, config, or dependency changed.
+
+**What was added**
+
+| File | Evidence added |
+|---|---|
+| `tests/dom/workspace/dockview-theme-computed.test.tsx` | Injects the real `.dockview-theme-tbai` block from `globals.css` into happy-dom and asserts `getComputedStyle` resolves `--dv-*` variables from two different token sets. Replaces a source-text guard as the behavioral evidence; the guard is retained. |
+| `tests/dom/workspace/dockview-split-group-contract.test.tsx` | DOM-renders a restored two-group layout; asserts two distinct groups, canonical panel ids, identity-only params, and identity independent of group placement. Covers the persistence half of the split contract; real DnD remains E2E-only. |
+| `tests/e2e/helpers/controlledProvider.ts` | Optional `completionText` emitted only on `complete()`, so a marker can arrive after a panel is hidden. Backward-compatible. |
+| `tests/e2e/workspace/dockview-workspace.spec.ts` | Hidden-panel case now asserts the marker in the rendered transcript and in persisted assistant messages, not just run completion. |
+
+**Guards proven to fail (mutation checks, all reverted):** hardcoding a theme color in `globals.css` failed 3 computed-style assertions; dropping the second group leaf in `pruneNode` failed both split/group assertions; suppressing the completion frame failed the hidden-panel E2E assertion. Production files were restored byte-identically.
+
+**Verification:** `bun run verify` exit 0 — 6169 pass / 88 skip / 0 fail; DOM 897 pass / 0 fail. `bun run test:e2e --project=chromium-headless dockview-workspace.spec.ts` exit 0 — 9 passed / 0 failed. `git diff --check` exit 0. A live server smoke test (isolated `DATA_DIR`) returned 200 for all core endpoints and completed a create → seed → read-back → list → delete conversation lifecycle. All results are agent-reported; hosted CI remains absent (§1).
+
+**Capability matrix changes:** Theme integration and Theme consistency IU → IV; Hidden-panel execution IU → IV. Split and resize stays IU — the real pointer-driven split is still E2E-only and resize is unmeasured.
