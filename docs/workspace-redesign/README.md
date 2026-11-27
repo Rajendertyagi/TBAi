@@ -1,6 +1,6 @@
 # TBAi — Unified Workspace Redesign (durable handoff)
 
-**Start with `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — it is the authoritative product direction and implementation roadmap.** For the implemented Dockview specification and verification record, read `DOCKVIEW_INTEGRATION_PLAN.md` and the Dockview ADR in `docs/decisions.md`. This README is a historical handoff; where it conflicts with those documents, they win.
+**Start with `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — it is the authoritative product direction and implementation roadmap.** For the implemented Dockview specification and verification record, read `DOCKVIEW_INTEGRATION_PLAN.md` and the Dockview ADR in `docs/decisions.md`. For the owner-directed **target** workspace (fixed Chat Threads, main/right regions, per-region conversation tabs and the `Chat | File Viewer | Browser | Files` contextual row), read `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md`, with its evidence audit in `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` and phased plan in `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md`. Those three documents specify a target only — they do not authorize implementation. This README is a historical handoff; where it conflicts with the authoritative documents, they win.
 
 ## Current status (superseded snapshot — 2026-11-22, revision 6)
 
@@ -71,6 +71,10 @@ In production today only two content types are registered: Direct Chat and OpenC
 ## Documents
 
 - `WORKSPACE_PRODUCT_PLAN_AND_ROADMAP.md` — **authoritative product direction and roadmap** (start here).
+- `docs/CONTEXTUAL_WORKSPACE_DOCS_AND_AUDIT_PLAN.md` — owner-directed task brief that requested this architecture, audit and plan; retained as the source of the requirement.
+- `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` — **current owner-directed target architecture** for the two-region, two-level-tab workspace; not implementation authorization.
+- `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` — evidence-based current-state audit supporting that target.
+- `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` — phased, implementation-ready plan; requires owner approval before any phase.
 - `DOCKVIEW_INTEGRATION_PLAN.md` — **authoritative implementation specification and verification record** for the Dockview workspace.
 - `DOCKVIEW_POC_RESULT.md`, `DOCKVIEW_STARTUP_OPTIMIZATION_PLAN.md` — completed implementation evidence.
 - `MULTI_PROJECT_SIDEBYSIDE_AUDIT.md`, `PROVIDER_AUDIT.md`, `technical-audit.md`, `multi-chat-architecture-audit.md` — supporting audits.

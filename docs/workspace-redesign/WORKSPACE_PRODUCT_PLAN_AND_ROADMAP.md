@@ -77,6 +77,9 @@ From `AGENTS.md`, `docs/architectural-principles.md`, `docs/architecture.md`, `d
 
 | Document | Classification | Role in this roadmap |
 |---|---|---|
+| `docs/workspace-redesign/CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` | **Current owner-directed target architecture** | Specifies the fixed Chat Threads + main/right regions + per-region conversation tabs + `Chat \| File Viewer \| Browser \| Files` contextual row. Target only; does not authorize implementation. |
+| `docs/workspace-redesign/CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` | **Current evidence audit** | Source-verified current state, test inventory, gap matrix and stale-doc conflicts supporting the target architecture. |
+| `docs/workspace-redesign/CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` | **Phased plan, not authorization** | Implementation-ready phases P1–P7 with CW-01…CW-16 traceability; requires owner approval and recorded decisions before any phase. |
 | `docs/workspace-redesign/DOCKVIEW_INTEGRATION_PLAN.md` | **Current architecture authority** + completed implementation record | Authoritative implementation specification and verification record for Dockview. |
 | `docs/decisions.md` — ADR 2026-11-23 | **Current architecture authority** | Dockview as sole layout engine; preserved invariants. |
 | `docs/decisions.md` — ADR 2026-11-22 | Supporting decision | `features/workspace/` ownership area. |
@@ -351,6 +354,8 @@ Each flow is stated as **user action → UI response → state change → persis
 ## 11. Implementation roadmap
 
 Priorities: **P0** = correctness and honesty of the existing foundation (small, evidence-backed); **P1** = high-value user capabilities with low architectural risk; **P2** = optional or security-sensitive capabilities requiring owner decisions. No calendar dates or completion percentages are asserted.
+
+> **Owner-directed target update (2026-11-27):** the phases below remain the historical roadmap. The owner has since specified a contextual two-region workspace (fixed Chat Threads, main/right regions, per-region conversation tabs, and a `Chat | File Viewer | Browser | Files` row in each). `CONTEXTUAL_WORKSPACE_ARCHITECTURE.md` is the current target, `CONTEXTUAL_WORKSPACE_REPOSITORY_AUDIT.md` records the evidence, and `CONTEXTUAL_WORKSPACE_IMPLEMENTATION_PLAN.md` defines phases P1–P7 with CW-01…CW-16 acceptance criteria. Once approved, that plan supersedes the P1-1…P2-4 sequencing below; until then, nothing in it is authorized and the historical phases are preserved as evidence.
 
 ### Phase P0-1 — Foundation correctness and documentation honesty
 
