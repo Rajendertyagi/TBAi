@@ -5,9 +5,10 @@
  * source-text guard: it proves the mapping is written, not that a browser
  * resolves it. This DOM test injects the REAL `.dockview-theme-tbai` block from
  * globals.css into happy-dom, renders an element with that class, and asserts
- * `getComputedStyle` resolves each Dockview variable from the app's theme
- * tokens. It then changes the token values and asserts the computed values
- * follow — which would fail if a vendor color were hardcoded.
+ * `getComputedStyle` resolves six representative Dockview variables (of the 31
+ * defined in the block) from the app's theme tokens. It then changes the token
+ * values and asserts the computed values follow — which would fail if a vendor
+ * color were hardcoded.
  *
  * happy-dom cannot parse Tailwind's `@theme`/`@import`, so only the real theme
  * block is extracted and injected; the assertions are on computed style, not

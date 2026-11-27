@@ -201,7 +201,7 @@ Persistent chat threads and chat workspace; Dockview-owned layout; generic panel
 
 No skipped, todo, fixme, only, or quarantined cases were found in these files.
 
-**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` remain source-text guards; `dockview-theme.test.ts` is now complemented by `dockview-theme-computed.test.tsx`, which asserts computed style against two different token sets. E2E case 6 now asserts appended transcript text (rendered and persisted), not just run completion. A real pointer-driven Dockview split is still E2E-only: the new DOM test covers the persistence half of the split/group contract (two-group restore, canonical identity, identity independent of group placement), not Dockview's drag-and-drop itself.
+**Skeptical notes:** `tests/integration/workspace/` is about project folders, not Dockview. Several `tests/dom/opencode/` files are source-text guards that render nothing. `provider-boundaries.test.ts`, `dockview-theme.test.ts`, and `dockview-workspace.contract.test.ts` remain source-text guards; `dockview-theme.test.ts` is now complemented by `dockview-theme-computed.test.tsx`, which asserts computed style for six representative `--dv-*` variables (of the 31 defined in the block) against two different token sets. E2E case 6 now asserts appended transcript text (rendered and persisted), not just run completion. A real pointer-driven Dockview split is still E2E-only: the new DOM test covers the persistence half of the split/group contract (two-group restore, canonical identity, identity independent of group placement), not Dockview's drag-and-drop itself.
 
 ---
 
@@ -275,12 +275,14 @@ Legend: **IV** implemented & verified (source + tests) · **IG** implemented wit
 
 ## 8. What remains incomplete or missing
 
+Items 4–6 were open findings when this roadmap was written and were **resolved in P0-1**. They are retained below with their resolutions for traceability; they are no longer open.
+
 1. **No non-chat content panels.** The registry has exactly two content types.
 2. **No secure project-scoped file browsing API.** `/api/tools/*` is a manual surface on the global root; `/api/workspace` is info; `/api/folders/browse` is an unconfined directory picker for registration.
 3. **Floating/popout groups are dropped on restore** — a real behavior loss, not a planned feature.
-4. **Manual `/api/tools/*` endpoints are not conversation-scoped**, while the Workspace settings copy says "Every file tool is confined here" (`WorkspacePage.tsx:50,55`) — an overstatement.
-5. **Inconsistent tab-key validation**: `parseTabKey` accepts empty refs (`chatTabs.ts:104-108`) but `contentTypeForTabKey` rejects them (`dockviewParams.ts:29-33`); `focusOrOpen` gates only on the former (`dockviewController.ts:232-237`), so `chat:` silently opens nothing.
-6. **`registerPanelCanonicalKey` is called with `panelId ?? ""`** when no panel is active (`DockviewWorkspace.tsx:248`) — inert but sloppy state.
+4. **RESOLVED in P0-1 — manual `/api/tools/*` endpoints are not conversation-scoped.** The Workspace settings copy no longer claims every file tool is confined to one folder; it distinguishes the global manual-tool folder from per-conversation workspaces and states that shell commands are not sandboxed.
+5. **RESOLVED in P0-1 — inconsistent tab-key validation.** `parseTabKey` now rejects empty refs, so it agrees with `contentTypeForTabKey` and `focusOrOpen`; `chat:` and `agent:` cannot open a phantom panel. Covered by `tests/unit/web/chat/chatTabs-parse.test.ts`.
+6. **RESOLVED in P0-1 — empty panel id registration.** `registerPanelCanonicalKey` ignores an empty id and its call site is guarded, so an empty Dockview panel id cannot alias a real conversation. Covered by unit and DOM regressions.
 7. **One global draft scope and one draft tab** — two unsent drafts in different projects cannot coexist.
 8. **No keyboard/accessibility/responsive acceptance criteria** for the workspace.
 9. **No memory/performance measurement** for many open panels or hidden-panel resource use.
@@ -632,7 +634,7 @@ P0-2 (§11, §13) is complete. It was test-only: no production source, schema, c
 
 | File | Evidence added |
 |---|---|
-| `tests/dom/workspace/dockview-theme-computed.test.tsx` | Injects the real `.dockview-theme-tbai` block from `globals.css` into happy-dom and asserts `getComputedStyle` resolves `--dv-*` variables from two different token sets. Replaces a source-text guard as the behavioral evidence; the guard is retained. |
+| `tests/dom/workspace/dockview-theme-computed.test.tsx` | Injects the real `.dockview-theme-tbai` block from `globals.css` into happy-dom and asserts `getComputedStyle` resolves six representative `--dv-*` variables (of 31) from two different token sets. Complements the source-text guard, which is retained. |
 | `tests/dom/workspace/dockview-split-group-contract.test.tsx` | DOM-renders a restored two-group layout; asserts two distinct groups, canonical panel ids, identity-only params, and identity independent of group placement. Covers the persistence half of the split contract; real DnD remains E2E-only. |
 | `tests/e2e/helpers/controlledProvider.ts` | Optional `completionText` emitted only on `complete()`, so a marker can arrive after a panel is hidden. Backward-compatible. |
 | `tests/e2e/workspace/dockview-workspace.spec.ts` | Hidden-panel case now asserts the marker in the rendered transcript and in persisted assistant messages, not just run completion. |
